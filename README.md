@@ -1,105 +1,157 @@
-# Horizon iOS
+# NCLR
 
-iOS port layer for [Horizon](https://github.com/horizon-rust/horizon), the
-Minecraft: Java Edition 26.3 client rewritten in Rust.
+**NativeCraftLauncherRust — an iOS launcher for the Horizon Rust engine.**
 
-This repository contains **port code only**. It does not contain Minecraft
-game files, assets, or Mojang code. Horizon itself requires the player's own
-Minecraft: Java Edition installation; prepared resources stay private and are
-never committed here.
+NCLR is a single-app iOS launcher for [Horizon](https://github.com/horizon-rust/horizon), a clean-room
+Minecraft: Java Edition 26.3 client rewritten in Rust. The launcher and the game engine live in one
+IPA: the launcher is shown first, and the engine starts only when **启动游戏** is tapped.
 
-- Repository: <https://github.com/zhangrongxue/horizon-ios>
-- M3 development release: <https://github.com/zhangrongxue/horizon-ios/releases/tag/m3-engine-dev-20261116>
-- M4 release (Documents import): <https://github.com/zhangrongxue/horizon-ios/releases/tag/m4-documents-dev>
+作者：**ZRXMAXLNX**、**可心**
 
-## Status
+---
 
-| Milestone | What it proves | State |
-|---|---|---|
-| M1 | Rust → iOS arm64 static library → UIKit shell → unsigned IPA | done |
-| M2 | `horizon-client-lib` compiles for `aarch64-apple-ios` and links | done |
-| M3 | full `horizon-client` engine links and boots on an iPhone | done |
-| M4 | engine reads imported resources from Documents; Files sharing | built, device retest pending |
-| M5 | prepare the user's own 26.3 resources and import them | resources prepared locally, import pending |
-| M6 | touch controls, audio, playable world | not started |
+## What is in this repository
 
-The M3 device log proves the engine starts (`Horizon 0.1.0`, open-file-limit
-raise) and then refuses to continue because `horizon-resources.json` is
-missing. M4 changes the resource lookup to prefer
-`Documents/horizon-client/26.3`, enables `UIFileSharingEnabled` and
-`LSSupportsOpeningDocumentsInPlace`, and keeps the empty bundle directory only
-as a fallback.
+This repository contains the **iOS launcher, port layer and build scripts** only.
 
-The engine app is a 55.6 MB unsigned arm64 IPA whose main binary is about
-173.9 MB. It has **no bundled Minecraft resources** and **no touch controls**;
-it is not playable until the prepared resources are imported.
+- UIKit launcher and account/version/mod/settings pages
+- iOS entry point that owns `UIApplicationMain` and starts Horizon on demand
+- Patched winit late-start path for running the engine inside an already-running UIKit app
+- In-game keymap editor overlay
+- Metal backend selection and resource-loading fixes for iOS
+- GitHub Actions / CircleCI build recipes
 
-## Layout
+It does **not** contain Minecraft jars, Mojang assets, prepared resource trees, signing certificates
+or provisioning profiles. Those stay on the build machine or are supplied as local secrets.
 
-```
-ios/
-  main.m             UIKit diagnostic shell (M1/M2)
-  main_engine.m      engine app: calls horizon_ios_run, winit owns UIApplicationMain
-  Info.plist         shared app metadata
-  build.sh           links the static library, ad-hoc signs, packages an IPA
-port/horizon-ios/    Rust static-library crate and C ABI
-patches/             changes the port needs in upstream Horizon
-scripts/             build/prepare helpers
-.github/workflows/   macOS CI
-```
+---
 
-The Rust crate exposes:
+## Features
 
-- `horizon_ios_diagnostics()` — a C string with build/engine facts;
-- `horizon_ios_self_test()` — a linked-core check;
-- `horizon_ios_run(resources, game_dir)` — starts the real client.
+- **One app, launcher first**
+  - Every launch opens the NCLR launcher.
+  - Tapping **启动游戏** calls `horizon_ios_run` and hands the existing UIApplication to winit.
+  - No background pre-start, no process exit/relaunch, no second app.
+- **Horizon 26.3 engine**
+  - Rust `aarch64-apple-ios` static library.
+  - Metal backend on iOS.
+  - Fixes for the world-resource handoff and loading-screen ordering.
+- **Launcher pages**
+  - Home, versions, mods, account and settings.
+  - L1.1 developer build defaults to the premium/owned state; no login gate.
+- **In-game keymap editor**
+  - A small **键位** button appears over the game.
+  - Collapsible top settings menu with a **按键大小** slider.
+  - Drag controls, add controls, save and exit.
+  - Saved to `Documents/keymap.json`.
+  - The engine reads the file at startup and applies the built-in touch controls.
+- **Complete resources on device**
+  - The released IPA carries a prepared `horizon-client/26.3` tree so the game can start without a
+    first-run download. The resource tree is injected at packaging time and is not committed here.
 
-## Build on macOS
+---
 
-Requirements: Xcode with an iOS SDK, Rust 1.100+, Python 3, `zip`,
-`codesign`, `PlistBuddy`.
+## Requirements
 
-```bash
-git clone https://github.com/zhangrongxue/horizon-ios.git
-cd horizon-ios
-HORIZON_DIR="$PWD/../horizon" bash scripts/prepare-horizon.sh
+- iOS 15 or later, arm64
+- Xcode command-line tools on macOS for local builds
+- Rust 1.100.0 with `aarch64-apple-ios`
+- For CI: a macOS GitHub Actions runner or CircleCI macOS executor
+
+The engine checkout is pinned and prepared by `scripts/prepare-horizon.sh`. It applies the iOS
+patches under `patches/` and copies the patched winit source under `port/winit`.
+
+---
+
+## Build
+
+On macOS:
+
+```sh
+export HORIZON_DIR="$HOME/horizon"
+bash scripts/prepare-horizon.sh
+
 cd "$HORIZON_DIR"
 IPHONEOS_DEPLOYMENT_TARGET=15.0 \
   cargo build -p horizon-ios --target aarch64-apple-ios --profile fast
+
 cd -
-HORIZON_DIR="$HORIZON_DIR" PROFILE=fast bash ios/build.sh
-```
-
-The engine app:
-
-```bash
 HORIZON_DIR="$HORIZON_DIR" PROFILE=fast \
-  APP_NAME=HorizonEngine \
-  MAIN_SOURCE="$PWD/ios/main_engine.m" \
-  BUNDLE_ID=dev.horizon.ios.engine \
-  IPA_NAME=HorizonEngine-dev-unsigned.ipa \
-  BUILD_DIR="$PWD/build-engine" DIST_DIR="$PWD/dist-engine" \
+  APP_NAME=NCLR \
+  MAIN_SOURCE="$PWD/ios/main_l1.m" \
+  INFO_PLIST="$PWD/ios/Info-launcher.plist" \
+  BUNDLE_ID=dev.zrxmaxlnx.nclr \
+  IPA_NAME=NCLR-L1.1-unsigned.ipa \
+  ICON_DIR="$PWD/ios/icons" \
+  RESOURCE_DIR="/path/to/prepared/26.3" \
+  BUILD_DIR="$PWD/build-nclr" DIST_DIR="$PWD/dist-nclr" \
   bash ios/build.sh
 ```
 
-Or run the `ios-build` GitHub Actions workflow; it uploads both IPAs as
-artifacts.
+`RESOURCE_DIR` must point at a locally prepared `horizon-client/26.3` tree containing
+`horizon-resources.json`. Never commit that tree.
 
-## Pinned upstream
+The repository's GitHub Actions workflow builds an unsigned IPA without resources and publishes it
+as a release asset. Resources and signing are added on the build machine.
 
-The port is tested against Horizon `69ab572dbd1bf2f2924a424f791014e09d9d0b50`.
-The patch and the crate live here, so upstream is cloned fresh for each build.
+---
 
-## Assets and distribution
+## Installation
 
-- Never commit Mojang jars, assets, decompiled sources, or `.local/` resources.
-- The IPA contains no Minecraft assets.
-- For a playable build, prepare `horizon-client/26.3` on a desktop with the
-  player's own Minecraft installation and import it into the app's Documents
-  directory. That import path is part of M5.
+1. Remove any older NCLR / HorizonEngine build.
+2. Install the signed IPA for the registered device, or re-sign the unsigned IPA with your own
+   certificate and provisioning profile.
+3. Open NCLR: the launcher must appear first.
+4. Tap **启动游戏**; the engine starts after the tap.
+5. After entering the game, tap **键位** in the top-left to edit the touch layout.
 
-## License
+The signed development IPA is bound to a single registered device; the unsigned IPA is intended for
+re-signing.
 
-The port code is LGPL-3.0-or-later, matching Horizon. Horizon's original work
-and its third-party notices remain with the upstream project. Minecraft is a
-trademark of Mojang Synergies AB; this is not an official Minecraft product.
+---
+
+## Keymap JSON
+
+The launcher and in-game editor write `Documents/keymap.json`:
+
+```json
+{
+  "buttonSize": 1.0,
+  "bindings": {
+    "forward": "W",
+    "jump": "Space"
+  },
+  "layout": {
+    "forward": { "x": 0.13, "y": 0.76, "size": 0.16 }
+  }
+}
+```
+
+The engine reads this file at game startup. Supported built-in ids are:
+
+`forward`, `back`, `left`, `right`, `jump`, `sneak`, `sprint`, `attack`, `use`, `inventory`,
+`chat`, `pause`, `settings`, `debug`, `perspective`, `offhand`, `shield`.
+
+The four movement ids share the game's single movement joystick. Custom ids are preserved in the
+JSON but do not create new engine controls in this version.
+
+Changes made in the in-game editor take effect the next time the game is started.
+
+---
+
+## Current limitations
+
+- L1.1 is a developer build; the default owned state is not a production licensing implementation.
+- Custom keymap ids beyond the built-in controls are stored but not rendered by the engine.
+- The project is not affiliated with Mojang, Microsoft or the Horizon maintainers.
+- Minecraft assets and Mojang files are not distributed here.
+
+---
+
+## Credits
+
+- **ZRXMAXLNX** — launcher, iOS port, packaging
+- **可心** — product and integration work
+- **Horizon** — Rust game engine (separate upstream project)
+
+See [LICENSE](LICENSE) for the repository license.
