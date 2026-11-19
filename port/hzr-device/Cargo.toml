@@ -1,0 +1,13 @@
+[package]
+name = "hzr-device"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Assembles a runnable resource tree on device from a shipped bundle and the player's own jar"
+
+[dependencies]
+serde_json = "1"
+hzr-pack = { path = "../hzr-pack" }
+hzr-fetch = { path = "../hzr-fetch" }
+
+[workspace]

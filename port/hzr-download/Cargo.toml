@@ -1,0 +1,27 @@
+[package]
+name = "hzr-download"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Fetches the player's own Minecraft files from Mojang on device, verified by SHA-1 (route3)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+hzr-fetch = { path = "../hzr-fetch" }
+
+# `http` brings ureq -> rustls -> ring, which needs a C toolchain for the target.
+# On iOS the shell supplies its own transport (NSURLSession), so the library and
+# the assembly path build with `--no-default-features` and no C toolchain.
+ureq = { version = "2.12", default-features = false, features = ["tls"], optional = true }
+
+[features]
+default = ["http"]
+http = ["dep:ureq"]
+
+[[bin]]
+name = "hzr-download"
+required-features = ["http"]
+
+[workspace]

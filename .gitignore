@@ -1,0 +1,17 @@
+# Build outputs
+build/
+build-*/
+dist/
+dist-*/
+target/
+*.ipa
+
+# Prepared game data: never commit Mojang files
+.local/
+horizon-client/
+*.jar
+assets/objects/
+
+# macOS / editors
+.DS_Store
+*.swp

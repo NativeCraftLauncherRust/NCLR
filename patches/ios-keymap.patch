@@ -1,0 +1,134 @@
+diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
+index e57f2d8..6efa0fb 100644
+--- a/crates/horizon-client-render/src/touch/layout.rs
++++ b/crates/horizon-client-render/src/touch/layout.rs
+@@ -100,6 +100,29 @@ impl Control {
+             Self::Shield => "Raise shield",
+         }
+     }
++
++    /// The control the NCLR launcher's `keymap.json` id moves, if it maps to
++    /// one of the built-in touch controls. The four movement ids share the
++    /// joystick: the launcher draws them as one pad, the game has one stick.
++    fn from_launcher_id(id: &str) -> Option<Self> {
++        match id {
++            "forward" | "back" | "left" | "right" => Some(Self::Move),
++            "sprint" => Some(Self::Sprint),
++            "jump" => Some(Self::Jump),
++            "sneak" => Some(Self::Sneak),
++            "attack" => Some(Self::Attack),
++            "use" => Some(Self::Use),
++            "inventory" => Some(Self::Inventory),
++            "chat" => Some(Self::Chat),
++            "pause" => Some(Self::Pause),
++            "settings" => Some(Self::Settings),
++            "debug" => Some(Self::Debug),
++            "perspective" => Some(Self::Perspective),
++            "offhand" => Some(Self::Offhand),
++            "shield" => Some(Self::Shield),
++            _ => None,
++        }
++    }
+ }
+ 
+ /// Where one control sits: its centre (0..1 of the surface), its size (a
+@@ -264,6 +287,45 @@ impl Settings {
+         std::fs::rename(temp, path)
+     }
+ 
++    /// Applies the NCLR launcher's `keymap.json` (`buttonSize` and `layout`)
++    /// to the built-in controls. New ids the launcher adds stay in the file;
++    /// this game version has no extra touch controls to bind them to.
++    pub fn apply_launcher_keymap(&mut self, path: &Path) {
++        let Ok(bytes) = std::fs::read(path) else {
++            return;
++        };
++        let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
++            return;
++        };
++        if let Some(scale) = json.get("buttonSize").and_then(|v| v.as_f64()) {
++            self.button_scale = (scale as f32).clamp(0.5, 2.0);
++        }
++        let Some(layout) = json.get("layout").and_then(|v| v.as_object()) else {
++            return;
++        };
++        for (id, value) in layout {
++            let Some(control) = Control::from_launcher_id(id) else {
++                continue;
++            };
++            let Some(value) = value.as_object() else {
++                continue;
++            };
++            let x = value.get("x").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
++            let y = value.get("y").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
++            let size = value.get("size").and_then(|v| v.as_f64()).unwrap_or(0.12) as f32;
++            let placement = Placement {
++                center: [x, y],
++                size,
++                opacity: 0.65,
++            };
++            for row in &mut self.layouts {
++                row[control as usize] = placement;
++            }
++            self.button_visibility[control as usize] = SHOWN;
++        }
++        self.sanitize();
++    }
++
+     pub fn sanitize(&mut self) {
+         // Only the D-pad has a split variant (see `Mode::SCHEMES`).
+         if self.mode != Mode::Dpad {
+diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.rs
+index 55bd735..d4f4140 100644
+--- a/crates/horizon-client/src/game.rs
++++ b/crates/horizon-client/src/game.rs
+@@ -1189,6 +1189,10 @@ struct Game<'a> {
+     last_input: Instant,
+     /// Controllers (Horizon's own).
+     pad: pad::Pads,
++    /// On-screen controls for a touch screen (iOS).
++    touch: horizon_client_render::touch::TouchControls,
++    /// The touch attack trigger was down at the last frame.
++    touch_attack_down: bool,
+     frames: u64,
+     /// The glint clock and options, read once per frame (game/interface/item_draw.rs).
+     glint_frame: horizon_client::item_render::GlintFrame,
+@@ -5306,6 +5310,21 @@ impl Game<'_> {
+         self.draw_studio_bars(&mut batch);
+         if show_hud {
+             self.draw_pad_guide(&mut batch, guide_from);
++            if self.screen == Screen::Playing {
++                self.touch.viewport(batch.width as u32, batch.height as u32);
++                self.touch.draw(&mut batch, &self.gui.atlas);
++            }
++        }
++        // A visible pointer and back button for touch menus: the finger drags
++        // the cursor, a lift clicks where it sits, and the top-left ESC box
++        // leaves an inventory or pause screen.
++        if self.screen != Screen::Playing {
++            batch.fill(&self.gui.atlas, 4.0, 4.0, 52.0, 24.0, rgba(0, 0, 0, 210));
++            batch.fill(&self.gui.atlas, 5.0, 5.0, 50.0, 22.0, rgba(90, 90, 90, 230));
++            self.native_text(&mut batch, "ESC", [10.0, 11.0], 0xFFFFFFFF, true);
++            let (x, y) = self.cursor;
++            batch.fill(&self.gui.atlas, x - 3.0, y - 3.0, 6.0, 6.0, rgba(0, 0, 0, 190));
++            batch.fill(&self.gui.atlas, x - 2.0, y - 2.0, 4.0, 4.0, rgba(255, 255, 255, 230));
+         }
+         batch
+     }
+@@ -10741,6 +10760,16 @@ impl<'a> Game<'a> {
+             previous: now,
+             last_input: now,
+             pad: Default::default(),
++            touch: {
++                let mut touch = horizon_client_render::touch::TouchControls::default();
++                if let Ok(home) = std::env::var("HORIZON_HOME") {
++                    touch
++                        .settings
++                        .apply_launcher_keymap(&std::path::Path::new(&home).join("keymap.json"));
++                }
++                touch
++            },
++            touch_attack_down: false,
+             frames: 0,
+             glint_frame: Default::default(),
+             kept_block_entities: Default::default(),

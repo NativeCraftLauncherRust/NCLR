@@ -1,0 +1,38 @@
+diff --git a/crates/horizon-client/src/game/runtime/resource_load.rs b/crates/horizon-client/src/game/runtime/resource_load.rs
+index f644b7b..3ed3d33 100644
+--- a/crates/horizon-client/src/game/runtime/resource_load.rs
++++ b/crates/horizon-client/src/game/runtime/resource_load.rs
+@@ -782,11 +782,16 @@ pub(super) fn load_resources(
+                     started,
+                     true,
+                 )
+-                .map_err(|error| error.to_string())?;
++                .map_err(|error| {
++                    log::error!("Horizon: world rest failed: {error}");
++                    error.to_string()
++                })?;
++                log::info!("Horizon: rest loader publishing");
+                 resources
+                     .rest
+                     .set(rest)
+                     .map_err(|_| "world resources already loaded".to_owned())?;
++                log::info!("Horizon: rest loader published");
+                 progress.set(9);
+                 log::info!(
+                     "Horizon: rest-ready after {} ms",
+@@ -872,6 +877,15 @@ pub(super) fn load_resources(
+             }
+         }
+     };
++    // Do not hand the title screen resources whose background rest tables are
++    // still unpublished: it reads (and on a phone waits for) them immediately.
++    // Joining here keeps the loading screen up a little longer instead.
++    let rest_loader = if let Some(loader) = rest_loader {
++        loader.finish()?;
++        None
++    } else {
++        None
++    };
+     Ok(Loaded {
+         game_cpu,
+         entity_models,
