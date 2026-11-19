@@ -1,0 +1,39 @@
+workflows:
+  nclr-ios:
+    name: NCLR iOS
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      xcode: latest
+      vars:
+        HORIZON_DIR: $HOME/horizon
+    scripts:
+      - name: Install Rust
+        script: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.100.0
+          source "$HOME/.cargo/env"
+          rustup target add aarch64-apple-ios
+      - name: Prepare Horizon
+        script: |
+          cd "$CM_BUILD_DIR"
+          bash scripts/prepare-horizon.sh
+      - name: Build engine
+        script: |
+          source "$HOME/.cargo/env"
+          cd "$HORIZON_DIR"
+          IPHONEOS_DEPLOYMENT_TARGET=15.0 cargo build -p horizon-ios --target aarch64-apple-ios --profile fast
+      - name: Package NCLR
+        script: |
+          cd "$CM_BUILD_DIR"
+          HORIZON_DIR="$HORIZON_DIR" PROFILE=fast \
+            APP_NAME=NCLR \
+            MAIN_SOURCE="$PWD/ios/main_l1.m" \
+            INFO_PLIST="$PWD/ios/Info-launcher.plist" \
+            BUNDLE_ID=dev.zrxmaxlnx.nclr \
+            IPA_NAME=NCLR-L1.1-unsigned.ipa \
+            ICON_DIR="$PWD/ios/icons" \
+            RESOURCE_DIR="" SHIP_BUNDLE="" \
+            BUILD_DIR="$PWD/build-nclr" DIST_DIR="$PWD/dist-nclr" \
+            bash ios/build.sh
+    artifacts:
+      - dist-nclr/*.ipa
