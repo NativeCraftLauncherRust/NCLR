@@ -1,0 +1,56 @@
+name: nclr-build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+          targets: aarch64-apple-ios
+      - name: Prepare Horizon
+        env:
+          HORIZON_DIR: ${{ runner.temp }}/horizon
+        run: bash scripts/prepare-horizon.sh
+      - name: Build iOS static library
+        env:
+          HORIZON_DIR: ${{ runner.temp }}/horizon
+        run: |
+          set -euxo pipefail
+          cd "$HORIZON_DIR"
+          IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+            cargo build -p horizon-ios --target aarch64-apple-ios --profile fast
+      - name: Package NCLR
+        env:
+          HORIZON_DIR: ${{ runner.temp }}/horizon
+        run: |
+          set -euxo pipefail
+          HORIZON_DIR="$HORIZON_DIR" PROFILE=fast \
+            APP_NAME=NCLR \
+            MAIN_SOURCE="$PWD/ios/main_l1.m" \
+            INFO_PLIST="$PWD/ios/Info-launcher.plist" \
+            BUNDLE_ID=dev.zrxmaxlnx.nclr \
+            IPA_NAME=NCLR-L1.1-unsigned.ipa \
+            ICON_DIR="$PWD/ios/icons" \
+            RESOURCE_DIR="" SHIP_BUNDLE="" \
+            BUILD_DIR="$PWD/build-nclr" DIST_DIR="$PWD/dist-nclr" \
+            bash ios/build.sh
+      - name: Publish IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          tag="nclr-$(date -u +%Y%m%d-%H%M%S)"
+          gh release create "$tag" dist-nclr/*.ipa \
+            --title "NCLR L1.1 $tag" \
+            --notes "NCLR L1.1 clean launcher build"
