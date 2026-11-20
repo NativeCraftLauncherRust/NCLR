@@ -340,7 +340,7 @@ impl<T: 'static> EventLoop<T> {
             let timer = unsafe {
                 CFRunLoopTimerCreate(
                     ptr::null_mut(),
-                    CFAbsoluteTimeGetCurrent() + 0.05,
+                    CFAbsoluteTimeGetCurrent() + 1.0,
                     0.0,
                     0,
                     0,
