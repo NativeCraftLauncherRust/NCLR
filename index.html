@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="zh-CN" data-turn="forward">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#050505">
+<meta name="color-scheme" content="dark light">
+<title>NCLR — Horizon 26.3 的 macOS 启动器</title>
+<meta name="description" content="NCLR 是 Horizon 26.3 的 macOS 启动器：Microsoft 正版登录、本地资源准备、一次性会话，以及 Rust 引擎启动。">
+<meta property="og:title" content="NCLR — Horizon 26.3 的 macOS 启动器">
+<meta property="og:description" content="登录、准备资源，然后用一次性会话启动 Horizon 26.3。">
+<meta property="og:type" content="website">
+<link rel="icon" type="image/svg+xml" href="assets/img/favicon.svg">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
+<script>
+  (function () {
+    try {
+      var saved = localStorage.getItem("nclr-theme");
+      var theme = saved === "light" || saved === "dark"
+        ? saved
+        : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      document.documentElement.dataset.theme = theme;
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute("content", theme === "light" ? "#fbfbf9" : "#050505");
+    } catch (err) {
+      document.documentElement.dataset.theme =
+        window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    }
+  })();
+</script>
+<link rel="stylesheet" href="assets/css/style.css">
+<link rel="stylesheet" href="assets/css/theme.css">
+<link rel="stylesheet" href="assets/css/editorial.css">
+</head>
+<body data-route="home">
+<a class="skip-link" href="#main">跳到主要内容</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3.5 10.6 12 3.5l8.5 7.1"/><path d="M5.8 9.4V20a.8.8 0 0 0 .8.8h10.8a.8.8 0 0 0 .8-.8V9.4"/><path d="M9.8 20.6v-5.4h4.4v5.4"/></symbol>
+  <symbol id="i-cube" viewBox="0 0 24 24"><path d="M12 2.7 20.8 7.4v9.2L12 21.3 3.2 16.6V7.4Z"/><path d="M3.2 7.4 12 12.1l8.8-4.7"/><path d="M12 12.1v9.2"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3 3 7.6l9 4.6 9-4.6Z"/><path d="m3 12.2 9 4.6 9-4.6"/><path d="m3 16.6 9 4.6 9-4.6"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5.4c0 4.3 2.9 7.6 7 9.6 4.1-2 7-5.3 7-9.6V6Z"/><path d="m9 11.8 2 2 4-4"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.6"/><path d="M10.6 5.2h2.8"/><path d="M12 18.2h.01"/></symbol>
+  <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 2.8c.6 4.7 2.7 6.8 7.4 7.4-4.7.6-6.8 2.7-7.4 7.4-.6-4.7-2.7-6.8-7.4-7.4 4.7-.6 6.8-2.7 7.4-7.4Z"/><path d="M18.6 3.2v4M16.6 5.2h4"/></symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M4 12h16"/><path d="m14 6 6 6-6 6"/></symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M20 12H4"/><path d="m10 6-6 6 6 6"/></symbol>
+  <symbol id="i-arrow-up-right" viewBox="0 0 24 24"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></symbol>
+  <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m14.5 5-7 7 7 7"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9.5 5 7 7-7 7"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.2 2.5 4.6 13.4h6.2L10.8 21.5l8.6-10.9h-6.2Z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4.5 12.5 5 5 10-11"/></symbol>
+  <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.2 2.7 2.7 5.3-5.6"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 3v3.5M15 3v3.5M9 17.5V21M15 17.5V21M3 9h3.5M3 15h3.5M17.5 9H21M17.5 15H21"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="8" r="4.5"/><path d="m11.2 11.2 8.3 8.3"/><path d="m16.4 16.4 2.1-2.1 2 2-2.1 2.1Z"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.8" y="10" width="14.4" height="10.5" rx="2.4"/><path d="M8.5 10V7.4a3.5 3.5 0 0 1 7 0V10"/><path d="M12 14.4v2"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="2.8" y="4.5" width="18.4" height="15" rx="2.4"/><path d="m7 9.5 3 2.8-3 2.8"/><path d="M12.8 15.5h4.2"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2.8" y="4" width="18.4" height="12.6" rx="2.2"/><path d="M9 20.8h6M12 16.6v4.2"/></symbol>
+  <symbol id="i-scan" viewBox="0 0 24 24"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="m8.4 12.1 2.4 2.4 4.8-5"/></symbol>
+  <symbol id="i-package" viewBox="0 0 24 24"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5Z"/><path d="M4.5 7.8 12 12l7.5-4.2"/><path d="M12 12v9"/><path d="M8 5.2v4.5"/></symbol>
+  <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v13c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-13"/><path d="M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M13.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5Z"/><path d="M13.5 3v5.5H19"/><path d="M8.5 13h7M8.5 16.5h4.5"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 17v2.2a1.8 1.8 0 0 0 1.8 1.8h12.4a1.8 1.8 0 0 0 1.8-1.8V17"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3.5"/><path d="m7 8.5 5-5 5 5"/><path d="M4 16.5v2.7A1.8 1.8 0 0 0 5.8 21h12.4a1.8 1.8 0 0 0 1.8-1.8v-2.7"/></symbol>
+  <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.5 6H15a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h6.5"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.4"/><path d="M2.8 20c.6-3.4 3.1-5.3 6.2-5.3s5.6 1.9 6.2 5.3"/><path d="M16 5.2a3.2 3.2 0 0 1 0 5.9"/><path d="M17.4 14.9c2.1.5 3.5 2.2 3.9 4.6"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4.5 5.2A2.2 2.2 0 0 1 6.7 3H20v15.8H7.2a2.7 2.7 0 0 0-2.7 2.7Z"/><path d="M4.5 5.2v16.3"/><path d="M8.5 8h7M8.5 11.5h5"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="m8.5 8-4.5 4 4.5 4M15.5 8l4.5 4-4.5 4"/><path d="M13.5 4l-3 16"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-1.04-.01-1.89-2.78.62-3.37-1.2-3.37-1.2-.45-1.18-1.11-1.5-1.11-1.5-.91-.63.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.4 9.4 0 0 1 12 6.84c.85 0 1.7.12 2.5.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.8-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.48-.01 2.82 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M18 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8.5 5.2v13.6L20 12Z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 6.8V12l3.4 2"/></symbol>
+  <symbol id="i-warning" viewBox="0 0 24 24"><path d="M12 3.4 21.2 20H2.8Z"/><path d="M12 9.2v4.6"/><path d="M12 17.2h.01"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.2A10.6 10.6 0 0 1 12 5.1c5.5 0 9 5.4 9 6.9a12 12 0 0 1-2.4 3.5"/><path d="M6.3 7.2A13.7 13.7 0 0 0 3 12c0 1.5 3.5 6.9 9 6.9 1.2 0 2.3-.26 3.3-.68"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
+  <symbol id="i-fingerprint" viewBox="0 0 24 24"><path d="M7 5.4A8.4 8.4 0 0 1 20.4 12c0 2.2-.2 4-.9 6"/><path d="M4 7.4A9.2 9.2 0 0 0 3.1 12c0 2 .3 3.9 1 5.5"/><path d="M7.2 20.4A12 12 0 0 1 5.6 12a6.4 6.4 0 0 1 11-4.6"/><path d="M8.5 12c0 3 .6 5.6 1.8 7.8"/><path d="M12 12a8.8 8.8 0 0 0 .8 4.6"/><path d="M15.4 12c0-1.9-1.5-3.4-3.4-3.4S8.6 10.1 8.6 12"/></symbol>
+  <symbol id="i-id-card" viewBox="0 0 24 24"><rect x="2.8" y="5" width="18.4" height="14" rx="2.4"/><circle cx="8.7" cy="11" r="2"/><path d="M5.5 16c.4-1.8 1.6-2.7 3.2-2.7s2.8.9 3.2 2.7"/><path d="M14.5 10h4M14.5 13.5h4"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20.5s-8-4.8-8-10.2A4.4 4.4 0 0 1 12 7a4.4 4.4 0 0 1 8 3.3c0 5.4-8 10.2-8 10.2Z"/></symbol>
+  <symbol id="i-quote" viewBox="0 0 24 24"><path d="M9.4 6.2C6.5 7.4 4.8 9.8 4.8 13v4.8h5.5V12H7.5c.1-1.6.8-2.7 2.2-3.4Z"/><path d="M19 6.2c-2.9 1.2-4.6 3.6-4.6 6.8v4.8h5.5V12h-2.8c.1-1.6.8-2.7 2.2-3.4Z"/></symbol>
+  <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.5 1.5M17.1 17.1l1.5 1.5M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.2 14.8A8.7 8.7 0 0 1 9.2 3.8a8.8 8.8 0 1 0 11 11Z"/></symbol>
+  <symbol id="i-mark" viewBox="0 0 48 48"><path d="M13 38V11l22 26V11"/></symbol>
+</svg>
+
+<div class="bg" aria-hidden="true">
+  <div class="bg-grid"></div>
+  <div class="bg-noise"></div>
+</div>
+
+<header class="topbar" id="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#/home" aria-label="NCLR 首页">
+      <span class="brand-mark"><svg class="brand-glyph" aria-hidden="true"><use href="#i-mark"></use></svg></span>
+      <span class="brand-text"><strong>NCLR</strong><small>Horizon 26.3</small></span>
+    </a>
+
+    <nav class="nav" id="nav" aria-label="主导航">
+      <a class="nav-link" href="#/home" data-route-link="home"><span>主页</span></a>
+      <a class="nav-link" href="#/engine" data-route-link="engine"><span>引擎</span></a>
+      <a class="nav-link" href="#/resources" data-route-link="resources"><span>资源</span></a>
+      <a class="nav-link" href="#/security" data-route-link="security"><span>边界</span></a>
+      <a class="nav-link" href="#/ios" data-route-link="ios"><span>iOS</span></a>
+      <a class="nav-link" href="#/about" data-route-link="about"><span>关于</span></a>
+    </nav>
+
+    <div class="topbar-actions">
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="切换到白天模式" aria-pressed="false" title="切换白天 / 黑夜模式">
+        <svg class="ico theme-sun" aria-hidden="true"><use href="#i-sun"></use></svg>
+        <svg class="ico theme-moon" aria-hidden="true"><use href="#i-moon"></use></svg>
+        <span class="theme-label" aria-hidden="true">黑夜</span>
+      </button>
+      <a class="source-link" href="assets/NCLR-L1-source.zip" download aria-label="下载 NCLR v0.1.0 源码归档">
+        <span>源码</span><svg class="ico" aria-hidden="true"><use href="#i-download"></use></svg>
+      </a>
+      <button class="menu-btn" id="menuBtn" type="button" aria-label="打开菜单" aria-expanded="false" aria-controls="nav">
+        <svg class="ico menu-open" aria-hidden="true"><use href="#i-menu"></use></svg>
+        <svg class="ico menu-close" aria-hidden="true"><use href="#i-close"></use></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main" tabindex="-1">
+
+  <!-- ============================== HOME ============================== -->
+  <section class="route" data-route="home" id="page-home" aria-labelledby="home-title">
+    <div class="wrap">
+      <div class="intro">
+        <div class="intro-copy">
+          <p class="overline"><span>01</span> NCLR / HORIZON 26.3 / v0.1.0</p>
+          <h1 id="home-title">Horizon 26.3，<br>不经过 Java。</h1>
+          <p class="intro-lede">NCLR 是 Horizon 的 macOS 启动器。它登录 Microsoft 正版账号，准备你自己的 26.3 资源，生成一个 120 秒内有效的一次性会话，然后启动 Rust 引擎。</p>
+          <p class="intro-note">它不打包 Mojang 文件，也不做离线账号。引擎、资源或会话缺一项，都不会启动。</p>
+          <div class="intro-links">
+            <a href="#/engine">启动路径 <span aria-hidden="true">→</span></a>
+            <a href="#/resources">资源账本 <span aria-hidden="true">→</span></a>
+            <a href="assets/NCLR-L1-source.zip" download>源码归档 <span aria-hidden="true">↓</span></a>
+          </div>
+        </div>
+        <aside class="intro-facts" aria-label="版本信息">
+          <dl>
+            <div><dt>引擎</dt><dd>Horizon 0.1.0</dd></div>
+            <div><dt>目标版本</dt><dd>Java Edition 26.3</dd></div>
+            <div><dt>资源包</dt><dd>HZR3 / 1.76 MiB</dd></div>
+            <div><dt>平台</dt><dd>macOS universal</dd></div>
+            <div><dt>版本</dt><dd>v0.1.0 / 2026-11-18</dd></div>
+          </dl>
+          <p>当前构建机是 Windows。macOS 真机、Azure Client ID 和 Horizon 二进制仍未验证或提供。</p>
+        </aside>
+      </div>
+
+      <figure class="hero-shot">
+        <div class="hero-shot-frame">
+          <img src="assets/img/home.png" alt="NCLR 主页：侧边栏、实例、账号和诊断面板" width="1180" height="760">
+        </div>
+        <figcaption>NCLR 0.1.0 / 主页 / 1180 × 760 / 演示数据</figcaption>
+      </figure>
+
+      <section class="chapter" aria-labelledby="home-path">
+        <header class="chapter-head">
+          <p class="chapter-num">02</p>
+          <h2 id="home-path">启动路径</h2>
+          <p class="chapter-aside">从账号到引擎。每一步都可以单独检查。</p>
+        </header>
+        <ol class="path-list">
+          <li>
+            <span class="path-index">01</span>
+            <span class="path-icon"><svg class="ico" aria-hidden="true"><use href="#i-key"></use></svg></span>
+            <div><h3>登录</h3><p>Microsoft 设备码 → Xbox Live → XSTS → Minecraft Services。令牌存进 macOS Keychain。</p></div>
+          </li>
+          <li>
+            <span class="path-index">02</span>
+            <span class="path-icon"><svg class="ico" aria-hidden="true"><use href="#i-scan"></use></svg></span>
+            <div><h3>检查</h3><p>读取官方 .minecraft、horizon-client、horizon-prepare 和 Java 25。缺什么会指出具体路径。</p></div>
+          </li>
+          <li>
+            <span class="path-index">03</span>
+            <span class="path-icon"><svg class="ico" aria-hidden="true"><use href="#i-layers"></use></svg></span>
+            <div><h3>准备</h3><p>调用 horizon-prepare --check/--complete，只读你自己的 26.3 副本。</p></div>
+          </li>
+          <li>
+            <span class="path-index">04</span>
+            <span class="path-icon"><svg class="ico" aria-hidden="true"><use href="#i-terminal"></use></svg></span>
+            <div><h3>启动</h3><p>生成 0600、随机名、120 秒有效的会话文件，用 --session-file 交给引擎。token 不进 argv。</p></div>
+          </li>
+        </ol>
+        <a class="more" href="#/engine">完整的认证链路与启动日志 →</a>
+      </section>
+
+      <section class="chapter" aria-labelledby="home-resources">
+        <header class="chapter-head">
+          <p class="chapter-num">03</p>
+          <h2 id="home-resources">资源</h2>
+          <p class="chapter-aside">238.4 MiB 的准备产物，压成 1.76 MiB 的单包。</p>
+        </header>
+        <div class="number-table" role="list">
+          <div role="listitem"><strong>238.4 MiB</strong><span>准备产物</span></div>
+          <div role="listitem"><strong>32.4 MiB</strong><span>压缩内容</span></div>
+          <div role="listitem"><strong>1.76 MiB</strong><span>HZR3 单包</span></div>
+          <div role="listitem"><strong>115.3 MiB</strong><span>设备端派生</span></div>
+        </div>
+        <p class="plain-note">23,150 / 23,179 个文件与桌面产物逐字节一致，剩下 29 个差异在审计清单里。资源不内置、不上传，全部从你自己的 jar 派生。</p>
+        <a class="more" href="#/resources">转移账本与审计样本 →</a>
+      </section>
+
+      <section class="chapter" aria-labelledby="home-security">
+        <header class="chapter-head">
+          <p class="chapter-num">04</p>
+          <h2 id="home-security">边界</h2>
+          <p class="chapter-aside">不打包、不破解、不复制别家启动器。</p>
+        </header>
+        <ul class="principle-list">
+          <li>
+            <span class="path-icon"><svg class="ico" aria-hidden="true"><use href="#i-shield"></use></svg></span>
+            <div><h3>每次启动重新验所有权</h3><p>entitlements 检查放在启动前，不是登录时的一次性仪式。没有所有权就不生成会话。</p></div>
+          </li>
+          <li>
+            <span class="path-icon"><svg class="ico" aria-hidden="true"><use href="#i-lock"></use></svg></span>
+            <div><h3>一次性会话</h3><p>0600、随机文件名、120 秒兜底清理。token 不进命令行、日志或公开 JSON。</p></div>
+          </li>
+          <li>
+            <span class="path-icon"><svg class="ico" aria-hidden="true"><use href="#i-eye-off"></use></svg></span>
+            <div><h3>只读游戏文件</h3><p>资源准备只读你自己的安装。仓库和安装包里没有 Mojang jar、assets 或反编译代码。</p></div>
+          </li>
+          <li>
+            <span class="path-icon"><svg class="ico" aria-hidden="true"><use href="#i-code"></use></svg></span>
+            <div><h3>不复制别家启动器</h3><p>代码是 clean-room 写的，也不提供离线破解路径。只服务拥有正版副本的玩家。</p></div>
+          </li>
+        </ul>
+        <p class="plain-note">第一版还有没做到的部分：macOS 真机验证、真实 Azure Client ID、Horizon 二进制。清单在 <a href="#/security">边界页</a> 和 TASKS.md 里。</p>
+      </section>
+
+      <section class="chapter" aria-labelledby="home-ios">
+        <header class="chapter-head">
+          <p class="chapter-num">05</p>
+          <h2 id="home-ios">iOS</h2>
+          <p class="chapter-aside">引擎已经能在 iPhone 上启动，但还不是一个能玩的游戏。</p>
+        </header>
+        <div class="number-table number-table-3" role="list">
+          <div role="listitem"><strong>55.6 MB</strong><span>未签名 arm64 IPA</span></div>
+          <div role="listitem"><strong>173.9 MB</strong><span>主二进制</span></div>
+          <div role="listitem"><strong>M3</strong><span>真机启动引擎</span></div>
+        </div>
+        <p class="plain-note">M4 改成从 Documents/horizon-client/26.3 读资源，设备复测还没完成。M5 的资源导入、M6 的触屏和音频都还没做完。</p>
+        <a class="more" href="#/ios">M1–M6 与导入路径 →</a>
+      </section>
+
+      <section class="chapter chapter-last" aria-labelledby="home-more">
+        <header class="chapter-head">
+          <p class="chapter-num">06</p>
+          <h2 id="home-more">继续</h2>
+          <p class="chapter-aside">其余页面、源码和外部链接。</p>
+        </header>
+        <nav class="index-links" aria-label="站点索引">
+          <a href="#/engine"><span>02</span>引擎</a>
+          <a href="#/resources"><span>03</span>资源</a>
+          <a href="#/security"><span>04</span>边界</a>
+          <a href="#/ios"><span>05</span>iOS</a>
+          <a href="#/about"><span>06</span>关于</a>
+          <a href="https://github.com/zhangrongxue/horizon-ios" target="_blank" rel="noopener noreferrer"><span>↗</span>horizon-ios</a>
+          <a href="assets/NCLR-L1-source.zip" download><span>↓</span>源码归档</a>
+        </nav>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============================== ENGINE ============================== -->
+  <section class="route" data-route="engine" id="page-engine" aria-labelledby="engine-title" hidden>
+    <div class="wrap">
+      <header class="page-head">
+        <div class="page-head-copy">
+          <p class="overline"><span>02</span> 引擎 <span class="slash">/</span> Horizon 26.3</p>
+          <h1 id="engine-title">从登录到引擎。</h1>
+          <p class="lede">Horizon 把 Minecraft: Java Edition 26.3 的客户端重写成 Rust。NCLR 负责登录、准备、校验和启动，把一次性会话交给引擎，然后退到后台。</p>
+          <div class="chip-row">
+            <span class="chip">Rust 1.100</span><span class="chip">26.3 引擎</span><span class="chip">无 JVM</span><span class="chip chip-violet">horizon-client</span>
+          </div>
+        </div>
+        <div class="page-head-visual">
+          <span class="icon-orb accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-cpu"></use></svg></span>
+          <span class="page-head-caption">ENGINE<em>原生执行</em></span>
+        </div>
+      </header>
+
+      <section class="split-block" aria-labelledby="engine-launch">
+        <div class="split-copy reveal">
+          <p class="kicker">01 / 启动</p>
+          <h2 id="engine-launch">一次启动，<br>四次交接。</h2>
+          <p class="lede-sm">登录、检查、准备、启动。每一步都写清楚做了什么、失败时该修哪里。</p>
+          <ol class="step-list">
+            <li>
+              <span class="step-num">01</span>
+              <div><h3>登录</h3><p>Microsoft 设备码，令牌写进 macOS Keychain，不落明文磁盘。</p></div>
+              <span class="icon-tile icon-tile-sm accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-key"></use></svg></span>
+            </li>
+            <li>
+              <span class="step-num">02</span>
+              <div><h3>检查</h3><p>官方 <code>.minecraft</code>、<code>horizon-client</code>、<code>horizon-prepare</code> 与 Java 25。</p></div>
+              <span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-scan"></use></svg></span>
+            </li>
+            <li>
+              <span class="step-num">03</span>
+              <div><h3>准备</h3><p><code>horizon-prepare --check/--complete</code>，实时日志与缺项诊断。</p></div>
+              <span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-layers"></use></svg></span>
+            </li>
+            <li>
+              <span class="step-num">04</span>
+              <div><h3>启动</h3><p>生成 0600 会话文件，用 <code>--session-file</code> 交给引擎子进程。</p></div>
+              <span class="icon-tile icon-tile-sm accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-terminal"></use></svg></span>
+            </li>
+          </ol>
+        </div>
+
+        <div class="split-visual reveal" style="--d:80ms">
+          <div class="terminal" data-spot>
+            <div class="term-bar">
+              <span class="term-dots"><i></i><i></i><i></i></span>
+              <span class="term-title">nclr — horizon launch</span>
+              <span class="term-badge">RUST</span>
+            </div>
+            <div class="term-body" role="img" aria-label="NCLR 启动日志：环境检测、所有权校验、会话文件、引擎启动全部成功">
+              <div class="term-line"><span class="t-prompt">$</span><span class="t-cmd">nclr launch horizon</span><span class="caret"></span></div>
+              <div class="term-line"><span class="t-ok">✓</span><span>环境检测</span><span class="t-dim">.minecraft · horizon-client · Java 25</span></div>
+              <div class="term-line"><span class="t-ok">✓</span><span>所有权校验</span><span class="t-dim">Minecraft Services · profile</span></div>
+              <div class="term-line"><span class="t-warn">⟳</span><span>会话文件</span><span class="t-dim">0600 · random name · 120s</span></div>
+              <div class="term-line"><span class="t-ok">✓</span><span>引擎</span><span class="t-dim">Horizon 0.1.0 · Rust</span></div>
+              <div class="term-line"><span class="t-go">→</span><span>正在进入 26.3</span><span class="t-dim">token 不在 argv</span></div>
+            </div>
+            <div class="term-foot"><span>SESSION 0600</span><span>ONE-SHOT</span><span>NO JVM</span></div>
+          </div>
+          <p class="fig-note"><svg class="ico" aria-hidden="true"><use href="#i-terminal"></use></svg>日志为界面文案示意，数字与路径来自实际启动配置。</p>
+        </div>
+      </section>
+
+      <section class="block" aria-labelledby="engine-auth">
+        <div class="block-head reveal">
+          <div>
+            <p class="kicker">02 / 认证</p>
+            <h2 id="engine-auth">六次网络交接。</h2>
+          </div>
+          <p class="block-aside">每一步都能单独失败，也都能说清楚失败在哪。</p>
+        </div>
+
+        <ol class="flow" aria-label="正版认证流程">
+          <li class="flow-step reveal">
+            <span class="icon-tile icon-tile-sm accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-key"></use></svg></span>
+            <strong>Microsoft</strong><small>OAuth 设备码</small>
+          </li>
+          <li class="flow-step reveal" style="--d:50ms">
+            <span class="icon-tile icon-tile-sm accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-users"></use></svg></span>
+            <strong>Xbox Live</strong><small>用户令牌</small>
+          </li>
+          <li class="flow-step reveal" style="--d:100ms">
+            <span class="icon-tile icon-tile-sm accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-shield"></use></svg></span>
+            <strong>XSTS</strong><small>授权令牌</small>
+          </li>
+          <li class="flow-step reveal" style="--d:150ms">
+            <span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-cube"></use></svg></span>
+            <strong>Minecraft</strong><small>Services 登录</small>
+          </li>
+          <li class="flow-step reveal" style="--d:200ms">
+            <span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-check-circle"></use></svg></span>
+            <strong>所有权</strong><small>entitlements</small>
+          </li>
+          <li class="flow-step reveal" style="--d:250ms">
+            <span class="icon-tile icon-tile-sm accent-amber"><svg class="ico" aria-hidden="true"><use href="#i-id-card"></use></svg></span>
+            <strong>档案</strong><small>UUID · 皮肤 URL</small>
+          </li>
+        </ol>
+
+        <div class="tri-grid">
+          <article class="card info-card reveal" data-spot>
+            <span class="icon-tile accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-lock"></use></svg></span>
+            <h3>Token 只活在进程里</h3>
+            <p>设备码、XSTS 与 Minecraft 令牌只存在于内存和 Keychain。命令行走 <code>--session-file</code>，不接受冒号分隔的 secret。</p>
+          </article>
+          <article class="card info-card reveal" data-spot style="--d:70ms">
+            <span class="icon-tile accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-clock"></use></svg></span>
+            <h3>会话文件 120 秒</h3>
+            <p>随机文件名、0600 权限、2 分钟兜底清理。引擎读完即用，过期文件不会被复用。</p>
+          </article>
+          <article class="card info-card reveal" data-spot style="--d:140ms">
+            <span class="icon-tile accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-fingerprint"></use></svg></span>
+            <h3>每次启动都重新验</h3>
+            <p>所有权门禁不是登录时的一次性仪式。每次点开始游戏，都会重新检查 entitlements。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="media-block" aria-labelledby="engine-ui">
+        <div class="media-copy reveal">
+          <p class="kicker">03 / 界面</p>
+          <h2 id="engine-ui">准备、账本和诊断，<br>在同一个窗口。</h2>
+          <p>资源管线、传输账本与诊断并排放在同一页。准备完成后，按钮从“准备资源”变成“开始游戏”，不需要猜现在该做什么。</p>
+          <div class="metric-row">
+            <div><strong>26.3</strong><span>目标版本</span></div>
+            <div><strong>0600</strong><span>会话权限</span></div>
+            <div><strong>120s</strong><span>令牌寿命</span></div>
+          </div>
+        </div>
+        <figure class="shot reveal">
+          <div class="shot-frame"><img src="assets/img/engine.png" alt="NCLR 引擎资源页面：资源目录、官方副本、准备器路径、传输账本" width="1180" height="760" decoding="async"></div>
+          <figcaption><span class="shot-dot"></span>引擎资源 · HZR3 传输账本 · 1180×760</figcaption>
+        </figure>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============================== RESOURCES ============================== -->
+  <section class="route" data-route="resources" id="page-resources" aria-labelledby="resources-title" hidden>
+    <div class="wrap">
+      <header class="page-head">
+        <div class="page-head-copy">
+          <p class="overline"><span>03</span> 资源 <span class="slash">/</span> route3</p>
+          <h1 id="resources-title">238.4 MiB 的产物，<br>压成 1.76 MiB。</h1>
+          <p class="lede">route3 不搬运资源，只记录派生规则。设备端从你自己的 jar 算出 115.3 MiB 资源，23,150 / 23,179 个文件与桌面产物逐字节一致。</p>
+        </div>
+        <div class="page-head-visual">
+          <span class="icon-orb accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-layers"></use></svg></span>
+          <span class="page-head-caption">LEDGER<em>逐字节对账</em></span>
+        </div>
+      </header>
+
+      <div class="ledger-hero">
+        <article class="mega-card glass reveal" data-spot>
+          <p class="kicker">01 / 体积</p>
+          <p class="mega"><span>1.76</span><em>MiB</em></p>
+          <p class="mega-sub">单归档 · 35 个文件 · 设备端派生 115.3 MiB</p>
+          <div class="tag-row">
+            <span class="tag tag-mint">18.3× 压缩</span>
+            <span class="tag tag-blue">-99.3% 体积</span>
+            <span class="tag">只存规则</span>
+          </div>
+          <div class="mega-foot">
+            <span><svg class="ico" aria-hidden="true"><use href="#i-scan"></use></svg>35 文件 / 单包</span>
+            <span><svg class="ico" aria-hidden="true"><use href="#i-check-circle"></use></svg>47% 已审计</span>
+          </div>
+        </article>
+
+        <article class="bars-card glass reveal" data-spot style="--d:80ms">
+          <div class="bars-head">
+            <p class="kicker">02 / 账本</p>
+            <span class="badge badge-mint">实测</span>
+          </div>
+          <div class="ledger-row">
+            <div class="ledger-top"><span>原始产物</span><strong>238.4 MiB</strong></div>
+            <div class="bar"><span style="--w:100%"></span></div>
+          </div>
+          <div class="ledger-row">
+            <div class="ledger-top"><span>压缩内容</span><strong>32.4 MiB</strong></div>
+            <div class="bar bar-blue"><span style="--w:13.6%"></span></div>
+          </div>
+          <div class="ledger-row">
+            <div class="ledger-top"><span>设备端派生</span><strong>115.3 MiB</strong></div>
+            <div class="bar bar-violet"><span style="--w:48.4%"></span></div>
+          </div>
+          <div class="ledger-row">
+            <div class="ledger-top"><span>HZR3 单包</span><strong>1.76 MiB</strong></div>
+            <div class="bar bar-mint"><span style="--w:1.8%"></span></div>
+          </div>
+          <p class="fig-note">长度按 238.4 MiB 归一；数值取自 route3 的转移账本与 47% 审计样本。</p>
+        </article>
+      </div>
+
+      <section class="block two-col" aria-labelledby="resources-why">
+        <article class="ring-card glass reveal" data-spot>
+          <div class="ring" style="--p:99.87" role="img" aria-label="23,150 / 23,179 个文件逐字节一致，占 99.87%">
+            <div class="ring-core"><strong>99.87<small>%</small></strong><span>一致</span></div>
+          </div>
+          <h3>23,150 / 23,179</h3>
+          <p>设备端从你的 jar 派生出的文件，与桌面准备产物逐字节一致。剩下 29 个差异在审计清单里逐项标注。</p>
+          <div class="tag-row"><span class="tag">逐字节</span><span class="tag">可复核</span></div>
+        </article>
+
+        <div class="why-copy reveal" style="--d:80ms">
+          <p class="kicker">03 / 方法</p>
+          <h2 id="resources-why">为什么只有 1.76 MiB。</h2>
+          <ul class="numbered-list">
+            <li><span>01</span><div><strong>只存规则，不存资源</strong><p>HZR3 记录路径、来源与哈希，不携带 Mojang 的 assets。</p></div></li>
+            <li><span>02</span><div><strong>设备端从 jar 派生</strong><p>资源由你本机的 jar 重算，网络只传表包，不传游戏内容。</p></div></li>
+            <li><span>03</span><div><strong>每个文件对哈希</strong><p>派生结果与桌面产物逐字节比较，差异进入审计清单。</p></div></li>
+          </ul>
+          <div class="note note-mint">
+            <span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-shield"></use></svg></span>
+            <div><strong>没有离线下载</strong><p>没有云端资源，也没有“内置整合包”。每条分支都从你自己的副本开始。</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="block" aria-labelledby="resources-steps">
+        <div class="block-head reveal">
+          <div><p class="kicker">04 / 流程</p><h2 id="resources-steps">准备、打包、派生。</h2></div>
+          <p class="block-aside">三个动作，全部发生在你能看到路径的地方。</p>
+        </div>
+        <div class="pipeline-grid">
+          <article class="card pipeline-card reveal" data-spot>
+            <span class="icon-tile accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-scan"></use></svg></span>
+            <span class="step-num">01</span>
+            <h3>准备</h3>
+            <p>在你自己的机器上读 26.3，输出到 <code>horizon-client/26.3</code>；缺项会给出官方副本路径。</p>
+            <code class="code-chip">horizon-prepare --complete</code>
+          </article>
+          <article class="card pipeline-card reveal" data-spot style="--d:70ms">
+            <span class="icon-tile accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-package"></use></svg></span>
+            <span class="step-num">02</span>
+            <h3>打包</h3>
+            <p><code>hzr-pack</code> 把准备产物固化成 HZR3 表包：35 个文件，一个归档。</p>
+            <code class="code-chip">hzr-pack → ship.hzr3</code>
+          </article>
+          <article class="card pipeline-card reveal" data-spot style="--d:140ms">
+            <span class="icon-tile accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-route"></use></svg></span>
+            <span class="step-num">03</span>
+            <h3>派生</h3>
+            <p>设备端用你的 jar 重算 115.3 MiB 资源，再与桌面产物逐字节对账。</p>
+            <code class="code-chip">derive → 115.3 MiB</code>
+          </article>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============================== SECURITY ============================== -->
+  <section class="route" data-route="security" id="page-security" aria-labelledby="security-title" hidden>
+    <div class="wrap">
+      <header class="page-head">
+        <div class="page-head-copy">
+          <p class="overline"><span>04</span> 边界 <span class="slash">/</span> 第一版</p>
+          <h1 id="security-title">这个启动器<br>不做什么。</h1>
+          <p class="lede">NCLR 不打包 Mojang 文件，不做离线账号，也不复制别家启动器的代码。下面是第一版实际遵守的边界，以及还没做到的部分。</p>
+        </div>
+        <div class="page-head-visual">
+          <span class="icon-orb accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-shield"></use></svg></span>
+          <span class="page-head-caption">BOUNDARY<em>默认不信任</em></span>
+        </div>
+      </header>
+
+      <div class="principles-grid">
+        <article class="card principle-card reveal" data-spot>
+          <span class="icon-tile accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-shield"></use></svg></span>
+          <h3>正版所有权门禁</h3>
+          <p>每次启动前重新校验 Minecraft entitlements。没有所有权，就不生成会话，也不启动引擎。</p>
+        </article>
+        <article class="card principle-card reveal" data-spot style="--d:60ms">
+          <span class="icon-tile accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-lock"></use></svg></span>
+          <h3>一次性会话文件</h3>
+          <p>随机名、0600、120 秒兜底清理；token 不进 argv、日志或公开 JSON。</p>
+        </article>
+        <article class="card principle-card reveal" data-spot style="--d:120ms">
+          <span class="icon-tile accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-eye-off"></use></svg></span>
+          <h3>不碰你的游戏文件</h3>
+          <p>资源准备只读你自己的安装。仓库与安装包里没有 Mojang jar、assets 或反编译代码。</p>
+        </article>
+        <article class="card principle-card reveal" data-spot style="--d:180ms">
+          <span class="icon-tile accent-amber"><svg class="ico" aria-hidden="true"><use href="#i-code"></use></svg></span>
+          <h3>Clean-room 实现</h3>
+          <p>不复制别家启动器代码，也不提供离线破解路径。产品只服务拥有正版副本的玩家。</p>
+        </article>
+      </div>
+
+      <section class="block" aria-labelledby="security-token">
+        <div class="block-head reveal">
+          <div><p class="kicker">01 / 令牌</p><h2 id="security-token">令牌经过的地方。</h2></div>
+          <p class="block-aside">令牌从微软出发，只在必要的地方停留。</p>
+        </div>
+        <div class="token-panel glass reveal">
+          <ol class="token-flow">
+            <li><span class="icon-tile icon-tile-sm accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-key"></use></svg></span><strong>Microsoft</strong><small>设备码</small></li>
+            <li><span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-lock"></use></svg></span><strong>Keychain</strong><small>macOS</small></li>
+            <li><span class="icon-tile icon-tile-sm accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-cpu"></use></svg></span><strong>内存</strong><small>NCLR 进程</small></li>
+            <li><span class="icon-tile icon-tile-sm accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-file"></use></svg></span><strong>0600 文件</strong><small>120 秒</small></li>
+            <li><span class="icon-tile icon-tile-sm accent-amber"><svg class="ico" aria-hidden="true"><use href="#i-terminal"></use></svg></span><strong>引擎子进程</strong><small>读完即用</small></li>
+          </ol>
+          <div class="never-strip">
+            <span class="never-label">永远不出现</span>
+            <span class="never-chip"><svg class="ico" aria-hidden="true"><use href="#i-x"></use></svg>命令行参数</span>
+            <span class="never-chip"><svg class="ico" aria-hidden="true"><use href="#i-x"></use></svg>日志</span>
+            <span class="never-chip"><svg class="ico" aria-hidden="true"><use href="#i-x"></use></svg>公开 JSON</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="block" aria-labelledby="security-honest">
+        <div class="block-head reveal">
+          <div><p class="kicker">02 / 限制</p><h2 id="security-honest">第一版还没做到的事。</h2></div>
+          <p class="block-aside">清单来自 TASKS.md。</p>
+        </div>
+        <ul class="status-list reveal">
+          <li class="status-row">
+            <span class="status-icon status-warn"><svg class="ico" aria-hidden="true"><use href="#i-warning"></use></svg></span>
+            <div><strong>还没有在真实 macOS 上跑过</strong><span>配置、脚本与 CI 已就绪；当前构建机是 Windows，不能替代 Xcode / SDK 验证。</span></div>
+            <span class="badge badge-amber">待验证</span>
+          </li>
+          <li class="status-row">
+            <span class="status-icon status-warn"><svg class="ico" aria-hidden="true"><use href="#i-key"></use></svg></span>
+            <div><strong>还没有真实的 Azure Client ID</strong><span>登录链路已实现并用假 ID 验证报错路径；真实登录需要你的应用与 Mojang 审核。</span></div>
+            <span class="badge badge-amber">待配置</span>
+          </li>
+          <li class="status-row">
+            <span class="status-icon status-info"><svg class="ico" aria-hidden="true"><use href="#i-package"></use></svg></span>
+            <div><strong>还没有内置 Horizon 二进制</strong><span>安装包不打包引擎；需要你按文档准备 <code>horizon-client</code> 与 <code>horizon-prepare</code>。</span></div>
+            <span class="badge badge-blue">待提供</span>
+          </li>
+          <li class="status-row">
+            <span class="status-icon status-info"><svg class="ico" aria-hidden="true"><use href="#i-code"></use></svg></span>
+            <div><strong>Java 实例只建模，未实现 classpath 启动</strong><span>第一版把 Java 实例作为兼容回退的占位，Rust 引擎才是主路径。</span></div>
+            <span class="badge badge-blue">v0.2</span>
+          </li>
+          <li class="status-row">
+            <span class="status-icon status-info"><svg class="ico" aria-hidden="true"><use href="#i-clock"></use></svg></span>
+            <div><strong>资源进度是事件驱动的近似值</strong><span>还没有解析 <code>--progress json</code>；进度条会动，但不是精确百分比。</span></div>
+            <span class="badge badge-blue">v0.2</span>
+          </li>
+        </ul>
+        <p class="legal-line"><svg class="ico" aria-hidden="true"><use href="#i-book"></use></svg>NCLR 代码以 MIT 发布，iOS port 与 Horizon 对齐 LGPL-3.0-or-later；Minecraft 是 Mojang Synergies AB 的商标，本项目不是官方产品。</p>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============================== IOS ============================== -->
+  <section class="route" data-route="ios" id="page-ios" aria-labelledby="ios-title" hidden>
+    <div class="wrap">
+      <header class="page-head">
+        <div class="page-head-copy">
+          <p class="overline"><span>05</span> iOS <span class="slash">/</span> M1–M6</p>
+          <h1 id="ios-title">Horizon 的<br>iOS 移植。</h1>
+          <p class="lede">Horizon 引擎、route3 的 HZR3 资源包、UIKit 壳和 NCLR 品牌被合进一个 IPA。M3 已经在 iPhone 上启动引擎；现在还不是一个能玩的游戏。</p>
+        </div>
+        <div class="page-head-visual">
+          <span class="icon-orb accent-amber"><svg class="ico" aria-hidden="true"><use href="#i-phone"></use></svg></span>
+          <span class="page-head-caption">IOS<em>arm64 · 静态库</em></span>
+        </div>
+      </header>
+
+      <div class="device-strip glass reveal">
+        <div class="device-stat"><span class="stat-icon"><svg class="ico" aria-hidden="true"><use href="#i-package"></use></svg></span><div><strong>55.6 <em>MB</em></strong><small>未签名 arm64 IPA</small></div></div>
+        <div class="device-stat"><span class="stat-icon"><svg class="ico" aria-hidden="true"><use href="#i-cpu"></use></svg></span><div><strong>173.9 <em>MB</em></strong><small>主二进制</small></div></div>
+        <div class="device-stat"><span class="stat-icon"><svg class="ico" aria-hidden="true"><use href="#i-shield"></use></svg></span><div><strong>0</strong><small>内置游戏资源</small></div></div>
+        <div class="device-stat"><span class="stat-icon"><svg class="ico" aria-hidden="true"><use href="#i-check-circle"></use></svg></span><div><strong>M3</strong><small>真机启动引擎</small></div></div>
+      </div>
+
+      <section class="block" aria-labelledby="ios-milestones">
+        <div class="block-head reveal">
+          <div><p class="kicker">01 / 里程碑</p><h2 id="ios-milestones">M1 到 M6。</h2></div>
+          <p class="block-aside">每个里程碑都对应一次可复现的构建或真机日志。</p>
+        </div>
+        <ol class="timeline">
+          <li class="t-item is-done reveal">
+            <span class="t-node"><svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg></span>
+            <div class="t-body">
+              <div class="t-top"><strong>M1</strong><span class="badge badge-mint">已完成</span></div>
+              <h3>Rust → iOS arm64 静态库 → UIKit 壳</h3>
+              <p>打通工具链，产出未签名 IPA。</p>
+            </div>
+          </li>
+          <li class="t-item is-done reveal" style="--d:60ms">
+            <span class="t-node"><svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg></span>
+            <div class="t-body">
+              <div class="t-top"><strong>M2</strong><span class="badge badge-mint">已完成</span></div>
+              <h3><code>horizon-client-lib</code> 编译并链接</h3>
+              <p>核心库在 <code>aarch64-apple-ios</code> 上通过编译和链接。</p>
+            </div>
+          </li>
+          <li class="t-item is-done reveal" style="--d:120ms">
+            <span class="t-node"><svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg></span>
+            <div class="t-body">
+              <div class="t-top"><strong>M3</strong><span class="badge badge-mint">已完成</span></div>
+              <h3>完整引擎在 iPhone 上启动</h3>
+              <p>真机日志出现 <code>Horizon 0.1.0</code> 与打开文件数上限，引擎随后等待资源。</p>
+            </div>
+          </li>
+          <li class="t-item is-built reveal" style="--d:180ms">
+            <span class="t-node"><svg class="ico" aria-hidden="true"><use href="#i-route"></use></svg></span>
+            <div class="t-body">
+              <div class="t-top"><strong>M4</strong><span class="badge badge-blue">已构建 · 待真机重测</span></div>
+              <h3>从 Documents 读取导入资源</h3>
+              <p>优先读取 <code>Documents/horizon-client/26.3</code>，开启文件共享与就地打开。</p>
+            </div>
+          </li>
+          <li class="t-item reveal" style="--d:240ms">
+            <span class="t-node"><svg class="ico" aria-hidden="true"><use href="#i-upload"></use></svg></span>
+            <div class="t-body">
+              <div class="t-top"><strong>M5</strong><span class="badge badge-amber">进行中</span></div>
+              <h3>准备并导入你自己的 26.3 资源</h3>
+              <p>资源已在桌面准备，等待导入设备并完成首次可玩验证。</p>
+            </div>
+          </li>
+          <li class="t-item reveal" style="--d:300ms">
+            <span class="t-node"><svg class="ico" aria-hidden="true"><use href="#i-play"></use></svg></span>
+            <div class="t-body">
+              <div class="t-top"><strong>M6</strong><span class="badge badge-muted">未开始</span></div>
+              <h3>触屏操作、音频、可玩世界</h3>
+              <p>当前版本没有触控，也没有音频；它还不是一款能玩的手游。</p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <div class="ios-lower">
+        <article class="import-card glass reveal" data-spot>
+          <p class="kicker">02 / 导入</p>
+          <h3>资源落在这里</h3>
+          <div class="path-box"><span class="path-root">Documents</span><span class="path-sep">/</span><span>horizon-client</span><span class="path-sep">/</span><strong>26.3</strong></div>
+          <ul class="mini-list">
+            <li><svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg><code>UIFileSharingEnabled</code> 已开启</li>
+            <li><svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg><code>LSSupportsOpeningDocumentsInPlace</code> 已开启</li>
+            <li><svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg>空 bundle 目录只作为回退</li>
+          </ul>
+          <p class="fig-note">IPA 不含任何 Minecraft 资源；可玩构建需要你导入自己准备的 26.3。</p>
+        </article>
+
+        <article class="quote-card glass reveal" style="--d:80ms">
+          <svg class="quote-mark" aria-hidden="true"><use href="#i-quote"></use></svg>
+          <p>引擎能启动，<br>但还不能玩。</p>
+          <div class="quote-meta">
+            <span class="badge badge-amber">无触屏操作</span>
+            <span class="badge badge-blue">资源导入待重测</span>
+          </div>
+          <p class="quote-foot">M3 的设备日志证明引擎启动；M4 改了资源查找；M5 的资源导入和 M6 的触屏、音频还没完成。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== ABOUT ============================== -->
+  <section class="route" data-route="about" id="page-about" aria-labelledby="about-title" hidden>
+    <div class="wrap">
+      <header class="page-head">
+        <div class="page-head-copy">
+          <p class="overline"><span>06</span> 关于 <span class="slash">/</span> v0.1.0</p>
+          <h1 id="about-title">这个版本<br>是怎么来的。</h1>
+          <p class="lede">Horizon 提供引擎，route3 提供资源管线，NCLR 把它们接成一条启动路径。作者 ZRXMAXLNX 与可心，第一版 v0.1.0，2026-11-18。</p>
+        </div>
+        <div class="page-head-visual">
+          <span class="icon-orb accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-sparkle"></use></svg></span>
+          <span class="page-head-caption">V0.1.0<em>第一个可运行版本</em></span>
+        </div>
+      </header>
+
+      <div class="author-grid">
+        <article class="author-card glass reveal" data-spot>
+          <span class="avatar avatar-violet">Z</span>
+          <div><h3>ZRXMAXLNX</h3><p>产品 / Tauri 外壳 / 认证链路 / 视觉</p></div>
+          <span class="badge badge-mint">作者</span>
+        </article>
+        <article class="author-card glass reveal" data-spot style="--d:70ms">
+          <span class="avatar avatar-mint">可</span>
+          <div><h3>可心</h3><p>产品 / 引擎对接 / 资源管线 / 验证</p></div>
+          <span class="badge badge-mint">作者</span>
+        </article>
+        <article class="version-card glass reveal" style="--d:140ms">
+          <span class="brand-mark brand-mark-sm"><svg class="brand-glyph" aria-hidden="true"><use href="#i-mark"></use></svg></span>
+          <div><strong>NCLR v0.1.0</strong><span>2026-11-18 · MIT · Tauri 2</span></div>
+          <span class="tag">26 个单测</span>
+        </article>
+      </div>
+
+      <section class="block" aria-labelledby="about-origin">
+        <div class="block-head reveal">
+          <div><p class="kicker">01 / 来源</p><h2 id="about-origin">三个来源。</h2></div>
+          <p class="block-aside">源码目录仍叫 <code>zrx-launcher</code>，产品名是 NCLR。</p>
+        </div>
+        <div class="origin-grid">
+          <article class="origin-card glass reveal" data-spot>
+            <span class="icon-tile accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-cpu"></use></svg></span>
+            <p class="kicker">引擎</p>
+            <h3>Horizon</h3>
+            <p>Minecraft: Java Edition 26.3 的 Rust 重写客户端，用自己的正版副本准备资源，以 <code>horizon-client</code> 原生运行。</p>
+            <span class="tag-row"><span class="tag">Rust</span><span class="tag">26.3</span></span>
+          </article>
+          <article class="origin-card glass reveal" data-spot style="--d:70ms">
+            <span class="icon-tile accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-layers"></use></svg></span>
+            <p class="kicker">资源</p>
+            <h3>route3</h3>
+            <p>把 238.4 MiB 的准备产物压成 1.76 MiB 的 HZR3 表包；设备端从用户自己的 jar 派生资源。</p>
+            <span class="tag-row"><span class="tag">HZR3</span><span class="tag">18.3×</span></span>
+          </article>
+          <article class="origin-card glass reveal" data-spot style="--d:140ms">
+            <span class="icon-tile accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-sparkle"></use></svg></span>
+            <p class="kicker">产品</p>
+            <h3>NCLR</h3>
+            <p>产品化、正版登录、macOS 外壳、视觉系统，以及把引擎与资源管线接起来的启动器。</p>
+            <span class="tag-row"><span class="tag">Tauri</span><span class="tag">v0.1.0</span></span>
+          </article>
+        </div>
+      </section>
+
+      <section class="block" aria-labelledby="about-gallery">
+        <div class="block-head reveal">
+          <div><p class="kicker">02 / 界面</p><h2 id="about-gallery">五个工作台。</h2></div>
+          <a class="link-more" href="assets/NCLR-L1-source.zip" download>下载源码归档<svg class="ico" aria-hidden="true"><use href="#i-download"></use></svg></a>
+        </div>
+        <div class="gallery">
+          <figure class="shot reveal">
+            <div class="shot-frame"><img src="assets/img/home.png" alt="NCLR 主页工作台" width="1180" height="760" decoding="async"></div>
+            <figcaption><span class="shot-dot"></span>主页 · 账号卡与实例卡</figcaption>
+          </figure>
+          <figure class="shot reveal" style="--d:60ms">
+            <div class="shot-frame"><img src="assets/img/versions.png" alt="NCLR 版本库工作台" width="1180" height="760" decoding="async"></div>
+            <figcaption><span class="shot-dot"></span>版本库 · 实例与公开清单</figcaption>
+          </figure>
+          <figure class="shot reveal" style="--d:120ms">
+            <div class="shot-frame"><img src="assets/img/account.png" alt="NCLR 账号工作台" width="1180" height="760" decoding="async"></div>
+            <figcaption><span class="shot-dot"></span>账号 · 设备码登录</figcaption>
+          </figure>
+          <figure class="shot reveal" style="--d:180ms">
+            <div class="shot-frame"><img src="assets/img/settings.png" alt="NCLR 设置工作台" width="1180" height="760" decoding="async"></div>
+            <figcaption><span class="shot-dot"></span>设置 · 环境与偏好</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="block two-col" aria-labelledby="about-roadmap">
+        <div class="roadmap reveal">
+          <p class="kicker">03 / 下一版</p>
+          <h2 id="about-roadmap">下一版先修这些。</h2>
+          <ol class="roadmap-list">
+            <li><span>01</span><p>在 macOS 真机跑一次构建，修签名、公证与 Keychain 权限。</p></li>
+            <li><span>02</span><p>用真实 Azure 应用与已审核 App ID 做完整登录。</p></li>
+            <li><span>03</span><p>解析 <code>--progress json</code>，把近似进度变成真实百分比。</p></li>
+            <li><span>04</span><p>Java 实例 classpath 启动，作为 Rust 引擎的兼容回退。</p></li>
+            <li><span>05</span><p>自动更新：签名清单 + 回滚。</p></li>
+          </ol>
+        </div>
+        <div class="links-card glass reveal" style="--d:80ms">
+          <p class="kicker">04 / 链接</p>
+          <h3>继续往下看</h3>
+          <a class="link-row" href="https://github.com/zhangrongxue/horizon-ios" target="_blank" rel="noopener noreferrer">
+            <span class="icon-tile icon-tile-sm accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-github"></use></svg></span>
+            <span><strong>horizon-ios</strong><small>GitHub · port code only</small></span>
+            <svg class="ico link-arrow" aria-hidden="true"><use href="#i-external"></use></svg>
+          </a>
+          <a class="link-row" href="assets/NCLR-L1-source.zip" download>
+            <span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-download"></use></svg></span>
+            <span><strong>NCLR 源码归档</strong><small>v0.1.0 · 含 SHA-256</small></span>
+            <svg class="ico link-arrow" aria-hidden="true"><use href="#i-download"></use></svg>
+          </a>
+          <a class="link-row" href="#/security">
+            <span class="icon-tile icon-tile-sm accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-book"></use></svg></span>
+            <span><strong>边界与已知限制</strong><small>诚实的验收清单</small></span>
+            <svg class="ico link-arrow" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
+          </a>
+          <p class="legal-line"><svg class="ico" aria-hidden="true"><use href="#i-shield"></use></svg>不是 Mojang / Microsoft 官方产品，未获其背书。你需要自己拥有 Minecraft: Java Edition。</p>
+        </div>
+      </section>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <div class="footer-brand">
+      <span class="brand-mark brand-mark-sm"><svg class="brand-glyph" aria-hidden="true"><use href="#i-mark"></use></svg></span>
+      <div><strong>NCLR</strong><span>HORIZON 26.3</span></div>
+    </div>
+    <p class="footer-tagline">Horizon 26.3 / v0.1.0</p>
+    <nav class="footer-links" aria-label="页脚导航">
+      <a href="#/engine">引擎</a>
+      <a href="#/resources">资源</a>
+      <a href="#/security">边界</a>
+      <a href="#/ios">iOS</a>
+      <a href="#/about">关于</a>
+    </nav>
+    <div class="footer-meta">
+      <span>v0.1.0 · 2026-11-18</span>
+      <span>MIT / LGPL-3.0-or-later</span>
+      <span>非官方产品</span>
+    </div>
+    <p class="footer-note">本页是工作区 NCLR / Horizon / route3 文档的前端呈现；文案与数字取自 README、TASKS、QA 与转移账本。Minecraft 是 Mojang Synergies AB 的商标。</p>
+  </div>
+</footer>
+
+<nav class="pager" id="pager" aria-label="翻页导航">
+  <button class="pager-btn pager-prev" id="prevPage" type="button" aria-label="上一页">
+    <svg class="ico" aria-hidden="true"><use href="#i-chevron-left"></use></svg>
+    <span class="pager-copy"><small>上一页</small><strong data-pager-label>—</strong></span>
+  </button>
+  <div class="pager-mid">
+    <div class="pager-dots" id="pagerDots"></div>
+    <span class="pager-count" id="pagerCount">01 / 06</span>
+  </div>
+  <button class="pager-btn pager-next" id="nextPage" type="button" aria-label="下一页">
+    <span class="pager-copy"><small>下一页</small><strong data-pager-label>—</strong></span>
+    <svg class="ico" aria-hidden="true"><use href="#i-chevron-right"></use></svg>
+  </button>
+</nav>
+
+<script src="assets/js/app.js" defer></script>
+</body>
+</html>
