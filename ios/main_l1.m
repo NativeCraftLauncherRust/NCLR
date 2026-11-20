@@ -1021,7 +1021,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     // already-running UIApplication and drives its loop without a second
     // UIApplicationMain.
     id sceneDelegate = self.view.window.windowScene.delegate;
-    self.view.window.hidden = YES;
+    UIWindow *launcherWindow = self.view.window;
+    launcherWindow.userInteractionEnabled = NO;
+    [launcherWindow resignKeyWindow];
+    launcherWindow.hidden = YES;
     horizon_ios_run(resources.UTF8String, game.UTF8String);
 }
 @end
@@ -2032,7 +2035,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
     self.window.rootViewController = [[NCLRRootController alloc] init];
-    self.window.windowLevel = UIWindowLevelAlert + 1.0;
+    self.window.windowLevel = UIWindowLevelNormal;
     [self.window makeKeyAndVisible];
 }
 @end
