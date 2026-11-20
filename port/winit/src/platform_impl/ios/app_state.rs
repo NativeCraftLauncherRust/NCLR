@@ -149,6 +149,9 @@ pub(crate) struct AppState {
     app_state: Option<AppStateImpl>,
     control_flow: ControlFlow,
     waker: EventLoopWaker,
+    // Redraw requests made while a redraw is already being processed. The
+    // current redraw has to finish first; the next wakeup drains this set.
+    pending_gpu_redraws: HashSet<Retained<WinitUIWindow>>,
 }
 
 impl AppState {
@@ -174,6 +177,7 @@ impl AppState {
                     }),
                     control_flow: ControlFlow::default(),
                     waker,
+                    pending_gpu_redraws: HashSet::new(),
                 });
             }
             init_guard(&mut guard);
@@ -307,10 +311,12 @@ impl AppState {
             s => bug!("`EventHandler` unexpectedly woke up {:?}", s),
         };
 
+        let pending_gpu_redraws = std::mem::take(&mut self.pending_gpu_redraws);
+        let active_control_flow = self.control_flow;
         self.set_state(AppStateImpl::ProcessingEvents {
             handler,
-            queued_gpu_redraws: Default::default(),
-            active_control_flow: self.control_flow,
+            queued_gpu_redraws: pending_gpu_redraws,
+            active_control_flow,
         });
         Some(event)
     }
@@ -458,6 +464,17 @@ pub(crate) fn set_key_window(mtm: MainThreadMarker, window: &Retained<WinitUIWin
 
 pub(crate) fn queue_gl_or_metal_redraw(mtm: MainThreadMarker, window: Retained<WinitUIWindow>) {
     let mut this = AppState::get_mut(mtm);
+    // A redraw requested while one is already in flight cannot be delivered
+    // now; remember it and hand it to the next ProcessingEvents transition.
+    if matches!(
+        this.state(),
+        AppStateImpl::ProcessingRedraws { .. }
+            | AppStateImpl::Waiting { .. }
+            | AppStateImpl::PollFinished { .. }
+    ) {
+        let _ = this.pending_gpu_redraws.insert(window);
+        return;
+    }
     match this.state_mut() {
         &mut AppStateImpl::NotLaunched { ref mut queued_gpu_redraws, .. }
         | &mut AppStateImpl::Launching { ref mut queued_gpu_redraws, .. }
@@ -465,12 +482,10 @@ pub(crate) fn queue_gl_or_metal_redraw(mtm: MainThreadMarker, window: Retained<W
         | &mut AppStateImpl::InUserCallback { ref mut queued_gpu_redraws, .. } => {
             let _ = queued_gpu_redraws.insert(window);
         },
-        s @ &mut AppStateImpl::ProcessingRedraws { .. }
-        | s @ &mut AppStateImpl::Waiting { .. }
-        | s @ &mut AppStateImpl::PollFinished { .. } => bug!("unexpected state {:?}", s),
         &mut AppStateImpl::Terminated => {
             panic!("Attempt to create a `Window` after the app has terminated")
         },
+        s => bug!("unexpected state {:?}", s),
     }
 }
 
@@ -597,10 +612,9 @@ pub(crate) fn handle_nonuser_events<I: IntoIterator<Item = EventWrapper>>(
                 _ => unreachable!(),
             };
             this.app_state = Some(if processing_redraws {
-                bug_assert!(
-                    queued_gpu_redraws.is_empty(),
-                    "redraw queued while processing redraws"
-                );
+                // Requests made from inside RedrawRequested are valid; carry
+                // them past the current GPU redraw instead of panicking.
+                this.pending_gpu_redraws.extend(queued_gpu_redraws);
                 AppStateImpl::ProcessingRedraws { handler, active_control_flow }
             } else {
                 AppStateImpl::ProcessingEvents { handler, queued_gpu_redraws, active_control_flow }
