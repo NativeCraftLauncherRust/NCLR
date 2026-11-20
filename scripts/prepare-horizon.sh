@@ -63,48 +63,12 @@ elif 'winit = { path = "third_party/winit" }' not in text:
 workspace.write_text(text)
 PY
 
-if git -C "$HORIZON_DIR" apply --check "$ROOT/patches/ios-deps.patch"; then
-    git -C "$HORIZON_DIR" apply "$ROOT/patches/ios-deps.patch"
-elif git -C "$HORIZON_DIR" apply --reverse --check "$ROOT/patches/ios-deps.patch"; then
+if git -C "$HORIZON_DIR" apply --check "$ROOT/patches/ios-all.patch"; then
+    git -C "$HORIZON_DIR" apply "$ROOT/patches/ios-all.patch"
+elif git -C "$HORIZON_DIR" apply --reverse --check "$ROOT/patches/ios-all.patch"; then
     echo "iOS patch already applied"
 else
     echo "iOS patch does not apply to $PIN" >&2
-    exit 1
-fi
-
-if git -C "$HORIZON_DIR" apply --check "$ROOT/patches/ios-metal.patch"; then
-    git -C "$HORIZON_DIR" apply "$ROOT/patches/ios-metal.patch"
-elif git -C "$HORIZON_DIR" apply --reverse --check "$ROOT/patches/ios-metal.patch"; then
-    echo "iOS Metal patch already applied"
-else
-    echo "iOS Metal patch does not apply to $PIN" >&2
-    exit 1
-fi
-
-if git -C "$HORIZON_DIR" apply --check "$ROOT/patches/ios-resource-wait.patch"; then
-    git -C "$HORIZON_DIR" apply "$ROOT/patches/ios-resource-wait.patch"
-elif git -C "$HORIZON_DIR" apply --reverse --check "$ROOT/patches/ios-resource-wait.patch"; then
-    echo "iOS resource wait patch already applied"
-else
-    echo "iOS resource wait patch does not apply to $PIN" >&2
-    exit 1
-fi
-
-if git -C "$HORIZON_DIR" apply --check "$ROOT/patches/ios-rest-join.patch"; then
-    git -C "$HORIZON_DIR" apply "$ROOT/patches/ios-rest-join.patch"
-elif git -C "$HORIZON_DIR" apply --reverse --check "$ROOT/patches/ios-rest-join.patch"; then
-    echo "iOS rest join patch already applied"
-else
-    echo "iOS rest join patch does not apply to $PIN" >&2
-    exit 1
-fi
-
-if git -C "$HORIZON_DIR" apply --check "$ROOT/patches/ios-keymap.patch"; then
-    git -C "$HORIZON_DIR" apply "$ROOT/patches/ios-keymap.patch"
-elif git -C "$HORIZON_DIR" apply --reverse --check "$ROOT/patches/ios-keymap.patch"; then
-    echo "iOS keymap patch already applied"
-else
-    echo "iOS keymap patch does not apply to $PIN" >&2
     exit 1
 fi
 
