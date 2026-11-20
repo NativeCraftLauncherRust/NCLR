@@ -711,6 +711,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @interface NCLRPageController : UIViewController
 @property (nonatomic, strong) UIScrollView *scroll;
 @property (nonatomic, strong) UIStackView *stack;
+@property (nonatomic, strong) NSLayoutConstraint *stackLeading;
+@property (nonatomic, strong) NSLayoutConstraint *stackTrailing;
 @property (nonatomic, copy) void (^onDataChanged)(void);
 - (void)setupPage;
 - (UILabel *)label:(NSString *)text size:(CGFloat)size weight:(UIFontWeight)weight color:(UIColor *)color;
@@ -737,16 +739,30 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     self.stack.spacing = 14.0;
     self.stack.translatesAutoresizingMaskIntoConstraints = NO;
     [self.scroll addSubview:self.stack];
+    self.stackLeading = [self.stack.leadingAnchor constraintEqualToAnchor:self.scroll.frameLayoutGuide.leadingAnchor constant:24.0];
+    self.stackTrailing = [self.stack.trailingAnchor constraintEqualToAnchor:self.scroll.frameLayoutGuide.trailingAnchor constant:-24.0];
     [NSLayoutConstraint activateConstraints:@[
         [self.scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.scroll.topAnchor constraintEqualToAnchor:self.view.topAnchor],
         [self.scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-        [self.stack.leadingAnchor constraintEqualToAnchor:self.scroll.frameLayoutGuide.leadingAnchor constant:24.0],
-        [self.stack.trailingAnchor constraintEqualToAnchor:self.scroll.frameLayoutGuide.trailingAnchor constant:-24.0],
+        self.stackLeading,
+        self.stackTrailing,
         [self.stack.topAnchor constraintEqualToAnchor:self.scroll.contentLayoutGuide.topAnchor constant:18.0],
         [self.stack.bottomAnchor constraintEqualToAnchor:self.scroll.contentLayoutGuide.bottomAnchor constant:-24.0],
     ]];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGFloat width = self.view.bounds.size.width;
+    CGFloat pad = width < 560.0 ? 14.0 : (width < 760.0 ? 18.0 : 24.0);
+    self.stackLeading.constant = pad;
+    self.stackTrailing.constant = -pad;
+    UIEdgeInsets inset = self.scroll.contentInset;
+    inset.bottom = MAX(16.0, self.view.safeAreaInsets.bottom + 12.0);
+    self.scroll.contentInset = inset;
+    self.scroll.verticalScrollIndicatorInsets = inset;
 }
 
 - (UILabel *)label:(NSString *)text size:(CGFloat)size weight:(UIFontWeight)weight color:(UIColor *)color {
@@ -1695,9 +1711,14 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @interface NCLRRootController : UIViewController
 @property (nonatomic, strong) UIView *sidebar;
 @property (nonatomic, strong) UIView *content;
+@property (nonatomic, strong) UIView *compactBar;
 @property (nonatomic, strong) NSArray<UIButton *> *navButtons;
+@property (nonatomic, strong) NSArray<UIButton *> *compactButtons;
+@property (nonatomic, strong) NSArray *regularConstraints;
+@property (nonatomic, strong) NSArray *compactConstraints;
 @property (nonatomic, strong) UILabel *accountLabel;
 @property (nonatomic, assign) NSInteger page;
+@property (nonatomic, assign) BOOL compactLayout;
 @end
 
 @implementation NCLRRootController
@@ -1725,16 +1746,64 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     self.content.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.content];
 
+    // Compact widths (iPhone, iPad split view and resizable windows) get a
+    // horizontal navigation bar instead of the 228 pt sidebar.
+    self.compactBar = [[UIView alloc] init];
+    self.compactBar.translatesAutoresizingMaskIntoConstraints = NO;
+    self.compactBar.backgroundColor = NCLRColor(0.018, 0.028, 0.040, 0.96);
+    self.compactBar.layer.borderWidth = 1.0;
+    self.compactBar.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.06].CGColor;
+    [self.view addSubview:self.compactBar];
+    UIStackView *compactNav = [[UIStackView alloc] init];
+    compactNav.axis = UILayoutConstraintAxisHorizontal;
+    compactNav.distribution = UIStackViewDistributionFillEqually;
+    compactNav.spacing = 2.0;
+    compactNav.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.compactBar addSubview:compactNav];
+    NSMutableArray *compact = [NSMutableArray array];
+    NSArray *compactNames = @[@"主页", @"版本", @"模组", @"账号", @"设置"];
+    for (NSInteger i = 0; i < compactNames.count; i++) {
+        UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+        button.tag = i;
+        button.translatesAutoresizingMaskIntoConstraints = NO;
+        button.titleLabel.font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightSemibold];
+        [button setTitle:compactNames[i] forState:UIControlStateNormal];
+        [button setTitleColor:NCLRColor(0.82, 0.88, 0.94, 1.0) forState:UIControlStateNormal];
+        button.layer.cornerRadius = 8.0;
+        [button addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [compactNav addArrangedSubview:button];
+        [compact addObject:button];
+    }
+    self.compactButtons = compact;
     [NSLayoutConstraint activateConstraints:@[
+        [compactNav.leadingAnchor constraintEqualToAnchor:self.compactBar.leadingAnchor constant:6.0],
+        [compactNav.trailingAnchor constraintEqualToAnchor:self.compactBar.trailingAnchor constant:-6.0],
+        [compactNav.topAnchor constraintEqualToAnchor:self.compactBar.topAnchor constant:5.0],
+        [compactNav.bottomAnchor constraintEqualToAnchor:self.compactBar.bottomAnchor constant:-5.0],
+    ]];
+
+    self.regularConstraints = @[
         [self.sidebar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.sidebar.topAnchor constraintEqualToAnchor:self.view.topAnchor],
         [self.sidebar.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
         [self.sidebar.widthAnchor constraintEqualToConstant:228.0],
         [self.content.leadingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor],
         [self.content.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [self.content.topAnchor constraintEqualToAnchor:self.view.topAnchor],
-        [self.content.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-    ]];
+        [self.content.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [self.content.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor],
+    ];
+    self.compactConstraints = @[
+        [self.compactBar.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
+        [self.compactBar.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
+        [self.compactBar.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [self.compactBar.heightAnchor constraintEqualToConstant:52.0],
+        [self.content.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
+        [self.content.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
+        [self.content.topAnchor constraintEqualToAnchor:self.compactBar.bottomAnchor],
+        [self.content.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor],
+    ];
+    [NSLayoutConstraint activateConstraints:self.regularConstraints];
+    self.compactBar.hidden = YES;
 
     UIView *brand = [[UIView alloc] init];
     brand.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1835,7 +1904,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [NSLayoutConstraint activateConstraints:@[
         [brand.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:18.0],
         [brand.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-18.0],
-        [brand.topAnchor constraintEqualToAnchor:self.sidebar.topAnchor constant:22.0],
+        [brand.topAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.topAnchor constant:14.0],
         [nav.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:10.0],
         [nav.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-10.0],
         [nav.topAnchor constraintEqualToAnchor:brand.bottomAnchor constant:24.0],
@@ -1858,8 +1927,31 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     return label;
 }
 
+- (void)updateAdaptiveLayout {
+    CGFloat width = self.view.bounds.size.width;
+    BOOL compact = width > 0.0 && width < 720.0;
+    NSLayoutConstraint *probe = compact
+        ? (NSLayoutConstraint *)self.compactConstraints.firstObject
+        : (NSLayoutConstraint *)self.regularConstraints.firstObject;
+    if (compact == self.compactLayout && probe.active) {
+        return;
+    }
+    self.compactLayout = compact;
+    [NSLayoutConstraint deactivateConstraints:self.regularConstraints];
+    [NSLayoutConstraint deactivateConstraints:self.compactConstraints];
+    [NSLayoutConstraint activateConstraints:compact ? self.compactConstraints : self.regularConstraints];
+    self.sidebar.hidden = compact;
+    self.compactBar.hidden = !compact;
+}
+
+- (void)viewSafeAreaInsetsDidChange {
+    [super viewSafeAreaInsetsDidChange];
+    [self updateAdaptiveLayout];
+}
+
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
+    [self updateAdaptiveLayout];
     for (CALayer *layer in self.view.layer.sublayers) {
         if ([layer isKindOfClass:[CAGradientLayer class]]) {
             layer.frame = self.view.bounds;
@@ -1879,6 +1971,12 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     self.page = page;
     for (NSInteger i = 0; i < self.navButtons.count; i++) {
         UIButton *button = self.navButtons[i];
+        BOOL selected = i == page;
+        button.backgroundColor = selected ? [UIColor colorWithWhite:1.0 alpha:0.075] : UIColor.clearColor;
+        button.alpha = selected ? 1.0 : 0.72;
+    }
+    for (NSInteger i = 0; i < self.compactButtons.count; i++) {
+        UIButton *button = self.compactButtons[i];
         BOOL selected = i == page;
         button.backgroundColor = selected ? [UIColor colorWithWhite:1.0 alpha:0.075] : UIColor.clearColor;
         button.alpha = selected ? 1.0 : 0.72;
