@@ -125,6 +125,7 @@ static void NCLRKeychainWrite(NSString *value) {
 - (void)save;
 - (NSString *)path;
 - (void)addKey:(NSString *)key label:(NSString *)label;
+- (void)resetLayout;
 @end
 
 @implementation NCLRKeymap
@@ -206,6 +207,21 @@ static void NCLRKeychainWrite(NSString *value) {
     }
     self.bindings[key] = label.length > 0 ? label : key;
     self.positions[key] = @{ @"x" : @0.50, @"y" : @0.50, @"size" : @0.12 };
+}
+
+- (void)resetLayout {
+    self.positions = [@{
+        @"forward" : @{ @"x" : @0.13, @"y" : @0.76, @"size" : @0.16 },
+        @"back" : @{ @"x" : @0.24, @"y" : @0.86, @"size" : @0.10 },
+        @"left" : @{ @"x" : @0.08, @"y" : @0.86, @"size" : @0.10 },
+        @"right" : @{ @"x" : @0.24, @"y" : @0.66, @"size" : @0.10 },
+        @"jump" : @{ @"x" : @0.92, @"y" : @0.78, @"size" : @0.16 },
+        @"sneak" : @{ @"x" : @0.81, @"y" : @0.88, @"size" : @0.10 },
+        @"sprint" : @{ @"x" : @0.72, @"y" : @0.78, @"size" : @0.10 },
+        @"attack" : @{ @"x" : @0.80, @"y" : @0.62, @"size" : @0.16 },
+        @"use" : @{ @"x" : @0.92, @"y" : @0.48, @"size" : @0.16 },
+        @"inventory" : @{ @"x" : @0.72, @"y" : @0.95, @"size" : @0.08 },
+    } mutableCopy];
 }
 
 - (void)save {
@@ -843,7 +859,27 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         ]];
         [titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:button.leadingAnchor constant:-12.0].active = YES;
     } else {
-        [titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:header.trailingAnchor].active = YES;
+        UIImage *gameIcon = [UIImage imageNamed:@"GameIcon"] ?: [UIImage imageNamed:@"AppIcon60x60"];
+        if (gameIcon != nil) {
+            UIImageView *icon = [[UIImageView alloc] initWithImage:gameIcon];
+            icon.translatesAutoresizingMaskIntoConstraints = NO;
+            icon.contentMode = UIViewContentModeScaleAspectFill;
+            icon.layer.cornerRadius = 10.0;
+            icon.layer.masksToBounds = YES;
+            icon.layer.borderWidth = 1.0;
+            icon.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.16].CGColor;
+            [header addSubview:icon];
+            [NSLayoutConstraint activateConstraints:@[
+                [icon.trailingAnchor constraintEqualToAnchor:header.trailingAnchor],
+                [icon.topAnchor constraintEqualToAnchor:header.topAnchor],
+                [icon.widthAnchor constraintEqualToConstant:38.0],
+                [icon.heightAnchor constraintEqualToConstant:38.0],
+                [titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:icon.leadingAnchor constant:-12.0],
+                [subtitleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:icon.leadingAnchor constant:-12.0],
+            ]];
+        } else {
+            [titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:header.trailingAnchor].active = YES;
+        }
     }
     return header;
 }
@@ -1334,7 +1370,13 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, strong) UIStackView *sizeRow;
 @property (nonatomic, strong) NSMutableArray<UIButton *> *keyButtons;
 @property (nonatomic, strong) UIView *preview;
+@property (nonatomic, strong) UIView *grid;
+@property (nonatomic, strong) UIView *selection;
+@property (nonatomic, strong) UIView *resizeHandle;
+@property (nonatomic, strong) UILabel *selectionInfo;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, UIButton *> *previewButtons;
+@property (nonatomic, copy) NSString *selectedKey;
+@property (nonatomic, assign) CGPoint dragStartCenter;
 @end
 
 @interface NCLRSettingsController : NCLRPageController
@@ -1441,6 +1483,29 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 }
 @end
 
+@interface NCLRGridOverlay : UIView
+@end
+@implementation NCLRGridOverlay
+- (void)drawRect:(CGRect)rect {
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:1.0 alpha:0.10].CGColor);
+    CGContextSetLineWidth(ctx, 0.5);
+    for (NSInteger i = 1; i < 10; i++) {
+        CGFloat x = CGRectGetWidth(rect) * i / 10.0;
+        CGFloat y = CGRectGetHeight(rect) * i / 10.0;
+        CGContextMoveToPoint(ctx, x, 0); CGContextAddLineToPoint(ctx, x, CGRectGetHeight(rect));
+        CGContextMoveToPoint(ctx, 0, y); CGContextAddLineToPoint(ctx, CGRectGetWidth(rect), y);
+    }
+    CGContextStrokePath(ctx);
+    CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:1.0 alpha:0.28].CGColor);
+    CGContextMoveToPoint(ctx, CGRectGetMidX(rect), 0);
+    CGContextAddLineToPoint(ctx, CGRectGetMidX(rect), CGRectGetHeight(rect));
+    CGContextMoveToPoint(ctx, 0, CGRectGetMidY(rect));
+    CGContextAddLineToPoint(ctx, CGRectGetWidth(rect), CGRectGetMidY(rect));
+    CGContextStrokePath(ctx);
+}
+@end
+
 @implementation NCLRKeymapController
 
 - (void)viewDidLoad {
@@ -1479,8 +1544,14 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     self.sizeRow.translatesAutoresizingMaskIntoConstraints = NO;
     [self.sizeValue.widthAnchor constraintEqualToConstant:48.0].active = YES;
     UIButton *addKey = [self button:@"+ 添加触控键" action:@selector(addKeyTapped) primary:NO];
+    UIButton *gridButton = [self button:@"网格" action:@selector(toggleGrid) primary:NO];
+    UIButton *resetButton = [self button:@"重置布局" action:@selector(resetLayoutTapped) primary:NO];
+    UIStackView *tools = [[UIStackView alloc] initWithArrangedSubviews:@[gridButton, resetButton]];
+    tools.axis = UILayoutConstraintAxisHorizontal;
+    tools.spacing = 8.0;
+    tools.distribution = UIStackViewDistributionFillEqually;
     UIStackView *menuStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.menuToggle, self.sizeRow, addKey]];
+        @[self.menuToggle, self.sizeRow, addKey, tools]];
     menuStack.axis = UILayoutConstraintAxisVertical;
     menuStack.spacing = 8.0;
     menuStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1504,15 +1575,48 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     self.preview.clipsToBounds = YES;
     [previewCard addSubview:previewLabel];
     [previewCard addSubview:self.preview];
+    self.selectionInfo = [self label:@"选择一个按钮后拖动位置，拖右下角圆点调整大小"
+                                size:10.0 weight:UIFontWeightRegular
+                               color:NCLRColor(0.62, 0.62, 0.62, 1.0)];
+    [previewCard addSubview:self.selectionInfo];
     [NSLayoutConstraint activateConstraints:@[
         [previewLabel.leadingAnchor constraintEqualToAnchor:previewCard.leadingAnchor constant:16.0],
         [previewLabel.topAnchor constraintEqualToAnchor:previewCard.topAnchor constant:12.0],
         [self.preview.leadingAnchor constraintEqualToAnchor:previewCard.leadingAnchor constant:12.0],
         [self.preview.trailingAnchor constraintEqualToAnchor:previewCard.trailingAnchor constant:-12.0],
         [self.preview.topAnchor constraintEqualToAnchor:previewLabel.bottomAnchor constant:8.0],
-        [self.preview.heightAnchor constraintEqualToConstant:190.0],
-        [self.preview.bottomAnchor constraintEqualToAnchor:previewCard.bottomAnchor constant:-12.0],
+        [self.preview.heightAnchor constraintEqualToConstant:200.0],
+        [self.selectionInfo.leadingAnchor constraintEqualToAnchor:self.preview.leadingAnchor],
+        [self.selectionInfo.trailingAnchor constraintEqualToAnchor:self.preview.trailingAnchor],
+        [self.selectionInfo.topAnchor constraintEqualToAnchor:self.preview.bottomAnchor constant:6.0],
+        [self.selectionInfo.bottomAnchor constraintEqualToAnchor:previewCard.bottomAnchor constant:-10.0],
     ]];
+    self.grid = [[NCLRGridOverlay alloc] initWithFrame:self.preview.bounds];
+    self.grid.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.grid.userInteractionEnabled = NO;
+    self.grid.backgroundColor = UIColor.clearColor;
+    [self.preview addSubview:self.grid];
+
+    self.selection = [[UIView alloc] initWithFrame:CGRectZero];
+    self.selection.userInteractionEnabled = NO;
+    self.selection.backgroundColor = UIColor.clearColor;
+    self.selection.layer.borderWidth = 2.0;
+    self.selection.layer.borderColor = NCLRColor(1.0, 1.0, 1.0, 0.95).CGColor;
+    self.selection.layer.cornerRadius = 10.0;
+    self.selection.hidden = YES;
+    [self.preview addSubview:self.selection];
+
+    self.resizeHandle = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 24, 24)];
+    self.resizeHandle.backgroundColor = UIColor.whiteColor;
+    self.resizeHandle.layer.cornerRadius = 12.0;
+    self.resizeHandle.layer.borderWidth = 2.0;
+    self.resizeHandle.layer.borderColor = NCLRColor(0.05, 0.05, 0.05, 0.9).CGColor;
+    self.resizeHandle.hidden = YES;
+    self.resizeHandle.userInteractionEnabled = YES;
+    [self.resizeHandle addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self
+                                                                                   action:@selector(resizeKey:)]];
+    [self.preview addSubview:self.resizeHandle];
+
     for (NSString *key in NCLRKeymap.shared.bindings) {
         UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
         button.accessibilityIdentifier = key;
@@ -1523,9 +1627,13 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         button.layer.cornerRadius = 8.0;
         [button addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self
                                                                             action:@selector(dragKey:)]];
+        [button addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self
+                                                                              action:@selector(tapKey:)]];
         [self.preview addSubview:button];
         self.previewButtons[key] = button;
     }
+    [self.preview bringSubviewToFront:self.selection];
+    [self.preview bringSubviewToFront:self.resizeHandle];
     [self.stack addArrangedSubview:previewCard];
 
     NSArray<NSString *> *names = @[@"前进", @"后退", @"左移", @"右移", @"跳跃",
@@ -1594,6 +1702,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     if (self.preview.bounds.size.width <= 0.0 || self.preview.bounds.size.height <= 0.0) {
         return;
     }
+    self.grid.frame = self.preview.bounds;
     for (NSString *key in self.previewButtons) {
         UIButton *button = self.previewButtons[key];
         NSDictionary *position = NCLRKeymap.shared.positions[key];
@@ -1607,7 +1716,47 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                                   size, size);
         button.titleLabel.font = [UIFont monospacedSystemFontOfSize:MAX(9.0, 11.0 * NCLRKeymap.shared.buttonSize)
                                                               weight:UIFontWeightBold];
+        button.layer.borderWidth = [key isEqualToString:self.selectedKey] ? 2.0 : 0.0;
+        button.layer.borderColor = [UIColor colorWithWhite:0.05 alpha:0.8].CGColor;
     }
+    [self updateSelection];
+}
+
+- (void)selectKey:(NSString *)key {
+    self.selectedKey = key;
+    [self.view setNeedsLayout];
+}
+
+- (void)updateSelection {
+    if (self.selectedKey.length == 0) {
+        self.selection.hidden = YES;
+        self.resizeHandle.hidden = YES;
+        self.selectionInfo.text = @"选择一个按钮后拖动位置，拖右下角圆点调整大小";
+        return;
+    }
+    UIButton *button = self.previewButtons[self.selectedKey];
+    if (button == nil) {
+        self.selection.hidden = YES;
+        self.resizeHandle.hidden = YES;
+        return;
+    }
+    CGRect frame = CGRectInset(button.frame, -3.0, -3.0);
+    self.selection.frame = frame;
+    self.selection.hidden = NO;
+    self.resizeHandle.center = CGPointMake(CGRectGetMaxX(frame), CGRectGetMaxY(frame));
+    self.resizeHandle.hidden = NO;
+    NSDictionary *position = NCLRKeymap.shared.positions[self.selectedKey];
+    self.selectionInfo.text = [NSString stringWithFormat:
+        @"%@  ·  x %.0f%%  y %.0f%%  ·  大小 %.2fx  ·  拖动移动，拖圆点缩放",
+        NCLRKeymap.shared.bindings[self.selectedKey] ?: self.selectedKey,
+        [position[@"x"] doubleValue] * 100.0,
+        [position[@"y"] doubleValue] * 100.0,
+        [position[@"size"] doubleValue] * NCLRKeymap.shared.buttonSize];
+}
+
+- (void)tapKey:(UITapGestureRecognizer *)sender {
+    UIButton *button = (UIButton *)sender.view;
+    [self selectKey:button.accessibilityIdentifier];
 }
 
 - (void)dragKey:(UIPanGestureRecognizer *)sender {
@@ -1616,16 +1765,54 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     if (key.length == 0) {
         return;
     }
-    CGPoint point = [sender locationInView:self.preview];
-    CGFloat x = MAX(0.025, MIN(0.975, point.x / self.preview.bounds.size.width));
-    CGFloat y = MAX(0.025, MIN(0.975, point.y / self.preview.bounds.size.height));
+    if (sender.state == UIGestureRecognizerStateBegan) {
+        [self selectKey:key];
+        self.dragStartCenter = button.center;
+    }
+    CGPoint translation = [sender translationInView:self.preview];
+    CGFloat cx = self.dragStartCenter.x + translation.x;
+    CGFloat cy = self.dragStartCenter.y + translation.y;
+    CGFloat x = MAX(0.025, MIN(0.975, cx / self.preview.bounds.size.width));
+    CGFloat y = MAX(0.025, MIN(0.975, cy / self.preview.bounds.size.height));
+    x = round(x * 20.0) / 20.0;
+    y = round(y * 20.0) / 20.0;
     NSDictionary *old = NCLRKeymap.shared.positions[key];
     NCLRKeymap.shared.positions[key] = @{
         @"x" : @(x),
         @"y" : @(y),
         @"size" : old[@"size"] ?: @0.12,
     };
-    [self.preview setNeedsLayout];
+    [self.view setNeedsLayout];
+}
+
+- (void)resizeKey:(UIPanGestureRecognizer *)sender {
+    if (self.selectedKey.length == 0) {
+        return;
+    }
+    UIButton *button = self.previewButtons[self.selectedKey];
+    if (button == nil) {
+        return;
+    }
+    CGPoint point = [sender locationInView:self.preview];
+    CGFloat distance = hypot(point.x - button.center.x, point.y - button.center.y);
+    CGFloat size = MAX(28.0, distance * 2.0);
+    CGFloat normalized = size / MAX(1.0, self.preview.bounds.size.height * NCLRKeymap.shared.buttonSize);
+    normalized = MAX(0.06, MIN(0.30, normalized));
+    NSDictionary *old = NCLRKeymap.shared.positions[self.selectedKey];
+    NCLRKeymap.shared.positions[self.selectedKey] = @{
+        @"x" : old[@"x"] ?: @0.5,
+        @"y" : old[@"y"] ?: @0.5,
+        @"size" : @(normalized),
+    };
+    [self.view setNeedsLayout];
+}
+
+- (void)toggleGrid {
+    self.grid.hidden = !self.grid.hidden;
+}
+
+- (void)resetLayoutTapped {
+    [NCLRKeymap.shared resetLayout];
     [self.view setNeedsLayout];
 }
 
