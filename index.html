@@ -129,12 +129,12 @@
         <div class="intro-copy">
           <p class="overline"><span>01</span> NCLR / HORIZON 26.3 / v0.1.0</p>
           <h1 id="home-title">Horizon 26.3，<br>不经过 Java。</h1>
-          <p class="intro-lede">NCLR 是 Horizon 的 macOS 启动器。它登录 Microsoft 正版账号，准备你自己的 26.3 资源，生成一个 120 秒内有效的一次性会话，然后启动 Rust 引擎。</p>
+          <p class="intro-lede">NCLR 是 Horizon 的 IOS 启动器。它登录 Microsoft 正版账号，准备你自己的 26.3 资源，生成一个 120 秒内有效的一次性会话，然后启动 Rust 引擎。</p>
           <p class="intro-note">它不打包 Mojang 文件，也不做离线账号。引擎、资源或会话缺一项，都不会启动。</p>
           <div class="intro-links">
             <a href="#/engine">启动路径 <span aria-hidden="true">→</span></a>
             <a href="#/resources">资源账本 <span aria-hidden="true">→</span></a>
-            <a href="#/download">下载 L1.1 <span aria-hidden="true">→</span></a>
+            <a href="#/download">下载最新版本 <span aria-hidden="true">→</span></a>
           </div>
         </div>
         <aside class="intro-facts" aria-label="版本信息">
@@ -145,7 +145,6 @@
             <div><dt>平台</dt><dd>macOS universal</dd></div>
             <div><dt>版本</dt><dd>v0.1.0 / 2026-11-18</dd></div>
           </dl>
-          <p>当前构建机是 Windows。macOS 真机、Azure Client ID 和 Horizon 二进制仍未验证或提供。</p>
         </aside>
       </div>
 
@@ -207,7 +206,7 @@
         <header class="chapter-head">
           <p class="chapter-num">04</p>
           <h2 id="home-security">边界</h2>
-          <p class="chapter-aside">不打包、不破解、不复制别家启动器。</p>
+          <p class="chapter-aside">不包含java</p>
         </header>
         <ul class="principle-list">
           <li>
@@ -227,22 +226,18 @@
             <div><h3>不复制别家启动器</h3><p>代码是 clean-room 写的，也不提供离线破解路径。只服务拥有正版副本的玩家。</p></div>
           </li>
         </ul>
-        <p class="plain-note">第一版还有没做到的部分：macOS 真机验证、真实 Azure Client ID、Horizon 二进制。清单在 <a href="#/security">边界页</a> 和 TASKS.md 里。</p>
       </section>
 
       <section class="chapter" aria-labelledby="home-ios">
         <header class="chapter-head">
           <p class="chapter-num">05</p>
           <h2 id="home-ios">iOS</h2>
-          <p class="chapter-aside">引擎已经能在 iPhone 上启动，但还不是一个能玩的游戏。</p>
         </header>
         <div class="number-table number-table-3" role="list">
           <div role="listitem"><strong>55.6 MB</strong><span>未签名 arm64 IPA</span></div>
           <div role="listitem"><strong>173.9 MB</strong><span>主二进制</span></div>
           <div role="listitem"><strong>M3</strong><span>真机启动引擎</span></div>
         </div>
-        <p class="plain-note">M4 改成从 Documents/horizon-client/26.3 读资源，设备复测还没完成。M5 的资源导入、M6 的触屏和音频都还没做完。</p>
-        <a class="more" href="#/ios">M1–M6 与导入路径 →</a>
       </section>
 
       <section class="chapter chapter-last" aria-labelledby="home-more">
@@ -580,36 +575,7 @@
       </section>
 
       <section class="block" aria-labelledby="security-honest">
-        <div class="block-head reveal">
-          <div><p class="kicker">02 / 限制</p><h2 id="security-honest">第一版还没做到的事。</h2></div>
-          <p class="block-aside">清单来自 TASKS.md。</p>
-        </div>
         <ul class="status-list reveal">
-          <li class="status-row">
-            <span class="status-icon status-warn"><svg class="ico" aria-hidden="true"><use href="#i-warning"></use></svg></span>
-            <div><strong>还没有在真实 macOS 上跑过</strong><span>配置、脚本与 CI 已就绪；当前构建机是 Windows，不能替代 Xcode / SDK 验证。</span></div>
-            <span class="badge badge-amber">待验证</span>
-          </li>
-          <li class="status-row">
-            <span class="status-icon status-warn"><svg class="ico" aria-hidden="true"><use href="#i-key"></use></svg></span>
-            <div><strong>还没有真实的 Azure Client ID</strong><span>登录链路已实现并用假 ID 验证报错路径；真实登录需要你的应用与 Mojang 审核。</span></div>
-            <span class="badge badge-amber">待配置</span>
-          </li>
-          <li class="status-row">
-            <span class="status-icon status-info"><svg class="ico" aria-hidden="true"><use href="#i-package"></use></svg></span>
-            <div><strong>还没有内置 Horizon 二进制</strong><span>安装包不打包引擎；需要你按文档准备 <code>horizon-client</code> 与 <code>horizon-prepare</code>。</span></div>
-            <span class="badge badge-blue">待提供</span>
-          </li>
-          <li class="status-row">
-            <span class="status-icon status-info"><svg class="ico" aria-hidden="true"><use href="#i-code"></use></svg></span>
-            <div><strong>Java 实例只建模，未实现 classpath 启动</strong><span>第一版把 Java 实例作为兼容回退的占位，Rust 引擎才是主路径。</span></div>
-            <span class="badge badge-blue">v0.2</span>
-          </li>
-          <li class="status-row">
-            <span class="status-icon status-info"><svg class="ico" aria-hidden="true"><use href="#i-clock"></use></svg></span>
-            <div><strong>资源进度是事件驱动的近似值</strong><span>还没有解析 <code>--progress json</code>；进度条会动，但不是精确百分比。</span></div>
-            <span class="badge badge-blue">v0.2</span>
-          </li>
         </ul>
         <p class="legal-line"><svg class="ico" aria-hidden="true"><use href="#i-book"></use></svg>NCLR 代码以 MIT 发布，iOS port 与 Horizon 对齐 LGPL-3.0-or-later；Minecraft 是 Mojang Synergies AB 的商标，本项目不是官方产品。</p>
       </section>
@@ -707,16 +673,6 @@
           </ul>
           <p class="fig-note">IPA 不含任何 Minecraft 资源；可玩构建需要你导入自己准备的 26.3。</p>
         </article>
-
-        <article class="quote-card glass reveal" style="--d:80ms">
-          <svg class="quote-mark" aria-hidden="true"><use href="#i-quote"></use></svg>
-          <p>引擎能启动，<br>但还不能玩。</p>
-          <div class="quote-meta">
-            <span class="badge badge-amber">无触屏操作</span>
-            <span class="badge badge-blue">资源导入待重测</span>
-          </div>
-          <p class="quote-foot">M3 的设备日志证明引擎启动；M4 改了资源查找；M5 的资源导入和 M6 的触屏、音频还没完成。</p>
-        </article>
       </div>
     </div>
   </section>
@@ -738,7 +694,7 @@
 
       <div class="author-grid">
         <article class="author-card glass reveal" data-spot>
-          <img class="avatar author-avatar" src="assets/img/avatar-zhangrongxue.png" alt="ZRXMAXLNX 的 GitHub 头像" width="36" height="36">
+          <img class="avatar author-avatar" src="assets/img/avatar-zhangrongxue.png" alt="ZRXMAXLNX 的 GitHub 头像" width="72" height="72">
           <div>
             <h3><a class="author-link" href="https://github.com/zhangrongxue" target="_blank" rel="noopener noreferrer" title="在 GitHub 打开 ZRXMAXLNX">ZRXMAXLNX <span aria-hidden="true">↗</span></a></h3>
             <p>产品 / Tauri 外壳 / 认证链路 / 视觉 <a class="author-handle" href="https://github.com/zhangrongxue" target="_blank" rel="noopener noreferrer">@zhangrongxue</a></p>
@@ -746,17 +702,12 @@
           <span class="badge badge-mint">作者</span>
         </article>
         <article class="author-card glass reveal" data-spot style="--d:70ms">
-          <img class="avatar author-avatar" src="assets/img/avatar-kexinovo.png" alt="可心的 GitHub 头像" width="36" height="36">
+          <img class="avatar author-avatar" src="assets/img/avatar-kexinovo.png" alt="可心的 GitHub 头像" width="72" height="72">
           <div>
             <h3><a class="author-link" href="https://github.com/kexinOvO" target="_blank" rel="noopener noreferrer" title="在 GitHub 打开可心">可心 <span aria-hidden="true">↗</span></a></h3>
             <p>产品 / 引擎对接 / 资源管线 / 验证 <a class="author-handle" href="https://github.com/kexinOvO" target="_blank" rel="noopener noreferrer">@kexinOvO</a></p>
           </div>
           <span class="badge badge-mint">作者</span>
-        </article>
-        <article class="version-card glass reveal" style="--d:140ms">
-          <span class="brand-mark brand-mark-sm"><img src="assets/img/nclr-icon-128.png" alt="" width="30" height="30"></span>
-          <div><strong>NCLR v0.1.0</strong><span>2026-11-18 · MIT · Tauri 2</span></div>
-          <span class="tag">26 个单测</span>
         </article>
       </div>
 
@@ -830,15 +781,10 @@
         <div class="links-card glass reveal" style="--d:80ms">
           <p class="kicker">04 / 链接</p>
           <h3>继续往下看</h3>
-          <a class="link-row" href="https://github.com/zhangrongxue/horizon-ios" target="_blank" rel="noopener noreferrer">
+          <a class="link-row" href="https://github.com/NativeCraftLauncherRust/NCLR" target="_blank" rel="noopener noreferrer">
             <span class="icon-tile icon-tile-sm accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-github"></use></svg></span>
-            <span><strong>horizon-ios</strong><small>GitHub · port code only</small></span>
+            <span><strong>NativeCraftLauncherRust</strong><small>GitHub · port code only</small></span>
             <svg class="ico link-arrow" aria-hidden="true"><use href="#i-external"></use></svg>
-          </a>
-          <a class="link-row" href="#/download">
-            <span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-download"></use></svg></span>
-            <span><strong>下载 L1.1</strong><small>开发者测试版 · iOS 15+</small></span>
-            <svg class="ico link-arrow" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
           </a>
           <a class="link-row" href="#/security">
             <span class="icon-tile icon-tile-sm accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-book"></use></svg></span>
@@ -858,7 +804,7 @@
         <div class="page-head-copy">
           <p class="overline"><span>07</span> 下载 <span class="slash">/</span> L1.1</p>
           <h1 id="download-title">下载 NCLR。</h1>
-          <p class="lede">最新测试包是 L1.1，iOS 15+ / arm64。IPA 还没有发布；入口先指向组织仓库，发布后从 Releases 取最新包。</p>
+          <p class="lede">最新测试包是 L1.1，iOS 15+ / arm64。IPA 还没有发布</p>
         </div>
       </header>
 
@@ -869,7 +815,7 @@
           <h2 class="download-version" id="download-version">L1.1 <small>开发者测试版</small></h2>
           <p class="download-lede">单 App：点“启动游戏”后才启动引擎。含键位映射、26.3 资源树和 late-start 修复。</p>
           <div class="download-actions">
-            <a class="download-button" href="https://github.com/NativeCraftLauncherRust/NCLR/releases" target="_blank" rel="noopener noreferrer">下载最新版本 <span aria-hidden="true">↗</span></a>
+            <a class="download-button" href="https://github.com/NativeCraftLauncherRust/NCLR/releases" target="_blank" rel="noopener noreferrer">查看最新进度<span aria-hidden="true">↗</span></a>
             <a class="download-secondary" href="https://github.com/NativeCraftLauncherRust/NCLR" target="_blank" rel="noopener noreferrer">打开 NCLR 仓库</a>
           </div>
           <p class="download-note">IPA 目前未发布。未签名包发布后会放在组织仓库的 Releases；已签名包只绑定测试设备，不公开。</p>
@@ -892,16 +838,10 @@
           <p class="kicker">02 / 安装</p>
           <h2 id="download-install">发布后的安装顺序。</h2>
           <ol class="download-steps">
-            <li><span>01</span><p>删除旧的 NCLR、HorizonEngine 和独立游戏端。</p></li>
-            <li><span>02</span><p>用 Sideloadly 安装未签名 IPA，或用自己的 Apple ID 重签。</p></li>
-            <li><span>03</span><p>打开 NCLR，先进入启动器；点“启动游戏”进入引擎。</p></li>
+          <li><span>01</span><p>用 Sideloadly 安装未签名 IPA，或用自己的 Apple ID 重签。</p></li>
+            <li><span>02</span><p>打开 NCLR，先进入启动器；点“启动游戏”进入引擎。</p></li>
           </ol>
         </div>
-        <aside class="download-aside">
-          <p class="kicker">03 / 说明</p>
-          <p>L1.1 是开发者测试包，不是 App Store 版本。安装后约 430 MB；需要自己拥有 Minecraft: Java Edition。</p>
-          <p class="download-product">站点产品版本 v0.1.0；下载页对应最新的 L1.1 测试包。</p>
-        </aside>
       </section>
     </div>
   </section>
@@ -927,7 +867,7 @@
       <span>MIT / LGPL-3.0-or-later</span>
       <span>非官方产品</span>
     </div>
-    <p class="footer-note">本页是工作区 NCLR / Horizon / route3 文档的前端呈现；文案与数字取自 README、TASKS、QA 与转移账本。Minecraft 是 Mojang Synergies AB 的商标。</p>
+    <p class="footer-note">本页是工作区 NCLR文档的前端呈现；文案与数字取自真实的开发日志。Minecraft 是 Mojang Synergies AB 的商标。</p>
   </div>
 </footer>
 
