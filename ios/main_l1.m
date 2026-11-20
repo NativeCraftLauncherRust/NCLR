@@ -2045,7 +2045,9 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     button.layer.borderColor = NCLRColor(0.30, 0.55, 0.85, 0.9).CGColor;
     [button setTitle:@"键位" forState:UIControlStateNormal];
     [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    button.titleLabel.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightSemibold];
+    button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
+    button.titleLabel.adjustsFontSizeToFitWidth = YES;
+    button.titleLabel.minimumScaleFactor = 0.75;
     [button addTarget:self action:@selector(openKeyEditor) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:button];
     self.keyButton = button;
@@ -2055,6 +2057,14 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [button.topAnchor constraintEqualToAnchor:self.view.topAnchor],
         [button.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
     ]];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGFloat h = self.view.bounds.size.height;
+    self.keyButton.titleLabel.font = [UIFont systemFontOfSize:MAX(11.0, MIN(15.0, h * 0.30))
+                                                   weight:UIFontWeightSemibold];
+    self.keyButton.layer.cornerRadius = MAX(6.0, MIN(12.0, h * 0.24));
 }
 
 - (void)openKeyEditor {
@@ -2098,12 +2108,35 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     NCLRGameOverlayController *controller = [[NCLRGameOverlayController alloc] init];
     UIWindow *overlay = [[UIWindow alloc] initWithWindowScene:scene];
     overlay.windowLevel = UIWindowLevelAlert + 2.0;
-    overlay.frame = CGRectMake(24.0, 56.0, 78.0, 42.0);
     overlay.rootViewController = controller;
+    [self updateGameOverlayFrame];
     overlay.backgroundColor = UIColor.clearColor;
     overlay.hidden = NO;
     self.gameOverlayWindow = overlay;
     self.gameOverlayController = controller;
+    [self updateGameOverlayFrame];
+}
+
+- (void)updateGameOverlayFrame {
+    if (self.gameOverlayWindow == nil || self.window.windowScene == nil) {
+        return;
+    }
+    CGRect screen = self.window.windowScene.screen.bounds;
+    UIEdgeInsets safe = self.window.safeAreaInsets;
+    // Keep the in-game button compact on narrow cover screens (foldables)
+    // while leaving it readable on iPad and wide windows.
+    CGFloat width = MAX(50.0, MIN(78.0, screen.size.width * 0.15));
+    CGFloat height = MAX(30.0, MIN(44.0, width * 0.56));
+    CGFloat x = safe.left + 10.0;
+    CGFloat y = safe.top + 8.0;
+    self.gameOverlayWindow.frame = CGRectMake(x, y, width, height);
+}
+
+- (void)windowScene:(UIWindowScene *)windowScene
+    didUpdateCoordinateSpace:(id<UICoordinateSpace>)previousCoordinateSpace
+    interfaceOrientation:(UIInterfaceOrientation)previousInterfaceOrientation
+    traitCollection:(UITraitCollection *)previousTraitCollection {
+    [self updateGameOverlayFrame];
 }
 @end
 
