@@ -862,6 +862,37 @@ html[data-theme] .t-body {
 html[data-theme] :is(.avatar, .avatar-violet, .avatar-mint) { width: 34px; height: 34px; border-radius: 2px; font-size: 14px; background: var(--ink); color: var(--bg); box-shadow: none; }
 .author-card h3 { font-size: 13.5px; }
 .author-card p { font-size: 10px; }
+html[data-theme] .author-avatar {
+  display: block;
+  width: 36px;
+  height: 36px;
+  border-radius: 3px;
+  object-fit: cover;
+  background: var(--line);
+  filter: grayscale(1) contrast(1.02);
+}
+.author-link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.author-link:hover, .author-link:focus-visible { border-bottom-color: var(--ink); }
+.author-link span { margin-left: 2px; font-size: 8px; color: var(--muted-2); }
+.author-handle {
+  margin-left: 4px;
+  color: var(--muted-2);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.author-handle:hover { color: var(--ink); }
+.author-intro-link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid var(--line);
+}
+.author-intro-link:hover { border-bottom-color: var(--ink); }
 .version-card { padding: 14px; gap: 10px; }
 .version-card .brand-mark { width: 30px; height: 30px; border-radius: 5px; }
 .version-card .brand-glyph { width: 16px; height: 16px; }
