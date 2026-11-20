@@ -10,7 +10,7 @@
 <meta property="og:title" content="NCLR — Horizon 26.3 的 macOS 启动器">
 <meta property="og:description" content="登录、准备资源，然后用一次性会话启动 Horizon 26.3。">
 <meta property="og:type" content="website">
-<link rel="icon" type="image/svg+xml" href="assets/img/favicon.svg">
+<link rel="icon" type="image/png" sizes="64x64" href="assets/img/nclr-icon-64.png">
 <link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
 <script>
   (function () {
@@ -82,8 +82,7 @@
   <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.5 1.5M17.1 17.1l1.5 1.5M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.2 14.8A8.7 8.7 0 0 1 9.2 3.8a8.8 8.8 0 1 0 11 11Z"/></symbol>
-  <symbol id="i-mark" viewBox="0 0 48 48"><path d="M13 38V11l22 26V11"/></symbol>
-</svg>
+  </svg>
 
 <div class="bg" aria-hidden="true">
   <div class="bg-grid"></div>
@@ -93,7 +92,7 @@
 <header class="topbar" id="topbar">
   <div class="topbar-inner">
     <a class="brand" href="#/home" aria-label="NCLR 首页">
-      <span class="brand-mark"><svg class="brand-glyph" aria-hidden="true"><use href="#i-mark"></use></svg></span>
+      <span class="brand-mark"><img src="assets/img/nclr-icon-128.png" alt="" width="30" height="30"></span>
       <span class="brand-text"><strong>NCLR</strong><small>Horizon 26.3</small></span>
     </a>
 
@@ -104,6 +103,7 @@
       <a class="nav-link" href="#/security" data-route-link="security"><span>边界</span></a>
       <a class="nav-link" href="#/ios" data-route-link="ios"><span>iOS</span></a>
       <a class="nav-link" href="#/about" data-route-link="about"><span>关于</span></a>
+      <a class="nav-link" href="#/download" data-route-link="download"><span>下载</span></a>
     </nav>
 
     <div class="topbar-actions">
@@ -112,9 +112,6 @@
         <svg class="ico theme-moon" aria-hidden="true"><use href="#i-moon"></use></svg>
         <span class="theme-label" aria-hidden="true">黑夜</span>
       </button>
-      <a class="source-link" href="assets/NCLR-L1-source.zip" download aria-label="下载 NCLR v0.1.0 源码归档">
-        <span>源码</span><svg class="ico" aria-hidden="true"><use href="#i-download"></use></svg>
-      </a>
       <button class="menu-btn" id="menuBtn" type="button" aria-label="打开菜单" aria-expanded="false" aria-controls="nav">
         <svg class="ico menu-open" aria-hidden="true"><use href="#i-menu"></use></svg>
         <svg class="ico menu-close" aria-hidden="true"><use href="#i-close"></use></svg>
@@ -137,7 +134,7 @@
           <div class="intro-links">
             <a href="#/engine">启动路径 <span aria-hidden="true">→</span></a>
             <a href="#/resources">资源账本 <span aria-hidden="true">→</span></a>
-            <a href="assets/NCLR-L1-source.zip" download>源码归档 <span aria-hidden="true">↓</span></a>
+            <a href="#/download">下载 L1.1 <span aria-hidden="true">→</span></a>
           </div>
         </div>
         <aside class="intro-facts" aria-label="版本信息">
@@ -252,7 +249,7 @@
         <header class="chapter-head">
           <p class="chapter-num">06</p>
           <h2 id="home-more">继续</h2>
-          <p class="chapter-aside">其余页面、源码和外部链接。</p>
+          <p class="chapter-aside">其余页面、下载和外部链接。</p>
         </header>
         <nav class="index-links" aria-label="站点索引">
           <a href="#/engine"><span>02</span>引擎</a>
@@ -261,7 +258,7 @@
           <a href="#/ios"><span>05</span>iOS</a>
           <a href="#/about"><span>06</span>关于</a>
           <a href="https://github.com/zhangrongxue/horizon-ios" target="_blank" rel="noopener noreferrer"><span>↗</span>horizon-ios</a>
-          <a href="assets/NCLR-L1-source.zip" download><span>↓</span>源码归档</a>
+          <a href="#/download"><span>↓</span>下载 L1.1</a>
         </nav>
       </section>
     </div>
@@ -757,7 +754,7 @@
           <span class="badge badge-mint">作者</span>
         </article>
         <article class="version-card glass reveal" style="--d:140ms">
-          <span class="brand-mark brand-mark-sm"><svg class="brand-glyph" aria-hidden="true"><use href="#i-mark"></use></svg></span>
+          <span class="brand-mark brand-mark-sm"><img src="assets/img/nclr-icon-128.png" alt="" width="30" height="30"></span>
           <div><strong>NCLR v0.1.0</strong><span>2026-11-18 · MIT · Tauri 2</span></div>
           <span class="tag">26 个单测</span>
         </article>
@@ -796,7 +793,7 @@
       <section class="block" aria-labelledby="about-gallery">
         <div class="block-head reveal">
           <div><p class="kicker">02 / 界面</p><h2 id="about-gallery">五个工作台。</h2></div>
-          <a class="link-more" href="assets/NCLR-L1-source.zip" download>下载源码归档<svg class="ico" aria-hidden="true"><use href="#i-download"></use></svg></a>
+          <a class="link-more" href="#/download">下载 L1.1<svg class="ico" aria-hidden="true"><use href="#i-download"></use></svg></a>
         </div>
         <div class="gallery">
           <figure class="shot reveal">
@@ -838,10 +835,10 @@
             <span><strong>horizon-ios</strong><small>GitHub · port code only</small></span>
             <svg class="ico link-arrow" aria-hidden="true"><use href="#i-external"></use></svg>
           </a>
-          <a class="link-row" href="assets/NCLR-L1-source.zip" download>
+          <a class="link-row" href="#/download">
             <span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-download"></use></svg></span>
-            <span><strong>NCLR 源码归档</strong><small>v0.1.0 · 含 SHA-256</small></span>
-            <svg class="ico link-arrow" aria-hidden="true"><use href="#i-download"></use></svg>
+            <span><strong>下载 L1.1</strong><small>开发者测试版 · iOS 15+</small></span>
+            <svg class="ico link-arrow" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
           </a>
           <a class="link-row" href="#/security">
             <span class="icon-tile icon-tile-sm accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-book"></use></svg></span>
@@ -853,12 +850,67 @@
       </section>
     </div>
   </section>
+
+  <!-- ============================== DOWNLOAD ============================== -->
+  <section class="route" data-route="download" id="page-download" aria-labelledby="download-title" hidden>
+    <div class="wrap">
+      <header class="page-head">
+        <div class="page-head-copy">
+          <p class="overline"><span>07</span> 下载 <span class="slash">/</span> L1.1</p>
+          <h1 id="download-title">下载 NCLR。</h1>
+          <p class="lede">最新测试包是 L1.1，iOS 15+ / arm64。IPA 还没有发布；入口先指向组织仓库，发布后从 Releases 取最新包。</p>
+        </div>
+      </header>
+
+      <section class="download-panel" aria-labelledby="download-version">
+        <div class="download-main">
+          <div class="download-icon"><img src="assets/img/nclr-icon-512.png" alt="NCLR 图标" width="88" height="88"></div>
+          <p class="kicker">01 / 最新版本</p>
+          <h2 class="download-version" id="download-version">L1.1 <small>开发者测试版</small></h2>
+          <p class="download-lede">单 App：点“启动游戏”后才启动引擎。含键位映射、26.3 资源树和 late-start 修复。</p>
+          <div class="download-actions">
+            <a class="download-button" href="https://github.com/NativeCraftLauncherRust/NCLR/releases" target="_blank" rel="noopener noreferrer">下载最新版本 <span aria-hidden="true">↗</span></a>
+            <a class="download-secondary" href="https://github.com/NativeCraftLauncherRust/NCLR" target="_blank" rel="noopener noreferrer">打开 NCLR 仓库</a>
+          </div>
+          <p class="download-note">IPA 目前未发布。未签名包发布后会放在组织仓库的 Releases；已签名包只绑定测试设备，不公开。</p>
+        </div>
+        <aside class="download-facts" aria-label="版本信息">
+          <dl class="download-meta">
+            <div><dt>版本</dt><dd>1.1</dd></div>
+            <div><dt>构建</dt><dd>202611201105</dd></div>
+            <div><dt>日期</dt><dd>2026-11-20</dd></div>
+            <div><dt>大小</dt><dd>105 MB</dd></div>
+            <div><dt>平台</dt><dd>iOS 15+ / arm64</dd></div>
+            <div><dt>方向</dt><dd>横屏</dd></div>
+          </dl>
+          <p class="download-sha">未签名包 SHA-256<br><code>8174675B0A968E984EC010DC976BC6BF62DFF8F00A844075B112EFF7C7B3167F</code></p>
+        </aside>
+      </section>
+
+      <section class="block two-col" aria-labelledby="download-install">
+        <div>
+          <p class="kicker">02 / 安装</p>
+          <h2 id="download-install">发布后的安装顺序。</h2>
+          <ol class="download-steps">
+            <li><span>01</span><p>删除旧的 NCLR、HorizonEngine 和独立游戏端。</p></li>
+            <li><span>02</span><p>用 Sideloadly 安装未签名 IPA，或用自己的 Apple ID 重签。</p></li>
+            <li><span>03</span><p>打开 NCLR，先进入启动器；点“启动游戏”进入引擎。</p></li>
+          </ol>
+        </div>
+        <aside class="download-aside">
+          <p class="kicker">03 / 说明</p>
+          <p>L1.1 是开发者测试包，不是 App Store 版本。安装后约 430 MB；需要自己拥有 Minecraft: Java Edition。</p>
+          <p class="download-product">站点产品版本 v0.1.0；下载页对应最新的 L1.1 测试包。</p>
+        </aside>
+      </section>
+    </div>
+  </section>
 </main>
 
 <footer class="site-footer">
   <div class="wrap footer-inner">
     <div class="footer-brand">
-      <span class="brand-mark brand-mark-sm"><svg class="brand-glyph" aria-hidden="true"><use href="#i-mark"></use></svg></span>
+      <span class="brand-mark brand-mark-sm"><img src="assets/img/nclr-icon-128.png" alt="" width="26" height="26"></span>
       <div><strong>NCLR</strong><span>HORIZON 26.3</span></div>
     </div>
     <p class="footer-tagline">Horizon 26.3 / v0.1.0</p>
@@ -868,6 +920,7 @@
       <a href="#/security">边界</a>
       <a href="#/ios">iOS</a>
       <a href="#/about">关于</a>
+      <a href="#/download">下载</a>
     </nav>
     <div class="footer-meta">
       <span>v0.1.0 · 2026-11-18</span>
@@ -885,7 +938,7 @@
   </button>
   <div class="pager-mid">
     <div class="pager-dots" id="pagerDots"></div>
-    <span class="pager-count" id="pagerCount">01 / 06</span>
+    <span class="pager-count" id="pagerCount">01 / 07</span>
   </div>
   <button class="pager-btn pager-next" id="nextPage" type="button" aria-label="下一页">
     <span class="pager-copy"><small>下一页</small><strong data-pager-label>—</strong></span>

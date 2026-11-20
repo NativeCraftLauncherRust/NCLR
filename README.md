@@ -1,6 +1,6 @@
 # NCLR — 黑白双主题站点
 
-围绕本工作区 **NCLR / Horizon / route3** 文档做的六页静态站。  
+围绕本工作区 **NCLR / Horizon / route3** 文档做的七页静态站。  
 纯黑白灰、细线、等宽标签、单张产品截图，以及一个克制的 3D 翻页。
 
 ## 预览
@@ -21,7 +21,7 @@ python -m http.server 4173
 - 产品代码：`main` 分支；本站不改动 `main`
 - 自定义域名：未配置（没有 `CNAME`）
 
-本目录是 `gh-pages` 分支的内容。`index.html`、CSS、JS、图片和源码归档都使用相对路径；
+本目录是 `gh-pages` 分支的内容。`index.html`、CSS、JS、图片和下载资源都使用相对路径；
 `.nojekyll` 关闭 Jekyll，`404.html` 会把未知路径带回项目首页。
 
 更新站点：替换本分支根目录的静态文件并 push，Pages 会自动重建。以后要独立域名，
@@ -37,13 +37,14 @@ python -m http.server 4173
 | `#/security` | 边界：所有权、一次性会话、第一版未完成项 |
 | `#/ios` | M1–M6、IPA 数据、Documents 导入路径 |
 | `#/about` | 作者、版本、三个来源、界面、下一版、链接 |
+| `#/download` | L1.1 版本信息、组织仓库入口、安装顺序 |
 
 ## 设计
 
 - **编辑式排版**：编号章节、细线分隔、等宽元数据、左对齐正文；不使用极光背景、
   悬浮图标、渐变标题、发光卡片、滚动揭示或跟随光标的动效。
-- **图标**：内联 SVG，28–40px，出现在启动路径、认证流程和里程碑里，作为结构标记；
-  品牌标识是一个黑白 N 字标，随主题反色。
+- **图标**：NCLR 品牌图标使用同一张 3D N 图片（`nclr-icon-128.png`、`nclr-icon-512.png`），
+  出现在顶栏、页脚、版本卡、404 和下载页；路径/流程图标仍是内联 SVG。
 - **玻璃**：只保留在顶栏、分页器、截图外框和移动菜单上，用渐变与 `backdrop-filter`
   做出很轻的层次，不再给每张卡片加玻璃和阴影。
 - **截图**：产品截图在源文件中已转成灰度；主题切换后仍保持黑白。
@@ -61,7 +62,7 @@ python -m http.server 4173
 
 ```text
 site/
-  index.html                 六个路由页面 + 内联 SVG 图标库
+  index.html                 七个路由页面 + 内联 SVG 图标库
   404.html                    未知路径回项目首页
   robots.txt
   .nojekyll
@@ -69,8 +70,7 @@ site/
   assets/css/theme.css       黑白主题变量与明暗覆盖
   assets/css/editorial.css   编辑式版式；覆盖颜色、间距、卡片、翻页
   assets/js/app.js           哈希路由、翻页、主题、菜单、键盘/滑动
-  assets/img/                灰度产品截图 + 黑白 favicon / touch icon
-  assets/NCLR-L1-source.zip  v0.1.0 源码归档（下载按钮）
+  assets/img/                灰度产品截图 + NCLR 图标 / favicon / touch icon
   docs/                      预览图
 ```
 

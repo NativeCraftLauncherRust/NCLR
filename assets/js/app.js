@@ -10,7 +10,8 @@
     { id: "resources", label: "资源", title: "资源账本 — NCLR" },
     { id: "security", label: "边界", title: "边界 — NCLR" },
     { id: "ios", label: "iOS", title: "iOS — NCLR" },
-    { id: "about", label: "关于", title: "关于 — NCLR" }
+    { id: "about", label: "关于", title: "关于 — NCLR" },
+    { id: "download", label: "下载", title: "下载 — NCLR" }
   ];
 
   var routeEls = {};

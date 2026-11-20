@@ -145,9 +145,16 @@ html[data-theme] :is(.brand-mark) {
   width: 30px;
   height: 30px;
   border-radius: 5px;
-  border: 0;
-  background: var(--ink);
+  border: 1px solid var(--line);
+  background: #ffffff;
   box-shadow: none;
+  overflow: hidden;
+}
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .brand-glyph {
   width: 17px;
@@ -899,6 +906,75 @@ html[data-theme] .author-avatar {
 .version-card strong { font-size: 12px; }
 .version-card div > span { font-size: 9.5px; }
 
+.download-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: 56px;
+  padding: 34px 0 38px;
+  border-bottom: 1px solid var(--line);
+}
+.download-main { min-width: 0; }
+.download-icon {
+  width: 88px;
+  height: 88px;
+  margin-bottom: 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #ffffff;
+}
+.download-icon img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.download-version {
+  margin: 8px 0 0;
+  font-size: clamp(3.8rem, 8vw, 6.6rem);
+  line-height: 0.9;
+  letter-spacing: -0.06em;
+}
+.download-version small {
+  display: inline-block;
+  margin-left: 10px;
+  vertical-align: middle;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--muted-2);
+}
+.download-lede { max-width: 44ch; margin-top: 18px; font-size: 14px; }
+.download-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; margin-top: 26px; }
+.download-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 18px;
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+}
+.download-button:hover { background: var(--bg); color: var(--ink); }
+.download-button span { font-size: 12px; }
+.download-secondary { padding-bottom: 3px; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 10px; color: var(--muted); text-decoration: none; }
+.download-secondary:hover { color: var(--ink); border-bottom-color: var(--ink); }
+.download-note { max-width: 46ch; margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 10.5px; color: var(--muted); }
+.download-facts { align-self: end; }
+.download-meta { display: grid; grid-template-columns: 1fr 1fr; column-gap: 28px; }
+.download-meta div { display: flex; justify-content: space-between; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.download-meta dt { font-size: 10px; color: var(--muted); }
+.download-meta dd { margin: 0; font-family: var(--font-mono); font-size: 10px; color: var(--ink); text-align: right; }
+.download-sha { margin-top: 18px; font-family: var(--font-mono); font-size: 9px; line-height: 1.9; color: var(--muted-2); }
+.download-sha code { display: block; word-break: break-all; color: var(--muted); background: none; border: 0; padding: 0; }
+.download-steps { margin-top: 24px; border-top: 1px solid var(--line); }
+.download-steps li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.download-steps li span { padding-top: 2px; font-family: var(--font-mono); font-size: 9px; color: var(--muted-2); }
+.download-steps li p { margin: 0; }
+.download-aside { align-self: start; }
+.download-aside > p { max-width: 46ch; font-size: 12.5px; color: var(--muted); }
+.download-product { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 9px; color: var(--muted-2) !important; }
+
 .origin-grid { gap: 32px; }
 .origin-card { padding: 20px; }
 .origin-card .icon-tile { margin-bottom: 16px; }
@@ -1207,4 +1283,16 @@ html[data-theme] .quote-card {
   border-left: 2px solid var(--ink) !important;
   border-radius: 0 !important;
   background: none !important;
+}
+
+@media (max-width: 980px) {
+  .download-panel { grid-template-columns: 1fr; gap: 28px; padding-top: 28px; }
+  .download-facts { align-self: start; }
+  .download-version { font-size: clamp(3.4rem, 10vw, 5rem); }
+}
+@media (max-width: 480px) {
+  .download-version small { display: block; margin: 8px 0 0; }
+  .download-button { width: 100%; justify-content: center; }
+  .download-meta { grid-template-columns: 1fr; }
+  .download-meta div { padding: 8px 0; }
 }
