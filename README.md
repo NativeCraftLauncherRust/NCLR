@@ -72,12 +72,12 @@ JSON 包含：
 
 | 文件 | 大小 | SHA-256 |
 |---|---:|---|
-| `NCLR-L1.1-signed.ipa` | 105,109,397 B | `26EF78B6…A084933389` |
-| `NCLR-L1.1-unsigned.ipa` | 104,978,265 B | `012FB4AD…E9C734C1` |
+| `NCLR-L1.1-signed.ipa` | 105,123,029 B | `2260E43C…F12561` |
+| `NCLR-L1.1-unsigned.ipa` | 104,992,743 B | `A2C74B5F…E699EF` |
 
 - 已签名包：Bundle ID `app.badger212.aries5602`，只绑定 UDID 以 `0E7A401E` 结尾的设备；
 - 未签名包：Bundle ID `dev.zrxmaxlnx.nclr`；
-- 版本：`L1`（CFBundleShortVersionString `1.1`，CFBundleVersion `202611200305`）；
+- 版本：`L1`（CFBundleShortVersionString `1.1`，CFBundleVersion `202611210210`）；
 - 包内引擎：Horizon 26.3 / route3 iOS 静态库（含 Metal 修复）；
 - 包内资源：完整 `horizon-client/26.3`。
 
@@ -97,10 +97,10 @@ world resources joined before entry
 不是 Metal/黑屏问题，而是 **世界资源后台加载还没完成，标题界面就读取 `Resources::rest()`，
 旧代码直接 `expect` 崩溃**。  
 L1 先加了 `ios-resource-wait.patch`，让读取方等待；但 `latest(11).log` 显示 loader 已打印
-`resources loaded in 9.8s`，`rest` 仍未发布，标题一直 `waiting for world resources`。  \nL1.1 又修了 late-start 的 `Resumed` 时序：改为 `CFRunLoopTimer` 延迟触发，避免 `redraw queued while processing redraws`。  
+`resources loaded in 9.8s`，`rest` 仍未发布，标题一直 `waiting for world resources`。  \nL1.1 又修了 late-start 的 `Resumed` 时序：改用 `CFRunLoopAfterWaiting` 观察器，并把 redraw 请求挂起到下一个事件循环周期；同时补全资源包内的 `fluid_state_definitions`，并做安全区、紧凑窗口和 iPhone/iPad 尺寸适配。  
 所以又加了 `ios-rest-join.patch`：**在把资源交给标题界面前，先 join 世界资源 loader**，
 让加载画面多停留一会儿，避免标题空转。启动时可能晚几秒进标题，但不会再停在
-`waiting for world resources`。  \nL1.1 又修了 late-start 的 `Resumed` 时序：改为 `CFRunLoopTimer` 延迟触发，避免 `redraw queued while processing redraws`。
+`waiting for world resources`。  \nL1.1 又修了 late-start 的 `Resumed` 时序：改用 `CFRunLoopAfterWaiting` 观察器，并把 redraw 请求挂起到下一个事件循环周期；同时补全资源包内的 `fluid_state_definitions`，并做安全区、紧凑窗口和 iPhone/iPad 尺寸适配。
 
 ---
 
@@ -131,6 +131,6 @@ L1 先加了 `ios-resource-wait.patch`，让读取方等待；但 `latest(11).lo
 
 - 入口：`ios/main_l1.m`
 - Info：`ios/Info-launcher.plist`
-- 构建：`ios/build.sh`，Codemagic #5
+- 构建：`ios/build.sh`，Codemagic #16
 - 资源：`resources/26.3`（构建后注入并重签）
 - 作者：**ZRXMAXLNX**、**可心**
