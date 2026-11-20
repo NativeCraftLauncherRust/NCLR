@@ -16,16 +16,16 @@ python -m http.server 4173
 ## 仓库与页面
 
 - 仓库：<https://github.com/NativeCraftLauncherRust/NCLR>
-- 项目页：<https://nativecraftlauncherrust.github.io/NCLR/>
+- 项目页：<https://nclauncher.top/>
 - 页面分支：`gh-pages`（根目录）
 - 产品代码：`main` 分支；本站不改动 `main`
-- 自定义域名：未配置（没有 `CNAME`）
+- 自定义域名：`nclauncher.top`（`CNAME`）
 
 本目录是 `gh-pages` 分支的内容。`index.html`、CSS、JS、图片和下载资源都使用相对路径；
 `.nojekyll` 关闭 Jekyll，`404.html` 会把未知路径带回项目首页。
 
-更新站点：替换本分支根目录的静态文件并 push，Pages 会自动重建。以后要独立域名，
-在仓库根加 `CNAME`（内容为域名）并在 DNS 配置；现在使用组织 Pages 的项目路径。
+更新站点：替换本分支根目录的静态文件并 push，Pages 会自动重建。自定义域名由仓库根
+`CNAME` 指向 `nclauncher.top`，DNS 记录在阿里云。
 
 ## 页面
 
