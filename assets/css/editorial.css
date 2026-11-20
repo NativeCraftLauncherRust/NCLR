@@ -876,7 +876,6 @@ html[data-theme] .author-avatar {
   border-radius: 3px;
   object-fit: cover;
   background: var(--line);
-  filter: grayscale(1) contrast(1.02);
 }
 .author-link {
   color: inherit;
