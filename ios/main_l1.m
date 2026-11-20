@@ -777,7 +777,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
 - (UILabel *)eyebrow:(NSString *)text {
     UILabel *label = [self label:text size:9.0 weight:UIFontWeightBold
-                            color:NCLRColor(0.45, 0.55, 0.65, 1.0)];
+                            color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     label.attributedText = [[NSAttributedString alloc] initWithString:text attributes:@{
         NSKernAttributeName : @1.6
     }];
@@ -802,10 +802,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     button.translatesAutoresizingMaskIntoConstraints = NO;
     [button.heightAnchor constraintGreaterThanOrEqualToConstant:42.0].active = YES;
     if (primary) {
-        [button setTitleColor:NCLRColor(0.03, 0.16, 0.10, 1.0) forState:UIControlStateNormal];
-        button.backgroundColor = NCLRColor(0.55, 1.0, 0.78, 1.0);
+        [button setTitleColor:NCLRColor(0.04, 0.04, 0.04, 1.0) forState:UIControlStateNormal];
+        button.backgroundColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
     } else {
-        [button setTitleColor:NCLRColor(0.82, 0.88, 0.94, 1.0) forState:UIControlStateNormal];
+        [button setTitleColor:NCLRColor(0.94, 0.94, 0.94, 1.0) forState:UIControlStateNormal];
         button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.075];
         button.layer.borderWidth = 1.0;
         button.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.12].CGColor;
@@ -821,9 +821,9 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UIView *header = [[UIView alloc] init];
     header.translatesAutoresizingMaskIntoConstraints = NO;
     UILabel *titleLabel = [self label:title size:28.0 weight:UIFontWeightBold
-                                color:NCLRColor(0.93, 0.96, 1.0, 1.0)];
+                                color:NCLRColor(1.0, 1.0, 1.0, 1.0)];
     UILabel *subtitleLabel = [self label:subtitle size:11.0 weight:UIFontWeightRegular
-                                   color:NCLRColor(0.52, 0.62, 0.72, 1.0)];
+                                   color:NCLRColor(0.62, 0.62, 0.62, 1.0)];
     [header addSubview:titleLabel];
     [header addSubview:subtitleLabel];
     [NSLayoutConstraint activateConstraints:@[
@@ -852,9 +852,9 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UIView *row = [[UIView alloc] init];
     row.translatesAutoresizingMaskIntoConstraints = NO;
     UILabel *titleLabel = [self label:title size:14.0 weight:UIFontWeightSemibold
-                                color:NCLRColor(0.9, 0.94, 0.98, 1.0)];
+                                color:NCLRColor(0.96, 0.96, 0.96, 1.0)];
     UILabel *detailLabel = [self label:detail size:11.0 weight:UIFontWeightRegular
-                                 color:NCLRColor(0.52, 0.62, 0.72, 1.0)];
+                                 color:NCLRColor(0.62, 0.62, 0.62, 1.0)];
     [row addSubview:titleLabel];
     [row addSubview:detailLabel];
     [NSLayoutConstraint activateConstraints:@[
@@ -886,26 +886,26 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                                              actionTitle:nil action:nil]];
 
     UIView *hero = [self card];
-    hero.backgroundColor = NCLRColor(0.06, 0.13, 0.12, 1.0);
-    hero.layer.borderColor = NCLRColor(0.55, 1.0, 0.78, 0.22).CGColor;
+    hero.backgroundColor = NCLRColor(0.055, 0.055, 0.055, 1.0);
+    hero.layer.borderColor = NCLRColor(1.0, 1.0, 1.0, 0.20).CGColor;
     UILabel *heroEyebrow = [self eyebrow:@"SELECTED PROFILE"];
     NSString *heroTitleText = selected.name ?: @"Minecraft 26.3";
     UILabel *heroTitle = [self label:heroTitleText
                                 size:28.0 weight:UIFontWeightBold
-                               color:NCLRColor(0.93, 0.96, 1.0, 1.0)];
+                               color:NCLRColor(1.0, 1.0, 1.0, 1.0)];
     NSString *gameText = selected.gameVersion ?: @"26.3";
     NSString *loaderText = selected.loader ?: @"Vanilla";
     NSString *stateText = selected.installed ? @"已安装" : @"配置文件";
     UILabel *heroDetail = [self label:[NSString stringWithFormat:@"%@ · %@ · %@",
         gameText, loaderText, stateText]
                                   size:11.0 weight:UIFontWeightRegular
-                                 color:NCLRColor(0.59, 0.72, 0.73, 1.0)];
+                                 color:NCLRColor(0.64, 0.64, 0.64, 1.0)];
     UIButton *launch = [self button:@"启动游戏" action:@selector(launchTapped) primary:YES];
     launch.titleLabel.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightBold];
     [launch.heightAnchor constraintEqualToConstant:50.0].active = YES;
     UILabel *hint = [self label:@"启动器与游戏端分离；版本、模组和账号由 NCLR 管理。"
                            size:10.0 weight:UIFontWeightRegular
-                          color:NCLRColor(0.45, 0.55, 0.63, 1.0)];
+                          color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     UIStackView *heroStack = [[UIStackView alloc] initWithArrangedSubviews:
         @[heroEyebrow, heroTitle, heroDetail, launch, hint]];
     heroStack.axis = UILayoutConstraintAxisVertical;
@@ -938,7 +938,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         UIView *card = [self card];
         UILabel *title = [self eyebrow:statTitles[i]];
         UILabel *value = [self label:statValues[i] size:20.0 weight:UIFontWeightBold
-                               color:NCLRColor(0.93, 0.96, 1.0, 1.0)];
+                               color:NCLRColor(1.0, 1.0, 1.0, 1.0)];
         UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[title, value]];
         stack.axis = UILayoutConstraintAxisVertical;
         stack.spacing = 5.0;
@@ -963,8 +963,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         NSString *badgeTitle = [version.identifier isEqualToString:store.selectedVersion]
             ? @"当前" : (version.installed ? @"已安装" : @"配置");
         UIColor *badgeColor = [version.identifier isEqualToString:store.selectedVersion]
-            ? NCLRColor(0.55, 1.0, 0.78, 1.0)
-            : NCLRColor(0.55, 0.64, 0.72, 1.0);
+            ? NCLRColor(0.95, 0.95, 0.95, 1.0)
+            : NCLRColor(0.58, 0.58, 0.58, 1.0);
         UILabel *badge = [self label:badgeTitle
                                 size:10.0 weight:UIFontWeightSemibold
                                color:badgeColor];
@@ -985,7 +985,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UILabel *activityTitle = [self eyebrow:@"状态"];
     UILabel *activityText = [self label:@"启动器已就绪。版本切换和模组列表保存在本机；游戏端通过 nclr-game:// 接入。"
                                     size:12.0 weight:UIFontWeightRegular
-                                   color:NCLRColor(0.66, 0.76, 0.84, 1.0)];
+                                   color:NCLRColor(0.70, 0.70, 0.70, 1.0)];
     UIStackView *activityStack = [[UIStackView alloc] initWithArrangedSubviews:@[activityTitle, activityText]];
     activityStack.axis = UILayoutConstraintAxisVertical;
     activityStack.spacing = 6.0;
@@ -1021,9 +1021,6 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     // already-running UIApplication and drives its loop without a second
     // UIApplicationMain.
     id sceneDelegate = self.view.window.windowScene.delegate;
-    if ([sceneDelegate respondsToSelector:@selector(showGameOverlay)]) {
-        [sceneDelegate performSelector:@selector(showGameOverlay)];
-    }
     self.view.window.hidden = YES;
     horizon_ios_run(resources.UTF8String, game.UTF8String);
 }
@@ -1066,7 +1063,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     }
     UILabel *note = [self label:@"版本配置会保存在本机。实际下载、校验和游戏启动由游戏端完成；启动器不绑定引擎生命周期。"
                             size:10.0 weight:UIFontWeightRegular
-                           color:NCLRColor(0.45, 0.55, 0.63, 1.0)];
+                           color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     [self.stack addArrangedSubview:note];
 }
 
@@ -1121,7 +1118,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         UIView *card = [self card];
         UILabel *empty = [self label:@"还没有模组。点击右上角导入 .jar / .hmod 文件。"
                                 size:13.0 weight:UIFontWeightRegular
-                               color:NCLRColor(0.6, 0.7, 0.78, 1.0)];
+                               color:NCLRColor(0.65, 0.65, 0.65, 1.0)];
         [card addSubview:empty];
         [NSLayoutConstraint activateConstraints:@[
             [empty.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
@@ -1134,10 +1131,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     for (NCLRMod *mod in store.mods) {
         UIView *card = [self card];
         UILabel *name = [self label:mod.name size:14.0 weight:UIFontWeightSemibold
-                              color:NCLRColor(0.9, 0.94, 0.98, 1.0)];
+                              color:NCLRColor(0.96, 0.96, 0.96, 1.0)];
         UILabel *detail = [self label:[NSString stringWithFormat:@"%llu KB", mod.size / 1024]
                                  size:10.0 weight:UIFontWeightRegular
-                                color:NCLRColor(0.52, 0.62, 0.72, 1.0)];
+                                color:NCLRColor(0.62, 0.62, 0.62, 1.0)];
         UISwitch *toggle = [[UISwitch alloc] init];
         toggle.translatesAutoresizingMaskIntoConstraints = NO;
         toggle.on = mod.enabled;
@@ -1160,7 +1157,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     }
     UILabel *note = [self label:@"iOS 启动器只负责管理 mods 目录和启用状态；实际注入由游戏端完成。"
                             size:10.0 weight:UIFontWeightRegular
-                           color:NCLRColor(0.45, 0.55, 0.63, 1.0)];
+                           color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     [self.stack addArrangedSubview:note];
 }
 
@@ -1209,7 +1206,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     NSString *avatarText = premium ? [(auth.name ?: @"正") substringToIndex:1] : @"N";
     UILabel *avatar = [self label:avatarText
                              size:24.0 weight:UIFontWeightBold
-                            color:NCLRColor(0.55, 1.0, 0.78, 1.0)];
+                            color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
     avatar.textAlignment = NSTextAlignmentCenter;
     avatar.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06];
     avatar.layer.cornerRadius = 23.0;
@@ -1218,13 +1215,13 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     NSString *nameText = premium ? (auth.name ?: @"正版用户（开发者默认）") : @"未登录";
     UILabel *name = [self label:nameText
                             size:20.0 weight:UIFontWeightSemibold
-                           color:NCLRColor(0.93, 0.96, 1.0, 1.0)];
+                           color:NCLRColor(1.0, 1.0, 1.0, 1.0)];
     NSString *detailText = auth.token.length > 0
         ? @"Minecraft Services token 已保存在 Keychain"
         : @"L1 开发者测试版默认正版，可直接启动游戏";
     UILabel *detail = [self label:detailText
                              size:11.0 weight:UIFontWeightRegular
-                            color:NCLRColor(0.55, 0.64, 0.73, 1.0)];
+                            color:NCLRColor(0.58, 0.58, 0.58, 1.0)];
     NSString *loginText = auth.token.length > 0 ? @"退出登录" : @"登录正式账号";
     UIButton *login = [self button:loginText
                             action:@selector(loginTapped) primary:auth.token.length == 0];
@@ -1255,7 +1252,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UILabel *clientValue = [self label:NCLRStore.shared.clientId.length > 0
                                         ? NCLRStore.shared.clientId : @"未配置"
                                  size:12.0 weight:UIFontWeightRegular
-                                color:NCLRColor(0.66, 0.76, 0.84, 1.0)];
+                                color:NCLRColor(0.70, 0.70, 0.70, 1.0)];
     UIButton *configure = [self button:@"配置" action:@selector(configClientId) primary:NO];
     [client addSubview:clientTitle];
     [client addSubview:clientValue];
@@ -1275,7 +1272,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
     UILabel *legal = [self label:@"启动器只在你主动登录时联系 Microsoft / Minecraft Services。不会内置公共 Client ID，也不提供离线绕过。"
                              size:10.0 weight:UIFontWeightRegular
-                            color:NCLRColor(0.45, 0.55, 0.63, 1.0)];
+                            color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     [self.stack addArrangedSubview:legal];
 }
 
@@ -1351,7 +1348,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UILabel *modeTitle = [self eyebrow:@"启动器架构"];
     UILabel *modeText = [self label:@"NCLR 只运行启动器本身：账号、版本、模组、设置都在这里管理。游戏端是独立应用，通过 nclr-game:// 接收版本；不需要退出启动器，也不再使用单生命周期切换。"
                                   size:12.0 weight:UIFontWeightRegular
-                                 color:NCLRColor(0.66, 0.76, 0.84, 1.0)];
+                                 color:NCLRColor(0.70, 0.70, 0.70, 1.0)];
     UIStackView *modeStack = [[UIStackView alloc] initWithArrangedSubviews:@[modeTitle, modeText]];
     modeStack.axis = UILayoutConstraintAxisVertical;
     modeStack.spacing = 6.0;
@@ -1368,11 +1365,11 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UIView *storage = [self card];
     UILabel *storageTitle = [self eyebrow:@"存储"];
     UILabel *storagePath = [self label:NCLRDocuments() size:10.0 weight:UIFontWeightRegular
-                                  color:NCLRColor(0.56, 0.66, 0.74, 1.0)];
+                                  color:NCLRColor(0.60, 0.60, 0.60, 1.0)];
     storagePath.font = [UIFont monospacedSystemFontOfSize:10.0 weight:UIFontWeightRegular];
     UILabel *storageDetail = [self label:@"版本、mods 和 launcher.json 都在 Documents；可在文件 App 中查看。"
                                     size:11.0 weight:UIFontWeightRegular
-                                   color:NCLRColor(0.55, 0.64, 0.73, 1.0)];
+                                   color:NCLRColor(0.58, 0.58, 0.58, 1.0)];
     UIStackView *storageStack = [[UIStackView alloc] initWithArrangedSubviews:
         @[storageTitle, storagePath, storageDetail]];
     storageStack.axis = UILayoutConstraintAxisVertical;
@@ -1391,7 +1388,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UILabel *aboutTitle = [self eyebrow:@"关于"];
     UILabel *aboutText = [self label:@"NCLR Launcher L1 · 开发者测试版\n作者 ZRXMAXLNX、可心\nMinecraft 是 Mojang / Microsoft 的产品；本项目不是官方产品。"
                                   size:11.0 weight:UIFontWeightRegular
-                                 color:NCLRColor(0.6, 0.7, 0.78, 1.0)];
+                                 color:NCLRColor(0.65, 0.65, 0.65, 1.0)];
     UIStackView *aboutStack = [[UIStackView alloc] initWithArrangedSubviews:@[aboutTitle, aboutText]];
     aboutStack.axis = UILayoutConstraintAxisVertical;
     aboutStack.spacing = 6.0;
@@ -1405,7 +1402,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     ]];
     [self.stack addArrangedSubview:about];
 
-    UIButton *keymap = [self button:@"编辑游戏内按键映射" action:@selector(openKeymap) primary:NO];
+    UIButton *keymap = [self button:@"触控界面" action:@selector(openKeymap) primary:NO];
     [self.stack addArrangedSubview:keymap];
 
     UIButton *clear = [self button:@"清除本地启动器数据" action:@selector(clearData) primary:NO];
@@ -1445,31 +1442,31 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = NCLRColor(0.027, 0.043, 0.065, 1.0);
+    self.view.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 1.0);
     self.keyButtons = [NSMutableArray array];
     self.previewButtons = [NSMutableDictionary dictionary];
     [self setupPage];
-    [self.stack addArrangedSubview:[self headerWithTitle:@"按键映射"
-                                                subtitle:@"L1 开发者测试 · 游戏内按键和按键大小"
+    [self.stack addArrangedSubview:[self headerWithTitle:@"触控界面"
+                                                subtitle:@"游戏内触控按钮 · 布局、位置与大小"
                                              actionTitle:nil action:nil]];
 
     UIView *menu = [self card];
-    self.menuToggle = [self button:@"按键设置  ▾" action:@selector(toggleMenu) primary:NO];
+    self.menuToggle = [self button:@"触控设置  ▾" action:@selector(toggleMenu) primary:NO];
     self.menuToggle.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
     self.menuToggle.titleLabel.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightSemibold];
     UILabel *sizeLabel = [self label:@"按键大小" size:12.0 weight:UIFontWeightSemibold
-                               color:NCLRColor(0.82, 0.88, 0.94, 1.0)];
+                               color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
     self.sizeSlider = [[UISlider alloc] init];
     self.sizeSlider.translatesAutoresizingMaskIntoConstraints = NO;
     self.sizeSlider.minimumValue = 0.5f;
     self.sizeSlider.maximumValue = 2.0f;
     self.sizeSlider.value = NCLRKeymap.shared.buttonSize;
-    self.sizeSlider.minimumTrackTintColor = NCLRColor(0.55, 1.0, 0.78, 1.0);
+    self.sizeSlider.minimumTrackTintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
     [self.sizeSlider addTarget:self action:@selector(sizeChanged:)
               forControlEvents:UIControlEventValueChanged];
     self.sizeValue = [self label:[NSString stringWithFormat:@"%.2fx", NCLRKeymap.shared.buttonSize]
                             size:11.0 weight:UIFontWeightSemibold
-                           color:NCLRColor(0.55, 1.0, 0.78, 1.0)];
+                           color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
     self.sizeValue.textAlignment = NSTextAlignmentRight;
     self.sizeRow = [[UIStackView alloc] initWithArrangedSubviews:@[sizeLabel, self.sizeSlider, self.sizeValue]];
     self.sizeRow.axis = UILayoutConstraintAxisHorizontal;
@@ -1478,7 +1475,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     self.sizeRow.hidden = YES;
     self.sizeRow.translatesAutoresizingMaskIntoConstraints = NO;
     [self.sizeValue.widthAnchor constraintEqualToConstant:48.0].active = YES;
-    UIButton *addKey = [self button:@"+ 添加按键" action:@selector(addKeyTapped) primary:NO];
+    UIButton *addKey = [self button:@"+ 添加触控键" action:@selector(addKeyTapped) primary:NO];
     UIStackView *menuStack = [[UIStackView alloc] initWithArrangedSubviews:
         @[self.menuToggle, self.sizeRow, addKey]];
     menuStack.axis = UILayoutConstraintAxisVertical;
@@ -1494,10 +1491,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [self.stack addArrangedSubview:menu];
 
     UIView *previewCard = [self card];
-    UILabel *previewLabel = [self eyebrow:@"游戏内布局预览 · 拖动按键调整位置"];
+    UILabel *previewLabel = [self eyebrow:@"触控布局预览 · 拖动按钮调整位置"];
     self.preview = [[UIView alloc] init];
     self.preview.translatesAutoresizingMaskIntoConstraints = NO;
-    self.preview.backgroundColor = NCLRColor(0.02, 0.035, 0.045, 1.0);
+    self.preview.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 1.0);
     self.preview.layer.cornerRadius = 12.0;
     self.preview.layer.borderWidth = 1.0;
     self.preview.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
@@ -1517,9 +1514,9 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
         button.accessibilityIdentifier = key;
         [button setTitle:NCLRKeymap.shared.bindings[key] forState:UIControlStateNormal];
-        [button setTitleColor:NCLRColor(0.03, 0.16, 0.10, 1.0) forState:UIControlStateNormal];
+        [button setTitleColor:NCLRColor(0.04, 0.04, 0.04, 1.0) forState:UIControlStateNormal];
         button.titleLabel.font = [UIFont monospacedSystemFontOfSize:11.0 weight:UIFontWeightBold];
-        button.backgroundColor = NCLRColor(0.55, 1.0, 0.78, 0.86);
+        button.backgroundColor = NCLRColor(0.95, 0.95, 0.95, 0.86);
         button.layer.cornerRadius = 8.0;
         [button addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self
                                                                             action:@selector(dragKey:)]];
@@ -1535,7 +1532,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     for (NSInteger i = 0; i < names.count; i++) {
         UIView *card = [self card];
         UILabel *name = [self label:names[i] size:13.0 weight:UIFontWeightSemibold
-                              color:NCLRColor(0.88, 0.93, 0.98, 1.0)];
+                              color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
         UIButton *key = [self button:NCLRKeymap.shared.bindings[keys[i]] ?: @"—"
                                 action:@selector(editKey:) primary:NO];
         key.tag = i;
@@ -1559,7 +1556,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
     UILabel *path = [self label:[NSString stringWithFormat:@"保存到：%@", NCLRKeymap.shared.path]
                             size:10.0 weight:UIFontWeightRegular
-                           color:NCLRColor(0.45, 0.55, 0.63, 1.0)];
+                           color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     path.font = [UIFont monospacedSystemFontOfSize:10.0 weight:UIFontWeightRegular];
     [self.stack addArrangedSubview:path];
 
@@ -1574,8 +1571,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
 - (void)toggleMenu {
     self.sizeRow.hidden = !self.sizeRow.hidden;
-    self.menuToggle.titleLabel.text = self.sizeRow.hidden ? @"按键设置  ▾" : @"按键设置  ▴";
-    [self.menuToggle setTitle:(self.sizeRow.hidden ? @"按键设置  ▾" : @"按键设置  ▴")
+    self.menuToggle.titleLabel.text = self.sizeRow.hidden ? @"触控设置  ▾" : @"触控设置  ▴";
+    [self.menuToggle setTitle:(self.sizeRow.hidden ? @"触控设置  ▾" : @"触控设置  ▴")
                      forState:UIControlStateNormal];
 }
 
@@ -1695,7 +1692,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [NCLRKeymap.shared save];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存"
                                                                    message:[NSString stringWithFormat:
-                                                                    @"按键映射已写入：\n%@", NCLRKeymap.shared.path]
+                                                                    @"触控界面已写入：\n%@", NCLRKeymap.shared.path]
                                                             preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -1724,12 +1721,12 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @implementation NCLRRootController
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = NCLRColor(0.027, 0.043, 0.065, 1.0);
+    self.view.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 1.0);
     CAGradientLayer *gradient = [CAGradientLayer layer];
     gradient.colors = @[
-        (__bridge id)NCLRColor(0.04, 0.10, 0.11, 1.0).CGColor,
-        (__bridge id)NCLRColor(0.027, 0.043, 0.065, 1.0).CGColor,
-        (__bridge id)NCLRColor(0.06, 0.04, 0.10, 1.0).CGColor,
+        (__bridge id)NCLRColor(0.07, 0.07, 0.07, 1.0).CGColor,
+        (__bridge id)NCLRColor(0.02, 0.02, 0.02, 1.0).CGColor,
+        (__bridge id)NCLRColor(0.10, 0.10, 0.10, 1.0).CGColor,
     ];
     gradient.startPoint = CGPointMake(0.1, 0.0);
     gradient.endPoint = CGPointMake(0.9, 1.0);
@@ -1737,7 +1734,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
     self.sidebar = [[UIView alloc] init];
     self.sidebar.translatesAutoresizingMaskIntoConstraints = NO;
-    self.sidebar.backgroundColor = NCLRColor(0.018, 0.028, 0.040, 0.88);
+    self.sidebar.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 0.88);
     self.sidebar.layer.borderWidth = 1.0;
     self.sidebar.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.06].CGColor;
     [self.view addSubview:self.sidebar];
@@ -1750,7 +1747,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     // horizontal navigation bar instead of the 228 pt sidebar.
     self.compactBar = [[UIView alloc] init];
     self.compactBar.translatesAutoresizingMaskIntoConstraints = NO;
-    self.compactBar.backgroundColor = NCLRColor(0.018, 0.028, 0.040, 0.96);
+    self.compactBar.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 0.96);
     self.compactBar.layer.borderWidth = 1.0;
     self.compactBar.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.06].CGColor;
     [self.view addSubview:self.compactBar];
@@ -1768,7 +1765,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         button.translatesAutoresizingMaskIntoConstraints = NO;
         button.titleLabel.font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightSemibold];
         [button setTitle:compactNames[i] forState:UIControlStateNormal];
-        [button setTitleColor:NCLRColor(0.82, 0.88, 0.94, 1.0) forState:UIControlStateNormal];
+        [button setTitleColor:NCLRColor(0.94, 0.94, 0.94, 1.0) forState:UIControlStateNormal];
         button.layer.cornerRadius = 8.0;
         [button addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
         [compactNav addArrangedSubview:button];
@@ -1808,16 +1805,16 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UIView *brand = [[UIView alloc] init];
     brand.translatesAutoresizingMaskIntoConstraints = NO;
     UILabel *mark = [self label:@"N" size:24.0 weight:UIFontWeightHeavy
-                          color:NCLRColor(0.55, 1.0, 0.78, 1.0)];
+                          color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
     mark.textAlignment = NSTextAlignmentCenter;
     mark.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.055];
     mark.layer.cornerRadius = 12.0;
     mark.layer.masksToBounds = YES;
     mark.translatesAutoresizingMaskIntoConstraints = NO;
     UILabel *title = [self label:@"NCLR" size:22.0 weight:UIFontWeightBold
-                           color:NCLRColor(0.93, 0.96, 1.0, 1.0)];
+                           color:NCLRColor(1.0, 1.0, 1.0, 1.0)];
     UILabel *subtitle = [self label:@"LAUNCHER" size:8.0 weight:UIFontWeightBold
-                             color:NCLRColor(0.45, 0.55, 0.63, 1.0)];
+                             color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     subtitle.attributedText = [[NSAttributedString alloc] initWithString:@"LAUNCHER" attributes:@{
         NSKernAttributeName : @2.0
     }];
@@ -1854,7 +1851,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
         [button setTitle:names[i] forState:UIControlStateNormal];
         [button setImage:[UIImage systemImageNamed:symbols[i]] forState:UIControlStateNormal];
-        button.tintColor = NCLRColor(0.55, 1.0, 0.78, 1.0);
+        button.tintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
         button.imageEdgeInsets = UIEdgeInsetsMake(0, 14, 0, 10);
         button.titleEdgeInsets = UIEdgeInsetsMake(0, 16, 0, 0);
         button.contentEdgeInsets = UIEdgeInsetsMake(0, 0, 0, 12);
@@ -1872,16 +1869,16 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     account.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.045];
     account.layer.cornerRadius = 12.0;
     UILabel *avatar = [self label:@"N" size:15.0 weight:UIFontWeightBold
-                            color:NCLRColor(0.55, 1.0, 0.78, 1.0)];
+                            color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
     avatar.textAlignment = NSTextAlignmentCenter;
     avatar.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06];
     avatar.layer.cornerRadius = 16.0;
     avatar.layer.masksToBounds = YES;
     avatar.translatesAutoresizingMaskIntoConstraints = NO;
     self.accountLabel = [self label:@"未登录" size:11.0 weight:UIFontWeightSemibold
-                              color:NCLRColor(0.82, 0.88, 0.94, 1.0)];
+                              color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
     UILabel *accountDetail = [self label:@"Microsoft 账号" size:9.0 weight:UIFontWeightRegular
-                                    color:NCLRColor(0.45, 0.55, 0.63, 1.0)];
+                                    color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     [account addSubview:avatar];
     [account addSubview:self.accountLabel];
     [account addSubview:accountDetail];
@@ -2021,65 +2018,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
 #pragma mark - App
 
-#pragma mark - In-game key editor
-
-@interface NCLRGameOverlayController : UIViewController
-@property (nonatomic, strong) UIButton *keyButton;
-@end
-
-@implementation NCLRGameOverlayController
-
-- (void)loadView {
-    self.view = [[UIView alloc] initWithFrame:CGRectZero];
-    self.view.backgroundColor = UIColor.clearColor;
-    self.view.userInteractionEnabled = YES;
-}
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
-    button.translatesAutoresizingMaskIntoConstraints = NO;
-    button.backgroundColor = NCLRColor(0.06, 0.09, 0.13, 0.92);
-    button.layer.cornerRadius = 10.0;
-    button.layer.borderWidth = 1.0;
-    button.layer.borderColor = NCLRColor(0.30, 0.55, 0.85, 0.9).CGColor;
-    [button setTitle:@"键位" forState:UIControlStateNormal];
-    [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
-    button.titleLabel.adjustsFontSizeToFitWidth = YES;
-    button.titleLabel.minimumScaleFactor = 0.75;
-    [button addTarget:self action:@selector(openKeyEditor) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:button];
-    self.keyButton = button;
-    [NSLayoutConstraint activateConstraints:@[
-        [button.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-        [button.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [button.topAnchor constraintEqualToAnchor:self.view.topAnchor],
-        [button.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-    ]];
-}
-
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    CGFloat h = self.view.bounds.size.height;
-    self.keyButton.titleLabel.font = [UIFont systemFontOfSize:MAX(11.0, MIN(15.0, h * 0.30))
-                                                   weight:UIFontWeightSemibold];
-    self.keyButton.layer.cornerRadius = MAX(6.0, MIN(12.0, h * 0.24));
-}
-
-- (void)openKeyEditor {
-    NCLRKeymapController *controller = [[NCLRKeymapController alloc] init];
-    controller.modalPresentationStyle = UIModalPresentationFullScreen;
-    [self presentViewController:controller animated:YES completion:nil];
-}
-
-@end
-
 @interface NCLRSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (nonatomic, strong) UIWindow *window;
-@property (nonatomic, strong) UIWindow *gameOverlayWindow;
-@property (nonatomic, strong) NCLRGameOverlayController *gameOverlayController;
-- (void)showGameOverlay;
 @end
 
 @implementation NCLRSceneDelegate
@@ -2094,49 +2034,6 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     self.window.rootViewController = [[NCLRRootController alloc] init];
     self.window.windowLevel = UIWindowLevelAlert + 1.0;
     [self.window makeKeyAndVisible];
-}
-
-- (void)showGameOverlay {
-    if (self.gameOverlayWindow != nil) {
-        self.gameOverlayWindow.hidden = NO;
-        return;
-    }
-    UIWindowScene *scene = self.window.windowScene;
-    if (scene == nil) {
-        return;
-    }
-    NCLRGameOverlayController *controller = [[NCLRGameOverlayController alloc] init];
-    UIWindow *overlay = [[UIWindow alloc] initWithWindowScene:scene];
-    overlay.windowLevel = UIWindowLevelAlert + 2.0;
-    overlay.rootViewController = controller;
-    [self updateGameOverlayFrame];
-    overlay.backgroundColor = UIColor.clearColor;
-    overlay.hidden = NO;
-    self.gameOverlayWindow = overlay;
-    self.gameOverlayController = controller;
-    [self updateGameOverlayFrame];
-}
-
-- (void)updateGameOverlayFrame {
-    if (self.gameOverlayWindow == nil || self.window.windowScene == nil) {
-        return;
-    }
-    CGRect screen = self.window.windowScene.screen.bounds;
-    UIEdgeInsets safe = self.window.safeAreaInsets;
-    // Keep the in-game button compact on narrow cover screens (foldables)
-    // while leaving it readable on iPad and wide windows.
-    CGFloat width = MAX(50.0, MIN(78.0, screen.size.width * 0.15));
-    CGFloat height = MAX(30.0, MIN(44.0, width * 0.56));
-    CGFloat x = safe.left + 10.0;
-    CGFloat y = safe.top + 8.0;
-    self.gameOverlayWindow.frame = CGRectMake(x, y, width, height);
-}
-
-- (void)windowScene:(UIWindowScene *)windowScene
-    didUpdateCoordinateSpace:(id<UICoordinateSpace>)previousCoordinateSpace
-    interfaceOrientation:(UIInterfaceOrientation)previousInterfaceOrientation
-    traitCollection:(UITraitCollection *)previousTraitCollection {
-    [self updateGameOverlayFrame];
 }
 @end
 
