@@ -871,9 +871,9 @@ html[data-theme] :is(.avatar, .avatar-violet, .avatar-mint) { width: 34px; heigh
 .author-card p { font-size: 10px; }
 html[data-theme] .author-avatar {
   display: block;
-  width: 36px;
-  height: 36px;
-  border-radius: 3px;
+  width: 64px;
+  height: 64px;
+  border-radius: 4px;
   object-fit: cover;
   background: var(--line);
 }
