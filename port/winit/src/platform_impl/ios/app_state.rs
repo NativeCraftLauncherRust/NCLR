@@ -215,6 +215,14 @@ impl AppState {
         matches!(self.state(), AppStateImpl::Terminated)
     }
 
+    pub(crate) fn is_processing_redraws(mtm: MainThreadMarker) -> bool {
+        let this = AppState::get_mut(mtm);
+        matches!(
+            this.state(),
+            AppStateImpl::ProcessingRedraws { .. } | AppStateImpl::InUserCallback { .. }
+        )
+    }
+
     fn will_launch_transition(&mut self, queued_handler: EventLoopHandler) {
         let (queued_windows, queued_events, queued_gpu_redraws) = match self.take_state() {
             AppStateImpl::NotLaunched { queued_windows, queued_events, queued_gpu_redraws } => {

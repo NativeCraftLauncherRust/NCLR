@@ -8,11 +8,10 @@ use core_foundation::base::{CFIndex, CFRelease};
 use core_foundation::date::CFAbsoluteTimeGetCurrent;
 use core_foundation::runloop::{
     kCFRunLoopAfterWaiting, kCFRunLoopBeforeWaiting, kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
-    kCFRunLoopExit, CFRunLoopActivity, CFRunLoopAddObserver, CFRunLoopAddSource, CFRunLoopAddTimer,
-    CFRunLoopGetMain, CFRunLoopObserverCreate, CFRunLoopObserverRef, CFRunLoopSourceContext,
-    CFRunLoopSourceCreate, CFRunLoopSourceInvalidate, CFRunLoopSourceRef, CFRunLoopSourceSignal,
-    CFRunLoopTimerContext, CFRunLoopTimerCreate, CFRunLoopTimerInvalidate, CFRunLoopTimerRef,
-    CFRunLoopWakeUp,
+    kCFRunLoopExit, CFRunLoopActivity, CFRunLoopAddObserver, CFRunLoopAddSource, CFRunLoopGetMain,
+    CFRunLoopObserverCreate, CFRunLoopObserverInvalidate, CFRunLoopObserverRef,
+    CFRunLoopSourceContext, CFRunLoopSourceCreate, CFRunLoopSourceInvalidate, CFRunLoopSourceRef,
+    CFRunLoopSourceSignal, CFRunLoopWakeUp,
 };
 use objc2::rc::Retained;
 use objc2::{msg_send_id, ClassType};
@@ -136,11 +135,24 @@ fn map_user_event<T: 'static>(
     }
 }
 
-extern "C" fn resume_after_launch(timer: CFRunLoopTimerRef, _: *mut c_void) {
-    unsafe { CFRunLoopTimerInvalidate(timer) };
-    if let Some(mtm) = MainThreadMarker::new() {
-        app_state::handle_nonuser_event(mtm, EventWrapper::StaticEvent(Event::Resumed));
+extern "C" fn resume_after_launch(
+    observer: CFRunLoopObserverRef,
+    activity: CFRunLoopActivity,
+    _: *mut c_void,
+) {
+    if activity != kCFRunLoopAfterWaiting {
+        return;
     }
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    // `did_finish_launching` replays the launch transition and starts the
+    // engine's first redraw. Delivering Resumed while that redraw is still
+    // processing makes winit queue another redraw and trips its state
+    // assertion. Wait for a run-loop wakeup with no redraw in progress.
+    if app_state::AppState::is_processing_redraws(mtm) {
+        return;
+    }
+    unsafe { CFRunLoopObserverInvalidate(observer) };
+    app_state::handle_nonuser_event(mtm, EventWrapper::StaticEvent(Event::Resumed));
 }
 
 pub struct EventLoop<T: 'static> {
@@ -330,25 +342,17 @@ impl<T: 'static> EventLoop<T> {
             // queue a redraw while `did_finish_launching` is still processing
             // redraws, which trips winit's state assertion.
             app_state::did_finish_launching(self.mtm);
-            let mut context = CFRunLoopTimerContext {
-                version: 0,
-                info: ptr::null_mut(),
-                retain: None,
-                release: None,
-                copyDescription: None,
-            };
-            let timer = unsafe {
-                CFRunLoopTimerCreate(
+            let observer = unsafe {
+                CFRunLoopObserverCreate(
                     ptr::null_mut(),
-                    CFAbsoluteTimeGetCurrent() + 1.0,
-                    0.0,
-                    0,
+                    kCFRunLoopAfterWaiting,
+                    1,
                     0,
                     resume_after_launch,
-                    &mut context,
+                    ptr::null_mut(),
                 )
             };
-            unsafe { CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopCommonModes) };
+            unsafe { CFRunLoopAddObserver(CFRunLoopGetMain(), observer, kCFRunLoopCommonModes) };
             std::mem::forget(self);
             loop {
                 unsafe { core_foundation::runloop::CFRunLoopRun(); }
