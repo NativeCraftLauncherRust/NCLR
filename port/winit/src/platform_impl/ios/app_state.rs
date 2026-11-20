@@ -1,5 +1,6 @@
 #![deny(unused_results)]
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::{RefCell, RefMut};
 use std::collections::HashSet;
 use std::os::raw::c_void;
@@ -92,6 +93,16 @@ impl Event<HandlePendingUserEvents> {
     fn is_redraw(&self) -> bool {
         matches!(self, Event::WindowEvent { event: WindowEvent::RedrawRequested, .. })
     }
+}
+
+static LATE_START: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_late_start(value: bool) {
+    LATE_START.store(value, Ordering::SeqCst);
+}
+
+pub(crate) fn is_late_start() -> bool {
+    LATE_START.load(Ordering::SeqCst)
 }
 
 // this is the state machine for the app lifecycle

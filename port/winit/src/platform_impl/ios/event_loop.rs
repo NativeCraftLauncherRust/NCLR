@@ -152,6 +152,7 @@ extern "C" fn resume_after_launch(
         return;
     }
     unsafe { CFRunLoopObserverInvalidate(observer) };
+    app_state::set_late_start(false);
     app_state::handle_nonuser_event(mtm, EventWrapper::StaticEvent(Event::Resumed));
 }
 
@@ -214,7 +215,16 @@ impl<T: 'static> EventLoop<T> {
             // `applicationDidBecomeActive:`
             unsafe { UIApplicationDidBecomeActiveNotification },
             move |_| {
-                app_state::handle_nonuser_event(mtm, EventWrapper::StaticEvent(Event::Resumed));
+                // In the late-start path the engine is not launched by UIKit,
+                // and this notification can arrive while the first redraw is
+                // still in progress. The run-loop observer below sends the
+                // initial Resumed once it is safe.
+                if !app_state::is_late_start() {
+                    app_state::handle_nonuser_event(
+                        mtm,
+                        EventWrapper::StaticEvent(Event::Resumed),
+                    );
+                }
             },
         );
         let _will_resign_active_observer = create_observer(
@@ -341,6 +351,7 @@ impl<T: 'static> EventLoop<T> {
             // Resumed from the run loop. Sending it synchronously here can
             // queue a redraw while `did_finish_launching` is still processing
             // redraws, which trips winit's state assertion.
+            app_state::set_late_start(true);
             app_state::did_finish_launching(self.mtm);
             let observer = unsafe {
                 CFRunLoopObserverCreate(
