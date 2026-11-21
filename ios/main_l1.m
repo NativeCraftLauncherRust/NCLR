@@ -1060,7 +1060,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     NSDictionary<NSString *, NSString *> *wanted = @{
         @"maxFps" : @"260",
         @"batteryMode" : @"false",
-        @"enableVsync" : @"true",
+        @"enableVsync" : @"false",
     };
     for (NSString *key in wanted) {
         NSString *prefix = [key stringByAppendingString:@":"];
@@ -2350,7 +2350,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     }
     self.navButtons = buttons;
     [navScroll addSubview:nav];
-    navScroll.hidden = YES;
+    navScroll.hidden = NO;
 
     self.navNames = names;
     self.navSymbols = symbols;
@@ -2364,6 +2364,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     self.navTable.dataSource = self;
     self.navTable.delegate = self;
     self.navTable.clipsToBounds = YES;
+    self.navTable.hidden = YES;
     [self.sidebar addSubview:self.navTable];
 
     UIView *account = [[UIView alloc] init];
@@ -2404,10 +2405,11 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [brand.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:18.0],
         [brand.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-18.0],
         [brand.topAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.topAnchor constant:14.0],
-        [self.navTable.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:10.0],
-        [self.navTable.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-10.0],
-        [self.navTable.topAnchor constraintEqualToAnchor:brand.bottomAnchor constant:20.0],
-        [self.navTable.bottomAnchor constraintEqualToAnchor:account.topAnchor constant:-8.0],
+        [navScroll.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:10.0],
+        [navScroll.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-10.0],
+        [navScroll.topAnchor constraintEqualToAnchor:brand.bottomAnchor constant:16.0],
+        [navScroll.bottomAnchor constraintEqualToAnchor:account.topAnchor constant:-8.0],
+        [navScroll.heightAnchor constraintGreaterThanOrEqualToConstant:120.0],
         [account.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:12.0],
         [account.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-12.0],
         [account.bottomAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.bottomAnchor constant:-14.0],
