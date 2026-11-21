@@ -2337,13 +2337,12 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
         button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
         [button setTitle:names[i] forState:UIControlStateNormal];
-        [button setImage:[UIImage systemImageNamed:symbols[i]] forState:UIControlStateNormal];
-        button.tintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
-        button.imageEdgeInsets = UIEdgeInsetsMake(0, 14, 0, 10);
-        button.titleEdgeInsets = UIEdgeInsetsMake(0, 16, 0, 0);
-        button.contentEdgeInsets = UIEdgeInsetsMake(0, 0, 0, 12);
-        button.layer.cornerRadius = 10.0;
-        [button.heightAnchor constraintEqualToConstant:38.0].active = YES;
+        button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
+        button.titleLabel.lineBreakMode = NSLineBreakByClipping;
+        button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+        button.contentEdgeInsets = UIEdgeInsetsMake(0, 16, 0, 8);
+        button.layer.cornerRadius = 9.0;
+        [button.heightAnchor constraintEqualToConstant:30.0].active = YES;
         [button addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
         [nav addArrangedSubview:button];
         [buttons addObject:button];
@@ -2458,7 +2457,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [super viewDidLayoutSubviews];
     [self updateAdaptiveLayout];
     if (self.navScroll != nil) {
-        CGFloat navHeight = MAX(290.0, self.navScroll.bounds.size.height);
+        CGFloat navHeight = MAX(222.0, self.navScroll.bounds.size.height);
         self.navScroll.contentSize = CGSizeMake(MAX(1.0, self.navScroll.bounds.size.width), navHeight);
     }
     for (CALayer *layer in self.view.layer.sublayers) {
