@@ -260,6 +260,7 @@ static void NCLRKeychainWrite(NSString *value) {
 - (NCLRVersion *)addVersionNamed:(NSString *)name game:(NSString *)game loader:(NSString *)loader;
 - (void)deleteVersion:(NCLRVersion *)version;
 - (void)reloadMods;
+- (void)migrateLegacyMods;
 - (BOOL)importModAtURL:(NSURL *)url error:(NSString **)error;
 - (void)deleteMod:(NCLRMod *)mod;
 - (void)setMod:(NCLRMod *)mod enabled:(BOOL)enabled;
@@ -333,6 +334,7 @@ static void NCLRKeychainWrite(NSString *value) {
     if (self.selectedVersion.length == 0) {
         self.selectedVersion = self.versions.firstObject.identifier;
     }
+    [self migrateLegacyMods];
     [self reloadMods];
 }
 
@@ -391,6 +393,22 @@ static void NCLRKeychainWrite(NSString *value) {
         self.selectedVersion = self.versions.firstObject.identifier ?: @"";
     }
     [self save];
+}
+
+- (void)migrateLegacyMods {
+    NSString *legacy = [NCLRDocuments() stringByAppendingPathComponent:@"mods"];
+    NSArray<NSString *> *files = [[NSFileManager defaultManager]
+        contentsOfDirectoryAtPath:legacy error:nil];
+    for (NSString *file in files) {
+        if (![file.pathExtension.lowercaseString isEqualToString:@"hmod"]) {
+            continue;
+        }
+        NSString *destination = [self.modsDirectory stringByAppendingPathComponent:file];
+        if (![[NSFileManager defaultManager] fileExistsAtPath:destination]) {
+            [[NSFileManager defaultManager] copyItemAtPath:[legacy stringByAppendingPathComponent:file]
+                                                    toPath:destination error:nil];
+        }
+    }
 }
 
 - (void)reloadMods {
