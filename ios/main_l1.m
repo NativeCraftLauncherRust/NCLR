@@ -816,35 +816,6 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     self.scroll.verticalScrollIndicatorInsets = inset;
 }
 
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return self.navNames.count;
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    static NSString *identifier = @"NCLRNavCell";
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
-    if (cell == nil) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:identifier];
-        cell.backgroundColor = UIColor.clearColor;
-        cell.textLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
-        cell.textLabel.textColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
-        cell.tintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
-        UIView *selected = [[UIView alloc] init];
-        selected.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.075];
-        selected.layer.cornerRadius = 10.0;
-        cell.selectedBackgroundView = selected;
-        cell.indentationLevel = 1;
-        cell.indentationWidth = 10.0;
-    }
-    cell.textLabel.text = self.navNames[indexPath.row];
-    cell.imageView.image = [UIImage systemImageNamed:self.navSymbols[indexPath.row]];
-    return cell;
-}
-
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [self showPage:indexPath.row];
-}
-
 - (UILabel *)label:(NSString *)text size:(CGFloat)size weight:(UIFontWeight)weight color:(UIColor *)color {
     UILabel *label = [[UILabel alloc] init];
     label.text = text;
@@ -2501,6 +2472,35 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
 - (void)accountTapped {
     [self showPage:5];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return self.navNames.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *identifier = @"NCLRNavCell";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
+    if (cell == nil) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:identifier];
+        cell.backgroundColor = UIColor.clearColor;
+        cell.textLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
+        cell.textLabel.textColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
+        cell.tintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
+        UIView *selected = [[UIView alloc] init];
+        selected.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.075];
+        selected.layer.cornerRadius = 10.0;
+        cell.selectedBackgroundView = selected;
+        cell.indentationLevel = 1;
+        cell.indentationWidth = 10.0;
+    }
+    cell.textLabel.text = self.navNames[indexPath.row];
+    cell.imageView.image = [UIImage systemImageNamed:self.navSymbols[indexPath.row]];
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [self showPage:indexPath.row];
 }
 
 - (void)showPage:(NSInteger)page {
