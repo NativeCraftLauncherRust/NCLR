@@ -2065,7 +2065,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
     UIView *brand = [[UIView alloc] init];
     brand.translatesAutoresizingMaskIntoConstraints = NO;
-    UIImage *brandImage = [UIImage imageNamed:@"BrandIcon.jpg"] ?: [UIImage imageNamed:@"BrandIcon"];
+    UIImage *brandImage = [UIImage imageNamed:@"BrandIcon"];
     UIView *mark = nil;
     if (brandImage != nil) {
         UIImageView *logo = [[UIImageView alloc] initWithImage:brandImage];
