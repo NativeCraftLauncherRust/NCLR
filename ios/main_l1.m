@@ -1245,6 +1245,143 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 }
 @end
 
+@interface NCLRPackController : NCLRPageController <UIDocumentPickerDelegate>
+@property (nonatomic, copy) NSString *pageTitle;
+@property (nonatomic, copy) NSString *pageSubtitle;
+@property (nonatomic, copy) NSString *directoryName;
+@property (nonatomic, copy) NSString *emptyText;
+@property (nonatomic, copy) NSString *noteText;
+@property (nonatomic, copy) NSArray<NSString *> *extensions;
+@end
+
+@implementation NCLRPackController
+- (NSString *)directoryPath {
+    NSString *path = [NCLRDocuments() stringByAppendingPathComponent:self.directoryName ?: @""];
+    NCLRCreateDirectory(path);
+    return path;
+}
+
+- (BOOL)acceptsURL:(NSURL *)url {
+    NSNumber *isDirectory = nil;
+    [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
+    if (isDirectory.boolValue) {
+        return YES;
+    }
+    NSString *ext = url.pathExtension.lowercaseString;
+    return [self.extensions containsObject:ext];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    [self setupPage];
+    [self.stack addArrangedSubview:[self headerWithTitle:self.pageTitle ?: @"文件"
+                                                subtitle:self.pageSubtitle ?: @"导入本地文件"
+                                             actionTitle:@"导入" action:@selector(importTapped)]];
+    NSArray<NSString *> *files = [[NSFileManager defaultManager]
+        contentsOfDirectoryAtPath:self.directoryPath error:nil];
+    NSMutableArray<NSString *> *shown = [NSMutableArray array];
+    for (NSString *file in files) {
+        if ([file hasPrefix:@"."]) {
+            continue;
+        }
+        NSString *path = [self.directoryPath stringByAppendingPathComponent:file];
+        BOOL directory = NO;
+        [[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&directory];
+        NSString *ext = file.pathExtension.lowercaseString;
+        if (!directory && ![self.extensions containsObject:ext]) {
+            continue;
+        }
+        [shown addObject:file];
+    }
+    [shown sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+    if (shown.count == 0) {
+        UIView *card = [self card];
+        UILabel *empty = [self label:self.emptyText ?: @"还没有文件。点击右上角导入。"
+                                size:13.0 weight:UIFontWeightRegular
+                               color:NCLRColor(0.65, 0.65, 0.65, 1.0)];
+        [card addSubview:empty];
+        [NSLayoutConstraint activateConstraints:@[
+            [empty.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+            [empty.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+            [empty.topAnchor constraintEqualToAnchor:card.topAnchor constant:18.0],
+            [empty.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-18.0],
+        ]];
+        [self.stack addArrangedSubview:card];
+    }
+    for (NSString *file in shown) {
+        NSString *path = [self.directoryPath stringByAppendingPathComponent:file];
+        NSDictionary *attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+        unsigned long long size = [attributes[NSFileSize] unsignedLongLongValue];
+        BOOL directory = [attributes[NSFileType] isEqualToString:NSFileTypeDirectory];
+        UIView *card = [self card];
+        UILabel *name = [self label:file size:14.0 weight:UIFontWeightSemibold
+                              color:NCLRColor(0.96, 0.96, 0.96, 1.0)];
+        NSString *detailText = directory
+            ? [NSString stringWithFormat:@"%@/%@ · 文件夹", self.directoryName, file]
+            : [NSString stringWithFormat:@"%@/%@ · %llu KB", self.directoryName, file, size / 1024];
+        UILabel *detail = [self label:detailText size:10.0 weight:UIFontWeightRegular
+                                color:NCLRColor(0.62, 0.62, 0.62, 1.0)];
+        [card addSubview:name];
+        [card addSubview:detail];
+        [NSLayoutConstraint activateConstraints:@[
+            [name.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+            [name.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor constant:-16.0],
+            [name.topAnchor constraintEqualToAnchor:card.topAnchor constant:12.0],
+            [detail.leadingAnchor constraintEqualToAnchor:name.leadingAnchor],
+            [detail.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor constant:-16.0],
+            [detail.topAnchor constraintEqualToAnchor:name.bottomAnchor constant:3.0],
+            [detail.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-12.0],
+        ]];
+        [self.stack addArrangedSubview:card];
+    }
+    UILabel *note = [self label:(self.noteText ?: [NSString stringWithFormat:@"目录：Documents/%@", self.directoryName])
+                            size:10.0 weight:UIFontWeightRegular
+                           color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
+    [self.stack addArrangedSubview:note];
+}
+
+- (void)importTapped {
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
+        initWithDocumentTypes:@[@"public.data"] inMode:UIDocumentPickerModeImport];
+    picker.delegate = self;
+    picker.allowsMultipleSelection = NO;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    NSURL *url = urls.firstObject;
+    if (url == nil || ![self acceptsURL:url]) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"导入失败"
+                                                                       message:[NSString stringWithFormat:@"只接受这些格式：%@",
+                                                                                 [self.extensions componentsJoinedByString:@", "]]
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    BOOL scoped = [url startAccessingSecurityScopedResource];
+    NSString *destination = [self.directoryPath stringByAppendingPathComponent:url.lastPathComponent];
+    [[NSFileManager defaultManager] removeItemAtPath:destination error:nil];
+    NSError *error = nil;
+    BOOL ok = [[NSFileManager defaultManager] copyItemAtURL:url
+                                                     toURL:[NSURL fileURLWithPath:destination]
+                                                     error:&error];
+    if (scoped) {
+        [url stopAccessingSecurityScopedResource];
+    }
+    if (!ok) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"导入失败"
+                                                                       message:error.localizedDescription ?: @"无法复制文件"
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    if (self.onDataChanged) self.onDataChanged();
+}
+@end
+
 @interface NCLRAccountController : NCLRPageController
 @end
 
@@ -2045,7 +2182,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     compactNav.translatesAutoresizingMaskIntoConstraints = NO;
     [self.compactBar addSubview:compactNav];
     NSMutableArray *compact = [NSMutableArray array];
-    NSArray *compactNames = @[@"主页", @"版本", @"模组", @"账号", @"设置"];
+    NSArray *compactNames = @[@"主页", @"版本", @"模组", @"光影", @"资源包", @"账号", @"设置"];
     for (NSInteger i = 0; i < compactNames.count; i++) {
         UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
         button.tag = i;
@@ -2138,8 +2275,9 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     nav.axis = UILayoutConstraintAxisVertical;
     nav.spacing = 4.0;
     nav.translatesAutoresizingMaskIntoConstraints = NO;
-    NSArray *names = @[@"主页", @"版本", @"模组", @"账号", @"设置"];
+    NSArray *names = @[@"主页", @"版本", @"模组", @"光影", @"资源包", @"账号", @"设置"];
     NSArray *symbols = @[@"house.fill", @"square.stack.3d.up.fill", @"puzzlepiece.extension.fill",
+                         @"sun.max.fill", @"square.grid.2x2.fill",
                          @"person.crop.circle.fill", @"gearshape.fill"];
     NSMutableArray *buttons = [NSMutableArray array];
     for (NSInteger i = 0; i < names.count; i++) {
@@ -2260,7 +2398,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 }
 
 - (void)accountTapped {
-    [self showPage:3];
+    [self showPage:5];
 }
 
 - (void)showPage:(NSInteger)page {
@@ -2287,8 +2425,30 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     switch (page) {
         case 1: controller = [[NCLRVersionsController alloc] init]; break;
         case 2: controller = [[NCLRModsController alloc] init]; break;
-        case 3: controller = [[NCLRAccountController alloc] init]; break;
-        case 4: controller = [[NCLRSettingsController alloc] init]; break;
+        case 3: {
+            NCLRPackController *c = [[NCLRPackController alloc] init];
+            c.pageTitle = @"光影包";
+            c.pageSubtitle = @"导入和管理本地光影包";
+            c.directoryName = @"shaderpacks";
+            c.emptyText = @"还没有光影包。点击右上角导入 .zip / .hshader，或直接放入 shaderpacks 文件夹。";
+            c.extensions = @[@"zip", @"hshader"];
+            c.noteText = @"目录：Documents/shaderpacks。经典 shaders/ 文件夹、.zip 或 .hshader 都可被 Horizon 读取。";
+            controller = c;
+            break;
+        }
+        case 4: {
+            NCLRPackController *c = [[NCLRPackController alloc] init];
+            c.pageTitle = @"资源包";
+            c.pageSubtitle = @"导入和管理本地资源包";
+            c.directoryName = @"resourcepacks";
+            c.emptyText = @"还没有资源包。点击右上角导入 .zip，或直接放入 resourcepacks 文件夹。";
+            c.extensions = @[@"zip"];
+            c.noteText = @"目录：Documents/resourcepacks。导入后在游戏内资源包页面启用。";
+            controller = c;
+            break;
+        }
+        case 5: controller = [[NCLRAccountController alloc] init]; break;
+        case 6: controller = [[NCLRSettingsController alloc] init]; break;
         default: controller = [[NCLRHomeController alloc] init]; break;
     }
     if ([controller isKindOfClass:[NCLRPageController class]]) {
