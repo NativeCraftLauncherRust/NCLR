@@ -724,7 +724,7 @@ index 16664ff..7bef1f4 100644
      pub(super) fn pauses_game(&self) -> bool {
          self.has_singleplayer_server()
 diff --git a/crates/horizon-client/src/game/runtime/loading_screen.rs b/crates/horizon-client/src/game/runtime/loading_screen.rs
-index 2511aa2..7c79809 100644
+index 2511aa2..05af76b 100644
 --- a/crates/horizon-client/src/game/runtime/loading_screen.rs
 +++ b/crates/horizon-client/src/game/runtime/loading_screen.rs
 @@ -3,6 +3,11 @@
@@ -760,7 +760,7 @@ index 2511aa2..7c79809 100644
          if let Err(error) = self.poll_menu_resources() {
              self.error = Some(error);
              event_loop.exit();
-@@ -265,13 +284,23 @@ impl Loading {
+@@ -265,12 +284,15 @@ impl Loading {
          }
          self.poll_menu_realms(event_loop);
          if let Some(w) = &self.window {
@@ -773,20 +773,11 @@ index 2511aa2..7c79809 100644
                  w.request_redraw();
              }
          }
--        event_loop.set_control_flow(ControlFlow::Poll);
-+        if cfg!(target_os = "ios") {
-+            // Direct drawing in `about_to_wait` would otherwise spin thousands
-+            // of times a second; pace it like a display.
-+            event_loop.set_control_flow(ControlFlow::WaitUntil(
-+                std::time::Instant::now() + std::time::Duration::from_millis(16),
-+            ));
-+        } else {
-+            event_loop.set_control_flow(ControlFlow::Poll);
-+        }
++        // Match the game loop: iOS presents at the display's refresh rate.
+         event_loop.set_control_flow(ControlFlow::Poll);
      }
      pub(super) fn draw(&mut self) {
-         let Some(size) = self
-@@ -419,6 +448,45 @@ pub(super) enum App {
+@@ -419,6 +441,45 @@ pub(super) enum App {
      Loading(Box<Loading>),
      Ready(Box<split::Split<'static>>),
  }
@@ -832,7 +823,7 @@ index 2511aa2..7c79809 100644
  impl ApplicationHandler for App {
      fn resumed(&mut self, event_loop: &ActiveEventLoop) {
          match self {
-@@ -427,6 +495,86 @@ impl ApplicationHandler for App {
+@@ -427,6 +488,86 @@ impl ApplicationHandler for App {
          }
      }
      fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -996,7 +987,7 @@ index ee73abf..3704fed 100644
      pub(super) fn facts(&self) -> &BlockFacts {
          &self.core.facts
 diff --git a/crates/horizon-client/src/game/runtime/window_handler.rs b/crates/horizon-client/src/game/runtime/window_handler.rs
-index 6a86a75..7e89204 100644
+index 6a86a75..7434a3f 100644
 --- a/crates/horizon-client/src/game/runtime/window_handler.rs
 +++ b/crates/horizon-client/src/game/runtime/window_handler.rs
 @@ -2,6 +2,10 @@
@@ -1058,7 +1049,7 @@ index 6a86a75..7e89204 100644
                  let id = w.id();
                  self.handle_window_event(
                      event_loop,
-@@ -351,11 +384,23 @@ impl Game<'_> {
+@@ -351,11 +384,22 @@ impl Game<'_> {
          }
          // Consume the last frame's result: a hidden compositor may stop sending
          // redraws altogether, leaving a successful result stale indefinitely.
@@ -1073,18 +1064,17 @@ index 6a86a75..7e89204 100644
 -        ));
 +        );
 +        if cfg!(target_os = "ios") {
-+            // The frame is drawn directly in `AboutToWait`; cap it at 60 Hz
-+            // instead of letting winit poll as fast as the CPU allows.
-+            event_loop.set_control_flow(ControlFlow::WaitUntil(
-+                Instant::now() + Duration::from_millis(16),
-+            ));
++            // The frame is drawn directly in `AboutToWait`. Poll instead of
++            // waiting 16 ms: iOS presents at the display's refresh rate, and
++            // the old 60 Hz wait capped 120 Hz ProMotion devices too.
++            event_loop.set_control_flow(ControlFlow::Poll);
 +        } else {
 +            event_loop.set_control_flow(flow);
 +        }
      }
  }
  
-@@ -437,14 +482,13 @@ impl ApplicationHandler for Game<'_> {
+@@ -437,14 +481,13 @@ impl ApplicationHandler for Game<'_> {
          };
          self.handle_window_event(event_loop, id, event, input_trace::InputOrigin::User);
          if let Some((event, modifiers)) = key {

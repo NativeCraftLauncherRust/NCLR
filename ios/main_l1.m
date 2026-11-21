@@ -293,7 +293,9 @@ static void NCLRKeychainWrite(NSString *value) {
 }
 
 - (NSString *)modsDirectory {
-    NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"mods"];
+    // Horizon reads content mods from `horizon-mods`, not the old `mods`
+    // folder. Keep the launcher's import destination in sync with the engine.
+    NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"horizon-mods"];
     NCLRCreateDirectory(path);
     return path;
 }
@@ -398,7 +400,7 @@ static void NCLRKeychainWrite(NSString *value) {
     NSDictionary *enabled = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"NCLRModsEnabled"] ?: @{};
     for (NSString *file in files) {
         NSString *extension = file.pathExtension.lowercaseString;
-        if (![extension isEqualToString:@"jar"] && ![extension isEqualToString:@"hmod"]) {
+        if (![extension isEqualToString:@"hmod"]) {
             continue;
         }
         NSString *path = [self.modsDirectory stringByAppendingPathComponent:file];
@@ -416,6 +418,12 @@ static void NCLRKeychainWrite(NSString *value) {
 }
 
 - (BOOL)importModAtURL:(NSURL *)url error:(NSString **)error {
+    if (![url.pathExtension.lowercaseString isEqualToString:@"hmod"]) {
+        if (error) {
+            *error = @"Horizon 只加载 .hmod 模组；Java .jar 需要先用 horizon-port-pack 移植。";
+        }
+        return NO;
+    }
     BOOL scoped = [url startAccessingSecurityScopedResource];
     NSString *destination = [self.modsDirectory stringByAppendingPathComponent:url.lastPathComponent];
     [[NSFileManager defaultManager] removeItemAtPath:destination error:nil];
@@ -1144,7 +1152,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     NCLRStore *store = NCLRStore.shared;
     if (store.mods.count == 0) {
         UIView *card = [self card];
-        UILabel *empty = [self label:@"还没有模组。点击右上角导入 .jar / .hmod 文件。"
+        UILabel *empty = [self label:@"还没有模组。点击右上角导入 .hmod 文件；Java .jar 不会被 Horizon 加载。"
                                 size:13.0 weight:UIFontWeightRegular
                                color:NCLRColor(0.65, 0.65, 0.65, 1.0)];
         [card addSubview:empty];
@@ -1160,7 +1168,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         UIView *card = [self card];
         UILabel *name = [self label:mod.name size:14.0 weight:UIFontWeightSemibold
                               color:NCLRColor(0.96, 0.96, 0.96, 1.0)];
-        UILabel *detail = [self label:[NSString stringWithFormat:@"%llu KB", mod.size / 1024]
+        UILabel *detail = [self label:[NSString stringWithFormat:@"horizon-mods/%@ · %llu KB", mod.name, mod.size / 1024]
                                  size:10.0 weight:UIFontWeightRegular
                                 color:NCLRColor(0.62, 0.62, 0.62, 1.0)];
         UISwitch *toggle = [[UISwitch alloc] init];
@@ -1183,7 +1191,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         ]];
         [self.stack addArrangedSubview:card];
     }
-    UILabel *note = [self label:@"iOS 启动器只负责管理 mods 目录和启用状态；实际注入由游戏端完成。"
+    UILabel *note = [self label:@"导入目录：Documents/horizon-mods。列表显示已导入文件名；实际加载由游戏端完成。"
                             size:10.0 weight:UIFontWeightRegular
                            color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     [self.stack addArrangedSubview:note];
