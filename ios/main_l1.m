@@ -816,6 +816,35 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     self.scroll.verticalScrollIndicatorInsets = inset;
 }
 
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return self.navNames.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *identifier = @"NCLRNavCell";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
+    if (cell == nil) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:identifier];
+        cell.backgroundColor = UIColor.clearColor;
+        cell.textLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
+        cell.textLabel.textColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
+        cell.tintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
+        UIView *selected = [[UIView alloc] init];
+        selected.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.075];
+        selected.layer.cornerRadius = 10.0;
+        cell.selectedBackgroundView = selected;
+        cell.indentationLevel = 1;
+        cell.indentationWidth = 10.0;
+    }
+    cell.textLabel.text = self.navNames[indexPath.row];
+    cell.imageView.image = [UIImage systemImageNamed:self.navSymbols[indexPath.row]];
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [self showPage:indexPath.row];
+}
+
 - (UILabel *)label:(NSString *)text size:(CGFloat)size weight:(UIFontWeight)weight color:(UIColor *)color {
     UILabel *label = [[UILabel alloc] init];
     label.text = text;
@@ -2161,7 +2190,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
 #pragma mark - Root
 
-@interface NCLRRootController : UIViewController
+@interface NCLRRootController : UIViewController <UITableViewDataSource, UITableViewDelegate>
 @property (nonatomic, strong) UIView *sidebar;
 @property (nonatomic, strong) UIView *content;
 @property (nonatomic, strong) UIView *compactBar;
@@ -2175,6 +2204,9 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, strong) UIScrollView *navScroll;
 @property (nonatomic, strong) UIStackView *navStack;
 @property (nonatomic, strong) NSLayoutConstraint *sidebarWidth;
+@property (nonatomic, strong) UITableView *navTable;
+@property (nonatomic, copy) NSArray<NSString *> *navNames;
+@property (nonatomic, copy) NSArray<NSString *> *navSymbols;
 @end
 
 @implementation NCLRRootController
@@ -2347,6 +2379,21 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     }
     self.navButtons = buttons;
     [navScroll addSubview:nav];
+    navScroll.hidden = YES;
+
+    self.navNames = names;
+    self.navSymbols = symbols;
+    self.navTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    self.navTable.translatesAutoresizingMaskIntoConstraints = NO;
+    self.navTable.backgroundColor = UIColor.clearColor;
+    self.navTable.separatorStyle = UITableViewCellSeparatorStyleNone;
+    self.navTable.showsVerticalScrollIndicator = YES;
+    self.navTable.rowHeight = 40.0;
+    self.navTable.contentInset = UIEdgeInsetsMake(0, 0, 8, 0);
+    self.navTable.dataSource = self;
+    self.navTable.delegate = self;
+    self.navTable.clipsToBounds = YES;
+    [self.sidebar addSubview:self.navTable];
 
     UIView *account = [[UIView alloc] init];
     account.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2386,16 +2433,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [brand.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:18.0],
         [brand.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-18.0],
         [brand.topAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.topAnchor constant:14.0],
-        [navScroll.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:10.0],
-        [navScroll.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-10.0],
-        [navScroll.topAnchor constraintEqualToAnchor:brand.bottomAnchor constant:24.0],
-        [navScroll.bottomAnchor constraintEqualToAnchor:account.topAnchor constant:-10.0],
-        [nav.leadingAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.leadingAnchor],
-        [nav.trailingAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.trailingAnchor],
-        [nav.topAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.topAnchor],
-        [nav.bottomAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.bottomAnchor],
-        [nav.widthAnchor constraintEqualToAnchor:navScroll.frameLayoutGuide.widthAnchor],
-        [nav.heightAnchor constraintEqualToConstant:290.0],
+        [self.navTable.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:10.0],
+        [self.navTable.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-10.0],
+        [self.navTable.topAnchor constraintEqualToAnchor:brand.bottomAnchor constant:20.0],
+        [self.navTable.bottomAnchor constraintEqualToAnchor:account.topAnchor constant:-8.0],
         [account.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:12.0],
         [account.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-12.0],
         [account.bottomAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.bottomAnchor constant:-14.0],
@@ -2464,6 +2505,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
 - (void)showPage:(NSInteger)page {
     self.page = page;
+    if (page >= 0 && page < (NSInteger)self.navNames.count) {
+        [self.navTable selectRowAtIndexPath:[NSIndexPath indexPathForRow:page inSection:0]
+                                  animated:NO scrollPosition:UITableViewScrollPositionNone];
+    }
     for (NSInteger i = 0; i < self.navButtons.count; i++) {
         UIButton *button = self.navButtons[i];
         BOOL selected = i == page;
