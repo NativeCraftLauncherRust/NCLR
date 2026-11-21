@@ -2140,6 +2140,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, strong) UILabel *accountLabel;
 @property (nonatomic, assign) NSInteger page;
 @property (nonatomic, assign) BOOL compactLayout;
+@property (nonatomic, strong) UIScrollView *navScroll;
+@property (nonatomic, strong) UIStackView *navStack;
 @end
 
 @implementation NCLRRootController
@@ -2272,6 +2274,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [self.sidebar addSubview:brand];
 
     UIScrollView *navScroll = [[UIScrollView alloc] init];
+    self.navScroll = navScroll;
     navScroll.translatesAutoresizingMaskIntoConstraints = NO;
     navScroll.backgroundColor = UIColor.clearColor;
     navScroll.showsVerticalScrollIndicator = YES;
@@ -2281,6 +2284,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [self.sidebar addSubview:navScroll];
 
     UIStackView *nav = [[UIStackView alloc] init];
+    self.navStack = nav;
     nav.axis = UILayoutConstraintAxisVertical;
     nav.spacing = 4.0;
     nav.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2357,6 +2361,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [nav.topAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.topAnchor],
         [nav.bottomAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.bottomAnchor],
         [nav.widthAnchor constraintEqualToAnchor:navScroll.frameLayoutGuide.widthAnchor],
+        [nav.heightAnchor constraintEqualToConstant:290.0],
         [account.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:12.0],
         [account.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-12.0],
         [account.bottomAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.bottomAnchor constant:-14.0],
@@ -2401,6 +2406,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     [self updateAdaptiveLayout];
+    if (self.navScroll != nil) {
+        CGFloat navHeight = MAX(290.0, self.navScroll.bounds.size.height);
+        self.navScroll.contentSize = CGSizeMake(MAX(1.0, self.navScroll.bounds.size.width), navHeight);
+    }
     for (CALayer *layer in self.view.layer.sublayers) {
         if ([layer isKindOfClass:[CAGradientLayer class]]) {
             layer.frame = self.view.bounds;
