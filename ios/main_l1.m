@@ -2271,6 +2271,15 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     ]];
     [self.sidebar addSubview:brand];
 
+    UIScrollView *navScroll = [[UIScrollView alloc] init];
+    navScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    navScroll.backgroundColor = UIColor.clearColor;
+    navScroll.showsVerticalScrollIndicator = YES;
+    navScroll.alwaysBounceVertical = YES;
+    navScroll.clipsToBounds = YES;
+    navScroll.contentInset = UIEdgeInsetsMake(0, 0, 8, 0);
+    [self.sidebar addSubview:navScroll];
+
     UIStackView *nav = [[UIStackView alloc] init];
     nav.axis = UILayoutConstraintAxisVertical;
     nav.spacing = 4.0;
@@ -2299,7 +2308,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [buttons addObject:button];
     }
     self.navButtons = buttons;
-    [self.sidebar addSubview:nav];
+    [navScroll addSubview:nav];
 
     UIView *account = [[UIView alloc] init];
     account.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2339,9 +2348,15 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [brand.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:18.0],
         [brand.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-18.0],
         [brand.topAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.topAnchor constant:14.0],
-        [nav.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:10.0],
-        [nav.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-10.0],
-        [nav.topAnchor constraintEqualToAnchor:brand.bottomAnchor constant:24.0],
+        [navScroll.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:10.0],
+        [navScroll.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-10.0],
+        [navScroll.topAnchor constraintEqualToAnchor:brand.bottomAnchor constant:24.0],
+        [navScroll.bottomAnchor constraintEqualToAnchor:account.topAnchor constant:-10.0],
+        [nav.leadingAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.leadingAnchor],
+        [nav.trailingAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.trailingAnchor],
+        [nav.topAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.topAnchor],
+        [nav.bottomAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.bottomAnchor],
+        [nav.widthAnchor constraintEqualToAnchor:navScroll.frameLayoutGuide.widthAnchor],
         [account.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:12.0],
         [account.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-12.0],
         [account.bottomAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.bottomAnchor constant:-14.0],
