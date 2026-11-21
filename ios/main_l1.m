@@ -156,6 +156,7 @@ static void NCLRKeychainWrite(NSString *value) {
         @"attack" : @"MouseLeft",
         @"use" : @"MouseRight",
         @"inventory" : @"E",
+        @"move" : @"移动",
     } mutableCopy];
     self.positions = [@{
         @"forward" : @{ @"x" : @0.13, @"y" : @0.76, @"size" : @0.16 },
@@ -168,6 +169,7 @@ static void NCLRKeychainWrite(NSString *value) {
         @"attack" : @{ @"x" : @0.80, @"y" : @0.62, @"size" : @0.16 },
         @"use" : @{ @"x" : @0.92, @"y" : @0.48, @"size" : @0.16 },
         @"inventory" : @{ @"x" : @0.72, @"y" : @0.95, @"size" : @0.08 },
+        @"move" : @{ @"x" : @0.16, @"y" : @0.78, @"size" : @0.30 },
     } mutableCopy];
     NSData *data = [NSData dataWithContentsOfFile:self.path];
     if (data.length == 0) {
@@ -199,6 +201,12 @@ static void NCLRKeychainWrite(NSString *value) {
             }
         }
     }
+    if (self.bindings[@"move"] == nil) {
+        self.bindings[@"move"] = @"移动";
+    }
+    if (self.positions[@"move"] == nil) {
+        self.positions[@"move"] = @{ @"x" : @0.16, @"y" : @0.78, @"size" : @0.30 };
+    }
 }
 
 - (void)addKey:(NSString *)key label:(NSString *)label {
@@ -221,6 +229,7 @@ static void NCLRKeychainWrite(NSString *value) {
         @"attack" : @{ @"x" : @0.80, @"y" : @0.62, @"size" : @0.16 },
         @"use" : @{ @"x" : @0.92, @"y" : @0.48, @"size" : @0.16 },
         @"inventory" : @{ @"x" : @0.72, @"y" : @0.95, @"size" : @0.08 },
+        @"move" : @{ @"x" : @0.16, @"y" : @0.78, @"size" : @0.30 },
     } mutableCopy];
 }
 
@@ -1357,6 +1366,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, strong) NSMutableDictionary<NSString *, UIButton *> *previewButtons;
 @property (nonatomic, copy) NSString *selectedKey;
 @property (nonatomic, assign) CGPoint dragStartCenter;
+@property (nonatomic, strong) NSLayoutConstraint *previewHeight;
+@property (nonatomic, strong) UIView *previewCard;
+@property (nonatomic, strong) UIButton *canvasClose;
+@property (nonatomic, assign) BOOL canvasFullscreen;
 @end
 
 @interface NCLRSettingsController : NCLRPageController
@@ -1526,7 +1539,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UIButton *addKey = [self button:@"+ 添加触控键" action:@selector(addKeyTapped) primary:NO];
     UIButton *gridButton = [self button:@"网格" action:@selector(toggleGrid) primary:NO];
     UIButton *resetButton = [self button:@"重置布局" action:@selector(resetLayoutTapped) primary:NO];
-    UIStackView *tools = [[UIStackView alloc] initWithArrangedSubviews:@[gridButton, resetButton]];
+    UIButton *fullButton = [self button:@"全屏编辑" action:@selector(toggleCanvas) primary:NO];
+    UIStackView *tools = [[UIStackView alloc] initWithArrangedSubviews:@[gridButton, resetButton, fullButton]];
     tools.axis = UILayoutConstraintAxisHorizontal;
     tools.spacing = 8.0;
     tools.distribution = UIStackViewDistributionFillEqually;
@@ -1559,13 +1573,23 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                                 size:10.0 weight:UIFontWeightRegular
                                color:NCLRColor(0.62, 0.62, 0.62, 1.0)];
     [previewCard addSubview:self.selectionInfo];
+    self.previewCard = previewCard;
+    self.previewHeight = [self.preview.heightAnchor constraintEqualToConstant:200.0];
+    self.canvasClose = [self button:@"退出全屏" action:@selector(toggleCanvas) primary:NO];
+    self.canvasClose.hidden = YES;
+    [self.view addSubview:self.canvasClose];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.canvasClose.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-16.0],
+        [self.canvasClose.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:12.0],
+        [self.canvasClose.widthAnchor constraintEqualToConstant:104.0],
+    ]];
     [NSLayoutConstraint activateConstraints:@[
         [previewLabel.leadingAnchor constraintEqualToAnchor:previewCard.leadingAnchor constant:16.0],
         [previewLabel.topAnchor constraintEqualToAnchor:previewCard.topAnchor constant:12.0],
         [self.preview.leadingAnchor constraintEqualToAnchor:previewCard.leadingAnchor constant:12.0],
         [self.preview.trailingAnchor constraintEqualToAnchor:previewCard.trailingAnchor constant:-12.0],
         [self.preview.topAnchor constraintEqualToAnchor:previewLabel.bottomAnchor constant:8.0],
-        [self.preview.heightAnchor constraintEqualToConstant:200.0],
+        self.previewHeight,
         [self.selectionInfo.leadingAnchor constraintEqualToAnchor:self.preview.leadingAnchor],
         [self.selectionInfo.trailingAnchor constraintEqualToAnchor:self.preview.trailingAnchor],
         [self.selectionInfo.topAnchor constraintEqualToAnchor:self.preview.bottomAnchor constant:6.0],
@@ -1598,13 +1622,38 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [self.preview addSubview:self.resizeHandle];
 
     for (NSString *key in NCLRKeymap.shared.bindings) {
+        if ([key isEqualToString:@"forward"] || [key isEqualToString:@"back"] ||
+            [key isEqualToString:@"left"] || [key isEqualToString:@"right"]) {
+            continue;
+        }
         UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
         button.accessibilityIdentifier = key;
-        [button setTitle:NCLRKeymap.shared.bindings[key] forState:UIControlStateNormal];
-        [button setTitleColor:NCLRColor(0.04, 0.04, 0.04, 1.0) forState:UIControlStateNormal];
-        button.titleLabel.font = [UIFont monospacedSystemFontOfSize:11.0 weight:UIFontWeightBold];
-        button.backgroundColor = NCLRColor(0.95, 0.95, 0.95, 0.86);
-        button.layer.cornerRadius = 8.0;
+        BOOL move = [key isEqualToString:@"move"];
+        if (move) {
+            [button setTitle:nil forState:UIControlStateNormal];
+            button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.08];
+            button.layer.borderWidth = 2.0;
+            button.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.35].CGColor;
+            UIView *knob = [[UIView alloc] initWithFrame:CGRectZero];
+            knob.tag = 991;
+            knob.userInteractionEnabled = NO;
+            knob.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.30];
+            knob.layer.cornerRadius = 8.0;
+            [button addSubview:knob];
+            UILabel *caption = [self label:@"移动" size:9.0 weight:UIFontWeightSemibold
+                                         color:NCLRColor(0.92, 0.92, 0.92, 1.0)];
+            caption.tag = 992;
+            caption.textAlignment = NSTextAlignmentCenter;
+            caption.userInteractionEnabled = NO;
+            caption.translatesAutoresizingMaskIntoConstraints = YES;
+            [button addSubview:caption];
+        } else {
+            [button setTitle:NCLRKeymap.shared.bindings[key] forState:UIControlStateNormal];
+            [button setTitleColor:NCLRColor(0.04, 0.04, 0.04, 1.0) forState:UIControlStateNormal];
+            button.titleLabel.font = [UIFont monospacedSystemFontOfSize:11.0 weight:UIFontWeightBold];
+            button.backgroundColor = NCLRColor(0.95, 0.95, 0.95, 0.86);
+            button.layer.cornerRadius = 8.0;
+        }
         [button addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self
                                                                             action:@selector(dragKey:)]];
         [button addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self
@@ -1616,10 +1665,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [self.preview bringSubviewToFront:self.resizeHandle];
     [self.stack addArrangedSubview:previewCard];
 
-    NSArray<NSString *> *names = @[@"前进", @"后退", @"左移", @"右移", @"跳跃",
-                                   @"潜行", @"冲刺", @"攻击", @"使用", @"背包"];
-    NSArray<NSString *> *keys = @[@"forward", @"back", @"left", @"right", @"jump",
-                                  @"sneak", @"sprint", @"attack", @"use", @"inventory"];
+    NSArray<NSString *> *names = @[@"移动摇杆", @"跳跃", @"潜行", @"冲刺", @"攻击",
+                                   @"使用", @"背包"];
+    NSArray<NSString *> *keys = @[@"move", @"jump", @"sneak", @"sprint", @"attack",
+                                  @"use", @"inventory"];
     for (NSInteger i = 0; i < names.count; i++) {
         UIView *card = [self card];
         UILabel *name = [self label:names[i] size:13.0 weight:UIFontWeightSemibold
@@ -1696,8 +1745,19 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                                   size, size);
         button.titleLabel.font = [UIFont monospacedSystemFontOfSize:MAX(9.0, 11.0 * NCLRKeymap.shared.buttonSize)
                                                               weight:UIFontWeightBold];
-        button.layer.borderWidth = [key isEqualToString:self.selectedKey] ? 2.0 : 0.0;
-        button.layer.borderColor = [UIColor colorWithWhite:0.05 alpha:0.8].CGColor;
+        BOOL move = [key isEqualToString:@"move"];
+        button.layer.cornerRadius = move ? size / 2.0 : 8.0;
+        button.layer.borderWidth = move ? 2.0 : ([key isEqualToString:self.selectedKey] ? 2.0 : 0.0);
+        button.layer.borderColor = (move ? [UIColor colorWithWhite:1.0 alpha:0.35]
+                                         : [UIColor colorWithWhite:0.05 alpha:0.8]).CGColor;
+        UIView *knob = [button viewWithTag:991];
+        UILabel *caption = (UILabel *)[button viewWithTag:992];
+        if (move) {
+            CGFloat knobSize = MAX(18.0, size * 0.42);
+            knob.frame = CGRectMake((size - knobSize) / 2.0, (size - knobSize) / 2.0 - 4.0, knobSize, knobSize);
+            knob.layer.cornerRadius = knobSize / 2.0;
+            caption.frame = CGRectMake(0.0, size - 18.0, size, 14.0);
+        }
     }
     [self updateSelection];
 }
@@ -1828,10 +1888,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 }
 
 - (void)editKey:(UIButton *)sender {
-    NSArray<NSString *> *keys = @[@"forward", @"back", @"left", @"right", @"jump",
-                                  @"sneak", @"sprint", @"attack", @"use", @"inventory"];
-    NSArray<NSString *> *names = @[@"前进", @"后退", @"左移", @"右移", @"跳跃",
-                                   @"潜行", @"冲刺", @"攻击", @"使用", @"背包"];
+    NSArray<NSString *> *keys = @[@"move", @"jump", @"sneak", @"sprint", @"attack",
+                                  @"use", @"inventory"];
+    NSArray<NSString *> *names = @[@"移动摇杆", @"跳跃", @"潜行", @"冲刺", @"攻击",
+                                   @"使用", @"背包"];
     if (sender.tag < 0 || sender.tag >= (NSInteger)keys.count) {
         return;
     }
@@ -1855,6 +1915,37 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
             }
         }]];
     [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    [UIView performWithoutAnimation:^{
+        CGFloat height = self.view.bounds.size.height;
+        self.previewHeight.constant = self.canvasFullscreen ? MAX(300.0, height - 100.0)
+                                                            : MAX(300.0, MIN(640.0, height * 0.58));
+        [self.view layoutIfNeeded];
+    }];
+}
+
+- (BOOL)prefersStatusBarHidden {
+    return YES;
+}
+
+- (BOOL)prefersHomeIndicatorAutoHidden {
+    return YES;
+}
+
+- (void)toggleCanvas {
+    self.canvasFullscreen = !self.canvasFullscreen;
+    for (UIView *view in self.stack.arrangedSubviews) {
+        view.hidden = self.canvasFullscreen && view != self.previewCard;
+    }
+    self.canvasClose.hidden = !self.canvasFullscreen;
+    self.previewHeight.constant = self.canvasFullscreen
+        ? MAX(300.0, self.view.bounds.size.height - 100.0)
+        : MAX(300.0, MIN(640.0, self.view.bounds.size.height * 0.58));
+    [self.view setNeedsLayout];
+    [self.view layoutIfNeeded];
 }
 
 - (void)saveKeymap {
@@ -1974,7 +2065,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
     UIView *brand = [[UIView alloc] init];
     brand.translatesAutoresizingMaskIntoConstraints = NO;
-    UIImage *brandImage = [UIImage imageNamed:@"BrandIcon"];
+    UIImage *brandImage = [UIImage imageNamed:@"BrandIcon.jpg"] ?: [UIImage imageNamed:@"BrandIcon"];
     UIView *mark = nil;
     if (brandImage != nil) {
         UIImageView *logo = [[UIImageView alloc] initWithImage:brandImage];
@@ -2006,8 +2097,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [NSLayoutConstraint activateConstraints:@[
         [mark.leadingAnchor constraintEqualToAnchor:brand.leadingAnchor],
         [mark.topAnchor constraintEqualToAnchor:brand.topAnchor],
-        [mark.widthAnchor constraintEqualToConstant:42.0],
-        [mark.heightAnchor constraintEqualToConstant:42.0],
+        [mark.widthAnchor constraintEqualToConstant:34.0],
+        [mark.heightAnchor constraintEqualToConstant:34.0],
         [title.leadingAnchor constraintEqualToAnchor:mark.trailingAnchor constant:10.0],
         [title.topAnchor constraintEqualToAnchor:mark.topAnchor constant:1.0],
         [subtitle.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],

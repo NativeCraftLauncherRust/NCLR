@@ -241,11 +241,15 @@ impl Inner {
     }
 
     pub fn inner_size(&self) -> PhysicalSize<u32> {
+        // The engine's surface, HUD and touch hit-testing all use this size.
+        // Returning the safe area here while the CAMetalLayer covers the whole
+        // screen made the swapchain a different aspect ratio from the layer
+        // (the picture was stretched) and put every touch on the wrong pixel.
         let scale_factor = self.scale_factor();
-        let safe_area = self.safe_area_screen_space();
+        let screen_frame = self.screen_frame();
         let size = LogicalSize {
-            width: safe_area.size.width as f64,
-            height: safe_area.size.height as f64,
+            width: screen_frame.size.width as f64,
+            height: screen_frame.size.height as f64,
         };
         size.to_physical(scale_factor)
     }
