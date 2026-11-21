@@ -1,14 +1,14 @@
-# NCLR L1.1 · 单 App：点开始后才启动引擎
+# NCLR L2 · 单 App：点开始后才启动引擎
 
 作者：**ZRXMAXLNX**、**可心**  
 平台：iOS 15+ / arm64 / 横屏  
-版本：**L1.1** 开发者测试版
+版本：**L2** 开发者测试版
 
 ---
 
 ## 1. 单 App 方案
 
-L1.1 现在是一个 IPA / 一个 App：
+L2 现在是一个 IPA / 一个 App：
 
 - 启动时由启动器自己持有 `UIApplicationMain`；
 - 引擎**不会**在启动器显示时预启动；
@@ -21,7 +21,7 @@ L1.1 现在是一个 IPA / 一个 App：
 - 不再需要退出重开才能进游戏；
 - 引擎不是后台预启动，而是点击之后才开始初始化。
 
-iOS 的 winit 原本强制自己调用 `UIApplicationMain`；L1.1 给 winit 增加了 late-start 路径：
+iOS 的 winit 原本强制自己调用 `UIApplicationMain`；L2 给 winit 增加了 late-start 路径：
 `UIApplication` 已存在时，重放 launch transition、发送 `Resumed`，再用主 run loop 驱动引擎，不再第二次
 `UIApplicationMain`。
 
@@ -72,12 +72,12 @@ JSON 包含：
 
 | 文件 | 大小 | SHA-256 |
 |---|---:|---|
-| `NCLR-L1.1-signed.ipa` | 105,375,661 B | `1560287C…5D4A28F` |
-| `NCLR-L1.1-unsigned.ipa` | 105,246,288 B | `2C7DF82D…51439C` |
+| `NCLR-L2-signed.ipa` | 105,393,251 B | `989D5036…0469CD` |
+| `NCLR-L2-unsigned.ipa` | 105,264,128 B | `B3328111…9D061251` |
 
 - 已签名包：Bundle ID `app.badger212.aries5602`，只绑定 UDID 以 `0E7A401E` 结尾的设备；
 - 未签名包：Bundle ID `dev.zrxmaxlnx.nclr`；
-- 版本：`L1`（CFBundleShortVersionString `1.1`，CFBundleVersion `202611211205`）；
+- 版本：`L2`（CFBundleShortVersionString `2.0`，CFBundleVersion `202611212110`）；
 - 包内引擎：Horizon 26.3 / route3 iOS 静态库（含 Metal 修复）；
 - 包内资源：完整 `horizon-client/26.3`。
 
