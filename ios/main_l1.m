@@ -2225,10 +2225,29 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
         button.tag = i;
         button.translatesAutoresizingMaskIntoConstraints = NO;
-        button.titleLabel.font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightSemibold];
-        [button setTitle:compactNames[i] forState:UIControlStateNormal];
-        [button setTitleColor:NCLRColor(0.94, 0.94, 0.94, 1.0) forState:UIControlStateNormal];
-        button.layer.cornerRadius = 8.0;
+        button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.035];
+        button.layer.cornerRadius = 9.0;
+        UIImageView *navIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbols[i]]];
+        navIcon.tag = 101;
+        navIcon.translatesAutoresizingMaskIntoConstraints = NO;
+        navIcon.contentMode = UIViewContentModeScaleAspectFit;
+        navIcon.tintColor = NCLRColor(0.92, 0.92, 0.92, 1.0);
+        UILabel *navLabel = [self label:names[i] size:13.0 weight:UIFontWeightSemibold
+                                  color:NCLRColor(0.92, 0.92, 0.92, 1.0)];
+        navLabel.tag = 100;
+        navLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        [button addSubview:navIcon];
+        [button addSubview:navLabel];
+        [NSLayoutConstraint activateConstraints:@[
+            [navIcon.leadingAnchor constraintEqualToAnchor:button.leadingAnchor constant:13.0],
+            [navIcon.centerYAnchor constraintEqualToAnchor:button.centerYAnchor],
+            [navIcon.widthAnchor constraintEqualToConstant:18.0],
+            [navIcon.heightAnchor constraintEqualToConstant:18.0],
+            [navLabel.leadingAnchor constraintEqualToAnchor:navIcon.trailingAnchor constant:9.0],
+            [navLabel.trailingAnchor constraintEqualToAnchor:button.trailingAnchor constant:-8.0],
+            [navLabel.centerYAnchor constraintEqualToAnchor:button.centerYAnchor],
+        ]];
+        [button.heightAnchor constraintEqualToConstant:32.0].active = YES;
         [button addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
         [compactNav addArrangedSubview:button];
         [compact addObject:button];
@@ -2521,12 +2540,14 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     for (NSInteger i = 0; i < self.navButtons.count; i++) {
         UIButton *button = self.navButtons[i];
         BOOL selected = i == page;
-        UIButtonConfiguration *cfg = button.configuration;
-        cfg.baseForegroundColor = selected ? NCLRColor(0.08, 0.08, 0.08, 1.0)
-                                            : NCLRColor(0.92, 0.92, 0.92, 1.0);
-        cfg.background.backgroundColor = selected ? NCLRColor(0.96, 0.96, 0.96, 1.0)
-                                                  : [UIColor colorWithWhite:1.0 alpha:0.035];
-        button.configuration = cfg;
+        button.backgroundColor = selected ? NCLRColor(0.96, 0.96, 0.96, 1.0)
+                                          : [UIColor colorWithWhite:1.0 alpha:0.035];
+        UIImageView *icon = [button viewWithTag:101];
+        UILabel *label = [button viewWithTag:100];
+        UIColor *fg = selected ? NCLRColor(0.06, 0.06, 0.06, 1.0)
+                               : NCLRColor(0.92, 0.92, 0.92, 1.0);
+        icon.tintColor = fg;
+        label.textColor = fg;
         button.alpha = selected ? 1.0 : 0.82;
     }
     for (NSInteger i = 0; i < self.compactButtons.count; i++) {
