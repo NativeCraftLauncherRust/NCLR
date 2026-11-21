@@ -72,12 +72,12 @@ JSON 包含：
 
 | 文件 | 大小 | SHA-256 |
 |---|---:|---|
-| `NCLR-L1.1-signed.ipa` | 105,135,394 B | `2830DEE1…33562B` |
-| `NCLR-L1.1-unsigned.ipa` | 105,005,239 B | `4B84C1F2…91AD2` |
+| `NCLR-L1.1-signed.ipa` | 105,375,661 B | `1560287C…5D4A28F` |
+| `NCLR-L1.1-unsigned.ipa` | 105,246,288 B | `2C7DF82D…51439C` |
 
 - 已签名包：Bundle ID `app.badger212.aries5602`，只绑定 UDID 以 `0E7A401E` 结尾的设备；
 - 未签名包：Bundle ID `dev.zrxmaxlnx.nclr`；
-- 版本：`L1`（CFBundleShortVersionString `1.1`，CFBundleVersion `202611210952`）；
+- 版本：`L1`（CFBundleShortVersionString `1.1`，CFBundleVersion `202611211205`）；
 - 包内引擎：Horizon 26.3 / route3 iOS 静态库（含 Metal 修复）；
 - 包内资源：完整 `horizon-client/26.3`。
 

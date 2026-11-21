@@ -19,7 +19,7 @@
                 <key>bundle-identifier</key>
                 <string>app.badger212.aries5602</string>
                 <key>bundle-version</key>
-                <string>202611210952</string>
+                <string>202611211205</string>
                 <key>kind</key>
                 <string>software</string>
                 <key>title</key>
@@ -29,6 +29,7 @@
     </array>
 </dict>
 </plist>
+
 
 
 
