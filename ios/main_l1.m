@@ -859,27 +859,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         ]];
         [titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:button.leadingAnchor constant:-12.0].active = YES;
     } else {
-        UIImage *gameIcon = [UIImage imageNamed:@"GameIcon"] ?: [UIImage imageNamed:@"AppIcon60x60"];
-        if (gameIcon != nil) {
-            UIImageView *icon = [[UIImageView alloc] initWithImage:gameIcon];
-            icon.translatesAutoresizingMaskIntoConstraints = NO;
-            icon.contentMode = UIViewContentModeScaleAspectFill;
-            icon.layer.cornerRadius = 10.0;
-            icon.layer.masksToBounds = YES;
-            icon.layer.borderWidth = 1.0;
-            icon.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.16].CGColor;
-            [header addSubview:icon];
-            [NSLayoutConstraint activateConstraints:@[
-                [icon.trailingAnchor constraintEqualToAnchor:header.trailingAnchor],
-                [icon.topAnchor constraintEqualToAnchor:header.topAnchor],
-                [icon.widthAnchor constraintEqualToConstant:38.0],
-                [icon.heightAnchor constraintEqualToConstant:38.0],
-                [titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:icon.leadingAnchor constant:-12.0],
-                [subtitleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:icon.leadingAnchor constant:-12.0],
-            ]];
-        } else {
-            [titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:header.trailingAnchor].active = YES;
-        }
+        [titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:header.trailingAnchor].active = YES;
     }
     return header;
 }
@@ -1994,11 +1974,23 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
     UIView *brand = [[UIView alloc] init];
     brand.translatesAutoresizingMaskIntoConstraints = NO;
-    UILabel *mark = [self label:@"N" size:24.0 weight:UIFontWeightHeavy
-                          color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
-    mark.textAlignment = NSTextAlignmentCenter;
-    mark.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.055];
-    mark.layer.cornerRadius = 12.0;
+    UIImage *brandImage = [UIImage imageNamed:@"BrandIcon"];
+    UIView *mark = nil;
+    if (brandImage != nil) {
+        UIImageView *logo = [[UIImageView alloc] initWithImage:brandImage];
+        logo.contentMode = UIViewContentModeScaleAspectFit;
+        logo.backgroundColor = UIColor.clearColor;
+        mark = logo;
+    } else {
+        UILabel *fallback = [self label:@"N" size:24.0 weight:UIFontWeightHeavy
+                                   color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
+        fallback.textAlignment = NSTextAlignmentCenter;
+        fallback.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.055];
+        fallback.layer.cornerRadius = 12.0;
+        fallback.layer.masksToBounds = YES;
+        mark = fallback;
+    }
+    mark.layer.cornerRadius = 10.0;
     mark.layer.masksToBounds = YES;
     mark.translatesAutoresizingMaskIntoConstraints = NO;
     UILabel *title = [self label:@"NCLR" size:22.0 weight:UIFontWeightBold
