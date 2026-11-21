@@ -1051,7 +1051,39 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [self.stack addArrangedSubview:activity];
 }
 
+- (void)writePerformanceOptions {
+    NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"options.txt"];
+    NSMutableArray<NSString *> *lines = [[[NSString stringWithContentsOfFile:path
+                                                                  encoding:NSUTF8StringEncoding
+                                                                     error:nil]
+        componentsSeparatedByString:@"\n"] mutableCopy] ?: [NSMutableArray array];
+    NSDictionary<NSString *, NSString *> *wanted = @{
+        @"maxFps" : @"260",
+        @"batteryMode" : @"false",
+        @"enableVsync" : @"true",
+    };
+    for (NSString *key in wanted) {
+        NSString *prefix = [key stringByAppendingString:@":"];
+        NSInteger found = -1;
+        for (NSInteger i = 0; i < (NSInteger)lines.count; i++) {
+            if ([lines[i] hasPrefix:prefix]) {
+                found = i;
+                break;
+            }
+        }
+        NSString *line = [prefix stringByAppendingString:wanted[key]];
+        if (found >= 0) {
+            lines[found] = line;
+        } else {
+            [lines addObject:line];
+        }
+    }
+    [[lines componentsJoinedByString:@"\n"] writeToFile:path atomically:YES
+                                                encoding:NSUTF8StringEncoding error:nil];
+}
+
 - (void)launchTapped {
+    [self writePerformanceOptions];
     NSString *resources = [[[NSBundle mainBundle] resourcePath]
         stringByAppendingPathComponent:@"horizon-client/26.3"];
     if (![[NSFileManager defaultManager] fileExistsAtPath:
@@ -2142,6 +2174,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, assign) BOOL compactLayout;
 @property (nonatomic, strong) UIScrollView *navScroll;
 @property (nonatomic, strong) UIStackView *navStack;
+@property (nonatomic, strong) NSLayoutConstraint *sidebarWidth;
 @end
 
 @implementation NCLRRootController
@@ -2205,11 +2238,12 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [compactNav.bottomAnchor constraintEqualToAnchor:self.compactBar.bottomAnchor constant:-5.0],
     ]];
 
+    self.sidebarWidth = [self.sidebar.widthAnchor constraintEqualToConstant:228.0];
     self.regularConstraints = @[
         [self.sidebar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.sidebar.topAnchor constraintEqualToAnchor:self.view.topAnchor],
         [self.sidebar.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-        [self.sidebar.widthAnchor constraintEqualToConstant:228.0],
+        self.sidebarWidth,
         [self.content.leadingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor],
         [self.content.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.content.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
@@ -2391,11 +2425,14 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         return;
     }
     self.compactLayout = compact;
-    [NSLayoutConstraint deactivateConstraints:self.regularConstraints];
+    // Keep the left navigation on every width: the compact top bar made the
+    // pages disappear on narrow phones. The sidebar just gets narrower, and
+    // its own scroll view holds the page buttons.
     [NSLayoutConstraint deactivateConstraints:self.compactConstraints];
-    [NSLayoutConstraint activateConstraints:compact ? self.compactConstraints : self.regularConstraints];
-    self.sidebar.hidden = compact;
-    self.compactBar.hidden = !compact;
+    [NSLayoutConstraint activateConstraints:self.regularConstraints];
+    self.sidebarWidth.constant = compact ? 156.0 : 228.0;
+    self.sidebar.hidden = NO;
+    self.compactBar.hidden = YES;
 }
 
 - (void)viewSafeAreaInsetsDidChange {
