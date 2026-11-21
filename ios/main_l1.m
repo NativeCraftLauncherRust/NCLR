@@ -2323,7 +2323,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UIStackView *nav = [[UIStackView alloc] init];
     self.navStack = nav;
     nav.axis = UILayoutConstraintAxisVertical;
-    nav.spacing = 4.0;
+    nav.spacing = 2.0;
     nav.translatesAutoresizingMaskIntoConstraints = NO;
     NSArray *names = @[@"主页", @"版本", @"模组", @"光影", @"资源包", @"账号", @"设置"];
     NSArray *symbols = @[@"house.fill", @"square.stack.3d.up.fill", @"puzzlepiece.extension.fill",
@@ -2334,15 +2334,23 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
         button.tag = i;
         button.translatesAutoresizingMaskIntoConstraints = NO;
-        button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-        button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
-        [button setTitle:names[i] forState:UIControlStateNormal];
-        button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
-        button.titleLabel.lineBreakMode = NSLineBreakByClipping;
-        button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-        button.contentEdgeInsets = UIEdgeInsetsMake(0, 16, 0, 8);
-        button.layer.cornerRadius = 9.0;
-        [button.heightAnchor constraintEqualToConstant:30.0].active = YES;
+        UIButtonConfiguration *cfg = [UIButtonConfiguration plainButtonConfiguration];
+        cfg.title = names[i];
+        cfg.image = [UIImage systemImageNamed:symbols[i]];
+        cfg.imagePadding = 10.0;
+        cfg.contentInsets = NSDirectionalEdgeInsetsMake(0, 13, 0, 8);
+        cfg.baseForegroundColor = NCLRColor(0.92, 0.92, 0.92, 1.0);
+        cfg.background.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.035];
+        cfg.background.cornerRadius = 9.0;
+        cfg.titleTextAttributesTransformer = ^NSAttributedString *(NSAttributedString *incoming) {
+            NSMutableAttributedString *out = [incoming mutableCopy];
+            [out addAttribute:NSFontAttributeName
+                        value:[UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold]
+                        range:NSMakeRange(0, out.length)];
+            return out;
+        };
+        button.configuration = cfg;
+        [button.heightAnchor constraintEqualToConstant:32.0].active = YES;
         [button addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
         [nav addArrangedSubview:button];
         [buttons addObject:button];
@@ -2457,7 +2465,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [super viewDidLayoutSubviews];
     [self updateAdaptiveLayout];
     if (self.navScroll != nil) {
-        CGFloat navHeight = MAX(222.0, self.navScroll.bounds.size.height);
+        CGFloat navHeight = MAX(236.0, self.navScroll.bounds.size.height);
         self.navScroll.contentSize = CGSizeMake(MAX(1.0, self.navScroll.bounds.size.width), navHeight);
     }
     for (CALayer *layer in self.view.layer.sublayers) {
@@ -2513,8 +2521,13 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     for (NSInteger i = 0; i < self.navButtons.count; i++) {
         UIButton *button = self.navButtons[i];
         BOOL selected = i == page;
-        button.backgroundColor = selected ? [UIColor colorWithWhite:1.0 alpha:0.075] : UIColor.clearColor;
-        button.alpha = selected ? 1.0 : 0.72;
+        UIButtonConfiguration *cfg = button.configuration;
+        cfg.baseForegroundColor = selected ? NCLRColor(0.08, 0.08, 0.08, 1.0)
+                                            : NCLRColor(0.92, 0.92, 0.92, 1.0);
+        cfg.background.backgroundColor = selected ? NCLRColor(0.96, 0.96, 0.96, 1.0)
+                                                  : [UIColor colorWithWhite:1.0 alpha:0.035];
+        button.configuration = cfg;
+        button.alpha = selected ? 1.0 : 0.82;
     }
     for (NSInteger i = 0; i < self.compactButtons.count; i++) {
         UIButton *button = self.compactButtons[i];

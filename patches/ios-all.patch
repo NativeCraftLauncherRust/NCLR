@@ -295,6 +295,26 @@ index f2d3b3a..4acedae 100644
          wgpu::Backends::GL => "OpenGL",
          _ => "graphics",
      }
+diff --git a/crates/horizon-client-render/src/settings.rs b/crates/horizon-client-render/src/settings.rs
+index 550d63c..c03f913 100644
+--- a/crates/horizon-client-render/src/settings.rs
++++ b/crates/horizon-client-render/src/settings.rs
+@@ -409,6 +409,15 @@ impl Settings {
+                 ..Self::default()
+             },
+         };
++        #[cfg(target_os = "ios")]
++        {
++            // iOS: apply before the loading renderer opens its swapchain, so the
++            // surface is not created with FIFO vsync; the game is uncapped and
++            // does not use Horizon's battery pacing.
++            settings.max_fps = 260;
++            settings.vsync = false;
++            settings.horizon.battery = false;
++        }
+         // Horizon's own key bindings live in horizon-extras.txt, not in options.txt.
+         let emote = settings.extras.emote_key.clone();
+         settings.keys.set("key.emote", &emote);
 diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-client-render/src/touch/draw.rs
 index 9e8d8e4..6ebe901 100644
 --- a/crates/horizon-client-render/src/touch/draw.rs
