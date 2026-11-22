@@ -191,6 +191,9 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *bindings;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *positions;
 @property (nonatomic, assign) CGFloat buttonSize;
+@property (nonatomic, assign) CGFloat opacity;
+@property (nonatomic, copy) NSString *touchMode;
+@property (nonatomic, assign) BOOL dynamicJoystick;
 + (instancetype)shared;
 - (void)load;
 - (void)save;
@@ -227,8 +230,18 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"attack" : @"MouseLeft",
         @"use" : @"MouseRight",
         @"inventory" : @"E",
+        @"chat" : @"T",
+        @"pause" : @"Esc",
+        @"settings" : @"F1",
+        @"debug" : @"F3",
+        @"perspective" : @"F5",
+        @"offhand" : @"F",
+        @"shield" : @"MouseRight",
         @"move" : @"移动",
     } mutableCopy];
+    self.opacity = 0.55;
+    self.touchMode = @"crosshair";
+    self.dynamicJoystick = NO;
     self.positions = [@{
         @"forward" : @{ @"x" : @0.13, @"y" : @0.76, @"size" : @0.16 },
         @"back" : @{ @"x" : @0.24, @"y" : @0.86, @"size" : @0.10 },
@@ -240,6 +253,13 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"attack" : @{ @"x" : @0.80, @"y" : @0.62, @"size" : @0.16 },
         @"use" : @{ @"x" : @0.92, @"y" : @0.48, @"size" : @0.16 },
         @"inventory" : @{ @"x" : @0.72, @"y" : @0.95, @"size" : @0.08 },
+        @"chat" : @{ @"x" : @0.52, @"y" : @0.95, @"size" : @0.08 },
+        @"pause" : @{ @"x" : @0.62, @"y" : @0.06, @"size" : @0.08 },
+        @"settings" : @{ @"x" : @0.72, @"y" : @0.06, @"size" : @0.08 },
+        @"debug" : @{ @"x" : @0.82, @"y" : @0.06, @"size" : @0.07 },
+        @"perspective" : @{ @"x" : @0.92, @"y" : @0.06, @"size" : @0.07 },
+        @"offhand" : @{ @"x" : @0.82, @"y" : @0.88, @"size" : @0.08 },
+        @"shield" : @{ @"x" : @0.88, @"y" : @0.78, @"size" : @0.10 },
         @"move" : @{ @"x" : @0.16, @"y" : @0.78, @"size" : @0.30 },
     } mutableCopy];
     NSData *data = [NSData dataWithContentsOfFile:self.path];
@@ -253,6 +273,18 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     NSNumber *size = json[@"buttonSize"];
     if ([size isKindOfClass:[NSNumber class]]) {
         self.buttonSize = MAX(0.5, MIN(2.0, size.doubleValue));
+    }
+    NSNumber *opacity = json[@"opacity"];
+    if ([opacity isKindOfClass:[NSNumber class]]) {
+        self.opacity = MAX(0.15, MIN(1.0, opacity.doubleValue));
+    }
+    NSString *mode = NCLRString(json[@"touchMode"]);
+    if (mode.length > 0) {
+        self.touchMode = mode;
+    }
+    NSNumber *dynamic = json[@"dynamicJoystick"];
+    if ([dynamic isKindOfClass:[NSNumber class]]) {
+        self.dynamicJoystick = dynamic.boolValue;
     }
     NSDictionary *saved = json[@"bindings"];
     if ([saved isKindOfClass:[NSDictionary class]]) {
@@ -307,6 +339,9 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 - (void)save {
     NSDictionary *json = @{
         @"buttonSize" : @(self.buttonSize),
+        @"opacity" : @(self.opacity),
+        @"touchMode" : self.touchMode ?: @"crosshair",
+        @"dynamicJoystick" : @(self.dynamicJoystick),
         @"bindings" : self.bindings ?: @{},
         @"layout" : self.positions ?: @{},
     };
@@ -1679,6 +1714,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @property (nonatomic, strong) UILabel *sizeValue;
 @property (nonatomic, strong) UIButton *menuToggle;
 @property (nonatomic, strong) UIStackView *sizeRow;
+@property (nonatomic, strong) UISlider *opacitySlider;
+@property (nonatomic, strong) UILabel *opacityValue;
+@property (nonatomic, strong) UISegmentedControl *modeControl;
+@property (nonatomic, strong) UISwitch *dynamicSwitch;
 @property (nonatomic, strong) NSMutableArray<UIButton *> *keyButtons;
 @property (nonatomic, strong) UIView *preview;
 @property (nonatomic, strong) UIView *grid;
@@ -1858,6 +1897,47 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.sizeRow.hidden = YES;
     self.sizeRow.translatesAutoresizingMaskIntoConstraints = NO;
     [self.sizeValue.widthAnchor constraintEqualToConstant:48.0].active = YES;
+
+    UILabel *opacityLabel = [self label:@"按钮透明度" size:12.0 weight:UIFontWeightSemibold
+                                  color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
+    self.opacitySlider = [[UISlider alloc] init];
+    self.opacitySlider.translatesAutoresizingMaskIntoConstraints = NO;
+    self.opacitySlider.minimumValue = 0.15f;
+    self.opacitySlider.maximumValue = 1.0f;
+    self.opacitySlider.value = NCLRKeymap.shared.opacity;
+    self.opacitySlider.minimumTrackTintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
+    [self.opacitySlider addTarget:self action:@selector(opacityChanged:)
+                 forControlEvents:UIControlEventValueChanged];
+    self.opacityValue = [self label:[NSString stringWithFormat:@"%.0f%%", NCLRKeymap.shared.opacity * 100.0]
+                                size:11.0 weight:UIFontWeightSemibold
+                               color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
+    self.opacityValue.textAlignment = NSTextAlignmentRight;
+    UIStackView *opacityRow = [[UIStackView alloc] initWithArrangedSubviews:
+        @[opacityLabel, self.opacitySlider, self.opacityValue]];
+    opacityRow.axis = UILayoutConstraintAxisHorizontal;
+    opacityRow.spacing = 10.0;
+    opacityRow.alignment = UIStackViewAlignmentCenter;
+    opacityRow.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.opacityValue.widthAnchor constraintEqualToConstant:48.0].active = YES;
+
+    self.modeControl = [[UISegmentedControl alloc] initWithItems:
+        @[@"摇杆 + 准星", @"摇杆 + 点按", @"方向键"]];
+    NSInteger modeIndex = [@[@"crosshair", @"tap", @"dpad"] indexOfObject:NCLRKeymap.shared.touchMode];
+    self.modeControl.selectedSegmentIndex = modeIndex == NSNotFound ? 0 : modeIndex;
+    [self.modeControl addTarget:self action:@selector(modeChanged:)
+               forControlEvents:UIControlEventValueChanged];
+
+    UILabel *dynamicLabel = [self label:@"动态摇杆" size:12.0 weight:UIFontWeightSemibold
+                                  color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
+    self.dynamicSwitch = [[UISwitch alloc] init];
+    self.dynamicSwitch.on = NCLRKeymap.shared.dynamicJoystick;
+    [self.dynamicSwitch addTarget:self action:@selector(dynamicChanged:)
+                 forControlEvents:UIControlEventValueChanged];
+    UIView *dynamicSpacer = [[UIView alloc] init];
+    UIStackView *dynamicRow = [[UIStackView alloc] initWithArrangedSubviews:
+        @[dynamicLabel, dynamicSpacer, self.dynamicSwitch]];
+    dynamicRow.axis = UILayoutConstraintAxisHorizontal;
+    dynamicRow.alignment = UIStackViewAlignmentCenter;
     UIButton *addKey = [self button:@"+ 添加触控键" action:@selector(addKeyTapped) primary:NO];
     UIButton *gridButton = [self button:@"网格" action:@selector(toggleGrid) primary:NO];
     UIButton *resetButton = [self button:@"重置布局" action:@selector(resetLayoutTapped) primary:NO];
@@ -1867,7 +1947,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     tools.spacing = 8.0;
     tools.distribution = UIStackViewDistributionFillEqually;
     UIStackView *menuStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.menuToggle, self.sizeRow, addKey, tools]];
+        @[self.menuToggle, self.sizeRow, opacityRow, self.modeControl, dynamicRow, addKey, tools]];
     menuStack.axis = UILayoutConstraintAxisVertical;
     menuStack.spacing = 8.0;
     menuStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1988,9 +2068,11 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [self.stack addArrangedSubview:previewCard];
 
     NSArray<NSString *> *names = @[@"移动摇杆", @"跳跃", @"潜行", @"冲刺", @"攻击",
-                                   @"使用", @"背包"];
+                                   @"使用", @"背包", @"聊天", @"暂停", @"触控设置",
+                                   @"调试", @"视角", @"副手", @"盾牌"];
     NSArray<NSString *> *keys = @[@"move", @"jump", @"sneak", @"sprint", @"attack",
-                                  @"use", @"inventory"];
+                                  @"use", @"inventory", @"chat", @"pause", @"settings",
+                                  @"debug", @"perspective", @"offhand", @"shield"];
     for (NSInteger i = 0; i < names.count; i++) {
         UIView *card = [self card];
         UILabel *name = [self label:names[i] size:13.0 weight:UIFontWeightSemibold
@@ -2178,6 +2260,16 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [self.view setNeedsLayout];
 }
 
+- (void)opacityChanged:(UISlider *)slider {
+    self.opacityValue.text = [NSString stringWithFormat:@"%.0f%%", slider.value * 100.0];
+}
+
+- (void)modeChanged:(UISegmentedControl *)control {
+}
+
+- (void)dynamicChanged:(UISwitch *)sender {
+}
+
 - (void)addKeyTapped {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"添加按键"
                                                                    message:@"输入按键标识和显示文本，例如 fly / 飞行"
@@ -2213,7 +2305,8 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     NSArray<NSString *> *keys = @[@"move", @"jump", @"sneak", @"sprint", @"attack",
                                   @"use", @"inventory"];
     NSArray<NSString *> *names = @[@"移动摇杆", @"跳跃", @"潜行", @"冲刺", @"攻击",
-                                   @"使用", @"背包"];
+                                   @"使用", @"背包", @"聊天", @"暂停", @"触控设置",
+                                   @"调试", @"视角", @"副手", @"盾牌"];
     if (sender.tag < 0 || sender.tag >= (NSInteger)keys.count) {
         return;
     }
@@ -2272,6 +2365,9 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (void)saveKeymap {
     NCLRKeymap.shared.buttonSize = self.sizeSlider.value;
+    NCLRKeymap.shared.opacity = self.opacitySlider.value;
+    NCLRKeymap.shared.touchMode = @[@"crosshair", @"tap", @"dpad"][MAX(0, self.modeControl.selectedSegmentIndex)];
+    NCLRKeymap.shared.dynamicJoystick = self.dynamicSwitch.on;
     [NCLRKeymap.shared save];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存"
                                                                    message:[NSString stringWithFormat:
