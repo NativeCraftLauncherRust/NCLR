@@ -2232,7 +2232,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
         button.titleLabel.lineBreakMode = NSLineBreakByClipping;
         NSArray *glyphs = @[@"⌂", @"▤", @"⧉", @"☀", @"▦", @"●", @"⚙"];
-        [button setTitle:[NSString stringWithFormat:@"%@  %@", glyphs[i], names[i]]
+        [button setTitle:[NSString stringWithFormat:@"%@  %@", glyphs[i], compactNames[i]]
                 forState:UIControlStateNormal];
         [button setTitleColor:NCLRColor(0.92, 0.92, 0.92, 1.0) forState:UIControlStateNormal];
         [button.heightAnchor constraintEqualToConstant:32.0].active = YES;
