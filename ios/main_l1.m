@@ -1087,9 +1087,17 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     @try {
         if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) {
             NSNumber *maxFPS = @(UIScreen.mainScreen.maximumFramesPerSecond);
+            id oldMax = [view.layer valueForKey:@"maximumFramesPerSecond"];
+            id oldSync = [view.layer valueForKey:@"displaySyncEnabled"];
             [view.layer setValue:maxFPS forKey:@"maximumFramesPerSecond"];
             [view.layer setValue:@NO forKey:@"displaySyncEnabled"];
             [view.layer setValue:@NO forKey:@"presentsWithTransaction"];
+            NSString *line = [NSString stringWithFormat:@"view=%@ layer=%@ oldMax=%@ oldSync=%@ screenMax=%ld\n",
+                              NSStringFromClass(view.class), NSStringFromClass(view.layer.class),
+                              oldMax, oldSync, (long)UIScreen.mainScreen.maximumFramesPerSecond];
+            NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"nclr-layer.txt"];
+            FILE *f = fopen(path.UTF8String, "a");
+            if (f) { fputs(line.UTF8String, f); fclose(f); }
         }
     } @catch (NSException *e) { (void)e; }
     for (UIView *sub in view.subviews) [self boostMetalLayers:sub];
@@ -2430,6 +2438,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [brand.leadingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.leadingAnchor constant:18.0],
         [brand.trailingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.trailingAnchor constant:-18.0],
         [brand.topAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.topAnchor constant:14.0],
+        [brand.heightAnchor constraintEqualToConstant:52.0],
         [navScroll.leadingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.leadingAnchor constant:10.0],
         [navScroll.trailingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.trailingAnchor constant:-10.0],
         [navScroll.topAnchor constraintEqualToAnchor:brand.bottomAnchor constant:16.0],
