@@ -113,6 +113,30 @@ static NSString *NCLRModIdentifier(NSString *path) {
     return nil;
 }
 
+
+@interface NCLRFramePump : NSObject
+@end
+
+@implementation NCLRFramePump {
+    NSInteger _ticks;
+}
+
+- (void)fire:(CADisplayLink *)link {
+    _ticks++;
+    if (_ticks % 30 != 0) return;
+    NSMutableString *log = [NSMutableString string];
+    NSArray *windows = nil;
+    @try { windows = [UIApplication.sharedApplication.windows copy]; } @catch (NSException *e) { (void)e; }
+    for (UIWindow *window in windows) NCLRBoostLayerTree(window.layer, log, 0);
+    [log appendFormat:@"displayLink preferred=%ld duration=%.6f timestamp=%.3f screenMax=%ld lowPower=%d\n",
+        (long)link.preferredFramesPerSecond, link.duration, link.timestamp,
+        (long)UIScreen.mainScreen.maximumFramesPerSecond,
+        (int)NSProcessInfo.processInfo.isLowPowerModeEnabled];
+    NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"nclr-layer.txt"];
+    [log writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+@end
+
 static NSString *NCLRModSwitchesPath(void) {
     return [NCLRDocuments() stringByAppendingPathComponent:@"horizon-mods.txt"];
 }
@@ -1200,18 +1224,12 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [launcherWindow resignKeyWindow];
     launcherWindow.hidden = YES;
     NSThread *boostThread = [[NSThread alloc] initWithBlock:^{
-        for (int tick = 0; tick < 40; tick++) {
-            [NSThread sleepForTimeInterval:0.25];
-            @autoreleasepool {
-                NSMutableString *log = [NSMutableString string];
-                NSArray *windows = nil;
-                @try { windows = [UIApplication.sharedApplication.windows copy]; } @catch (NSException *e) { (void)e; }
-                for (UIWindow *window in windows) NCLRBoostLayerTree(window.layer, log, 0);
-                if (log.length > 0) {
-                    NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"nclr-layer.txt"];
-                    [log writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-                }
-            }
+        @autoreleasepool {
+            NCLRFramePump *pump = [[NCLRFramePump alloc] init];
+            CADisplayLink *link = [CADisplayLink displayLinkWithTarget:pump selector:@selector(fire:)];
+            link.preferredFramesPerSecond = 120;
+            [link addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+            [[NSRunLoop currentRunLoop] run];
         }
     }];
     [boostThread start];
