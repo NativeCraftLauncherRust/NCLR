@@ -1709,6 +1709,88 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 }
 @end
 
+@interface NCLRKeyPickerController : UIViewController
+@property (nonatomic, copy) void (^onPick)(NSString *key);
++ (void)presentFrom:(UIViewController *)presenter
+              title:(NSString *)title
+             onPick:(void (^)(NSString *key))onPick;
+@end
+
+@implementation NCLRKeyPickerController
+
++ (void)presentFrom:(UIViewController *)presenter
+              title:(NSString *)title
+             onPick:(void (^)(NSString *key))onPick {
+    NCLRKeyPickerController *picker = [[NCLRKeyPickerController alloc] init];
+    picker.onPick = onPick;
+    picker.title = title;
+    UINavigationController *navigation =
+        [[UINavigationController alloc] initWithRootViewController:picker];
+    navigation.modalPresentationStyle = UIModalPresentationPageSheet;
+    [presenter presentViewController:navigation animated:YES completion:nil];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = NCLRColor(0.04, 0.04, 0.04, 1.0);
+    self.navigationItem.title = self.title.length > 0 ? self.title : @"选择按键";
+    self.navigationItem.rightBarButtonItem =
+        [[UIBarButtonItem alloc] initWithTitle:@"关闭"
+                                         style:UIBarButtonItemStylePlain
+                                        target:self
+                                        action:@selector(close)];
+    NSArray<NSArray<NSString *> *> *rows = @[
+        @[@"Esc", @"1", @"2", @"3", @"4", @"5", @"6", @"7", @"8", @"9"],
+        @[@"Tab", @"Q", @"W", @"E", @"R", @"T", @"Y", @"U", @"I", @"O", @"P"],
+        @[@"Shift", @"A", @"S", @"D", @"F", @"G", @"H", @"J", @"K", @"L"],
+        @[@"Ctrl", @"Z", @"X", @"C", @"V", @"B", @"N", @"M"],
+        @[@"Space", @"F1", @"F3", @"F5", @"F"],
+        @[@"MouseLeft", @"MouseRight", @"MouseMiddle"],
+    ];
+    UIStackView *stack = [[UIStackView alloc] init];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.spacing = 7.0;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:stack];
+    for (NSArray<NSString *> *row in rows) {
+        UIStackView *line = [[UIStackView alloc] init];
+        line.axis = UILayoutConstraintAxisHorizontal;
+        line.spacing = 6.0;
+        line.distribution = UIStackViewDistributionFillEqually;
+        line.translatesAutoresizingMaskIntoConstraints = NO;
+        for (NSString *name in row) {
+            UIButton *key = [UIButton buttonWithType:UIButtonTypeSystem];
+            [key setTitle:name forState:UIControlStateNormal];
+            [key setTitleColor:NCLRColor(0.95, 0.95, 0.95, 1.0) forState:UIControlStateNormal];
+            key.titleLabel.font = [UIFont monospacedSystemFontOfSize:13.0 weight:UIFontWeightSemibold];
+            key.backgroundColor = NCLRColor(0.12, 0.12, 0.12, 1.0);
+            key.layer.cornerRadius = 8.0;
+            key.layer.borderWidth = 1.0;
+            key.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.16].CGColor;
+            [key.heightAnchor constraintEqualToConstant:44.0].active = YES;
+            [key addTarget:self action:@selector(pick:) forControlEvents:UIControlEventTouchUpInside];
+            [line addArrangedSubview:key];
+        }
+        [stack addArrangedSubview:line];
+    }
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12.0],
+        [stack.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12.0],
+        [stack.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:14.0],
+    ]];
+}
+
+- (void)pick:(UIButton *)sender {
+    NSString *key = [sender titleForState:UIControlStateNormal];
+    if (self.onPick != nil) self.onPick(key);
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)close {
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+@end
+
 @interface NCLRKeymapController : NCLRPageController
 @property (nonatomic, strong) UISlider *sizeSlider;
 @property (nonatomic, strong) UILabel *sizeValue;
@@ -1865,6 +1947,8 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 1.0);
+    self.scroll.delaysContentTouches = NO;
+    self.scroll.canCancelContentTouches = YES;
     self.keyButtons = [NSMutableArray array];
     self.previewButtons = [NSMutableDictionary dictionary];
     [self setupPage];
@@ -1881,7 +1965,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.sizeSlider = [[UISlider alloc] init];
     self.sizeSlider.translatesAutoresizingMaskIntoConstraints = NO;
     self.sizeSlider.minimumValue = 0.5f;
-    self.sizeSlider.maximumValue = 2.0f;
+    self.sizeSlider.maximumValue = 2.5f;
     self.sizeSlider.value = NCLRKeymap.shared.buttonSize;
     self.sizeSlider.minimumTrackTintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
     [self.sizeSlider addTarget:self action:@selector(sizeChanged:)
@@ -2122,11 +2206,11 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (void)sizeChanged:(UISlider *)slider {
     self.sizeValue.text = [NSString stringWithFormat:@"%.2fx", slider.value];
+    NCLRKeymap.shared.buttonSize = slider.value;
     for (UIButton *button in self.keyButtons) {
         button.titleLabel.font = [UIFont monospacedSystemFontOfSize:14.0 * slider.value
                                                               weight:UIFontWeightSemibold];
     }
-    [self.preview setNeedsLayout];
     [self.view setNeedsLayout];
 }
 
@@ -2218,15 +2302,18 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     CGFloat cy = self.dragStartCenter.y + translation.y;
     CGFloat x = MAX(0.025, MIN(0.975, cx / self.preview.bounds.size.width));
     CGFloat y = MAX(0.025, MIN(0.975, cy / self.preview.bounds.size.height));
-    x = round(x * 20.0) / 20.0;
-    y = round(y * 20.0) / 20.0;
     NSDictionary *old = NCLRKeymap.shared.positions[key];
     NCLRKeymap.shared.positions[key] = @{
         @"x" : @(x),
         @"y" : @(y),
         @"size" : old[@"size"] ?: @0.12,
     };
-    [self.view setNeedsLayout];
+    button.center = CGPointMake(x * self.preview.bounds.size.width,
+                                y * self.preview.bounds.size.height);
+    if (sender.state == UIGestureRecognizerStateEnded ||
+        sender.state == UIGestureRecognizerStateCancelled) {
+        [self.view setNeedsLayout];
+    }
 }
 
 - (void)resizeKey:(UIPanGestureRecognizer *)sender {
@@ -2241,7 +2328,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     CGFloat distance = hypot(point.x - button.center.x, point.y - button.center.y);
     CGFloat size = MAX(28.0, distance * 2.0);
     CGFloat normalized = size / MAX(1.0, self.preview.bounds.size.height * NCLRKeymap.shared.buttonSize);
-    normalized = MAX(0.06, MIN(0.30, normalized));
+    normalized = MAX(0.045, MIN(0.45, normalized));
     NSDictionary *old = NCLRKeymap.shared.positions[self.selectedKey];
     NCLRKeymap.shared.positions[self.selectedKey] = @{
         @"x" : old[@"x"] ?: @0.5,
@@ -2271,36 +2358,16 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 }
 
 - (void)addKeyTapped {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"添加按键"
-                                                                   message:@"输入按键标识和显示文本，例如 fly / 飞行"
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.placeholder = @"标识，例如 fly";
-        field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    [NCLRKeyPickerController presentFrom:self title:@"添加触控键" onPick:^(NSString *picked) {
+        [NCLRKeymap.shared addKey:picked label:picked];
+        [NCLRKeymap.shared save];
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已添加"
+                                                                       message:@"退出触控编辑再进入即可看到新按键。"
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
     }];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.placeholder = @"显示文本，例如 飞行";
-    }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"添加" style:UIAlertActionStyleDefault
-        handler:^(UIAlertAction *action) {
-            NSString *key = [alert.textFields[0].text
-                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            NSString *label = [alert.textFields[1].text
-                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            if (key.length == 0) {
-                return;
-            }
-            [NCLRKeymap.shared addKey:key label:label];
-            UIAlertController *done = [UIAlertController alertControllerWithTitle:@"已添加"
-                                                                         message:@"保存并退出后重新打开编辑器即可看到新按键。"
-                                                                  preferredStyle:UIAlertControllerStyleAlert];
-            [done addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:done animated:YES completion:nil];
-        }]];
-    [self presentViewController:alert animated:YES completion:nil];
 }
-
 - (void)editKey:(UIButton *)sender {
     NSArray<NSString *> *keys = @[@"move", @"jump", @"sneak", @"sprint", @"attack",
                                   @"use", @"inventory", @"chat", @"pause", @"settings",
@@ -2312,48 +2379,11 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         return;
     }
     NSString *key = keys[sender.tag];
-    NSArray<NSString *> *choices = @[
-        @"W", @"A", @"S", @"D", @"Space", @"Shift", @"Ctrl", @"E", @"T", @"Esc",
-        @"F", @"F1", @"F3", @"F5", @"Q", @"R", @"Tab",
-        @"1", @"2", @"3", @"4", @"5", @"6", @"7", @"8", @"9",
-        @"MouseLeft", @"MouseRight", @"MouseMiddle"
-    ];
-    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:names[sender.tag]
-                                                                   message:@"选择一个按键，不需要自己记名字"
-                                                            preferredStyle:UIAlertControllerStyleActionSheet];
-    for (NSString *choice in choices) {
-        [sheet addAction:[UIAlertAction actionWithTitle:choice style:UIAlertActionStyleDefault
-            handler:^(UIAlertAction *action) {
-                NCLRKeymap.shared.bindings[key] = choice;
-                [sender setTitle:choice forState:UIControlStateNormal];
-            }]];
-    }
-    [sheet addAction:[UIAlertAction actionWithTitle:@"自定义…" style:UIAlertActionStyleDefault
-        handler:^(UIAlertAction *action) {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:names[sender.tag]
-                                                                           message:@"输入自定义按键名"
-                                                                    preferredStyle:UIAlertControllerStyleAlert];
-            [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-                field.text = NCLRKeymap.shared.bindings[key];
-                field.autocapitalizationType = UITextAutocapitalizationTypeNone;
-                field.autocorrectionType = UITextAutocorrectionTypeNo;
-            }];
-            [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-            [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault
-                handler:^(UIAlertAction *done) {
-                    NSString *value = [alert.textFields.firstObject.text
-                        stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-                    if (value.length > 0) {
-                        NCLRKeymap.shared.bindings[key] = value;
-                        [sender setTitle:value forState:UIControlStateNormal];
-                    }
-                }]];
-            [self presentViewController:alert animated:YES completion:nil];
-        }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    sheet.popoverPresentationController.sourceView = sender;
-    sheet.popoverPresentationController.sourceRect = sender.bounds;
-    [self presentViewController:sheet animated:YES completion:nil];
+    __weak UIButton *weakSender = sender;
+    [NCLRKeyPickerController presentFrom:self title:names[sender.tag] onPick:^(NSString *picked) {
+        NCLRKeymap.shared.bindings[key] = picked;
+        [weakSender setTitle:picked forState:UIControlStateNormal];
+    }];
 }
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
