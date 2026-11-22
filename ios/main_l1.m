@@ -1,7 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
 #import <stdlib.h>
-#include <zlib.h>
 
 extern int horizon_ios_run(const char *resources, const char *game_dir);
 
@@ -106,60 +105,12 @@ static void NCLRKeychainWrite(NSString *value) {
 @end
 
 
-static uint16_t NCLRRead16(const uint8_t *p) { return (uint16_t)(p[0] | ((uint16_t)p[1] << 8)); }
-static uint32_t NCLRRead32(const uint8_t *p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
-static NSData *NCLRInflateRaw(const uint8_t *src, NSUInteger length) {
-    z_stream stream = {0};
-    if (inflateInit2(&stream, -MAX_WBITS) != Z_OK) return nil;
-    NSUInteger capacity = MAX(length * 8, 4096);
-    NSMutableData *out = [NSMutableData dataWithLength:capacity];
-    stream.next_in = (Bytef *)src;
-    stream.avail_in = (uInt)length;
-    int status = Z_OK;
-    while (status == Z_OK) {
-        if (stream.total_out >= out.length) [out increaseLengthBy:capacity];
-        stream.next_out = (Bytef *)out.mutableBytes + stream.total_out;
-        stream.avail_out = (uInt)(out.length - stream.total_out);
-        status = inflate(&stream, Z_NO_FLUSH);
-    }
-    NSUInteger produced = stream.total_out;
-    inflateEnd(&stream);
-    if (status != Z_STREAM_END) return nil;
-    out.length = produced;
-    return out;
-}
-
 static NSString *NCLRModIdentifier(NSString *path) {
-    NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];
-    if (data.length < 30) return nil;
-    const uint8_t *bytes = data.bytes;
-    if (NCLRRead32(bytes) != 0x04034b50) return nil;
-    uint16_t method = NCLRRead16(bytes + 8);
-    uint32_t compressed = NCLRRead32(bytes + 18);
-    uint16_t nameLength = NCLRRead16(bytes + 26);
-    uint16_t extraLength = NCLRRead16(bytes + 28);
-    NSUInteger header = 30 + nameLength + extraLength;
-    if (compressed == 0 || header + compressed > data.length) return nil;
-    NSString *name = [[NSString alloc] initWithBytes:bytes + 30 length:nameLength encoding:NSUTF8StringEncoding];
-    if (![name isEqualToString:@"horizon-mod.toml"]) return nil;
-    NSData *manifest = nil;
-    if (method == 0) {
-        manifest = [data subdataWithRange:NSMakeRange(header, compressed)];
-    } else if (method == 8) {
-        manifest = NCLRInflateRaw(bytes + header, compressed);
-    }
-    if (manifest == nil) return nil;
-    NSString *toml = [[NSString alloc] initWithData:manifest encoding:NSUTF8StringEncoding];
-    NSRange key = [toml rangeOfString:@"id = \""];
-    if (key.location == NSNotFound) return nil;
-    NSUInteger start = NSMaxRange(key);
-    NSRange rest = NSMakeRange(start, toml.length - start);
-    NSRange end = [toml rangeOfString:@"\"" options:0 range:rest];
-    if (end.location == NSNotFound) return nil;
-    return [toml substringWithRange:NSMakeRange(start, end.location - start)];
+    // `.hmod` manifests are deflated; the launcher cannot inflate them without
+    // linking zlib into the app target. Horizon's packer names every archive
+    // `<id>.hmod`, so the file stem is the manifest id.
+    (void)path;
+    return nil;
 }
 
 static NSString *NCLRModSwitchesPath(void) {
