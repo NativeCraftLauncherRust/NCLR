@@ -2303,7 +2303,8 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (void)editKey:(UIButton *)sender {
     NSArray<NSString *> *keys = @[@"move", @"jump", @"sneak", @"sprint", @"attack",
-                                  @"use", @"inventory"];
+                                  @"use", @"inventory", @"chat", @"pause", @"settings",
+                                  @"debug", @"perspective", @"offhand", @"shield"];
     NSArray<NSString *> *names = @[@"移动摇杆", @"跳跃", @"潜行", @"冲刺", @"攻击",
                                    @"使用", @"背包", @"聊天", @"暂停", @"触控设置",
                                    @"调试", @"视角", @"副手", @"盾牌"];
@@ -2311,27 +2312,49 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         return;
     }
     NSString *key = keys[sender.tag];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:names[sender.tag]
-                                                                   message:@"输入新的按键名称，例如 W、Space、MouseLeft、E"
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.text = NCLRKeymap.shared.bindings[key];
-        field.autocapitalizationType = UITextAutocapitalizationTypeNone;
-        field.autocorrectionType = UITextAutocorrectionTypeNo;
-    }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault
+    NSArray<NSString *> *choices = @[
+        @"W", @"A", @"S", @"D", @"Space", @"Shift", @"Ctrl", @"E", @"T", @"Esc",
+        @"F", @"F1", @"F3", @"F5", @"Q", @"R", @"Tab",
+        @"1", @"2", @"3", @"4", @"5", @"6", @"7", @"8", @"9",
+        @"MouseLeft", @"MouseRight", @"MouseMiddle"
+    ];
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:names[sender.tag]
+                                                                   message:@"选择一个按键，不需要自己记名字"
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSString *choice in choices) {
+        [sheet addAction:[UIAlertAction actionWithTitle:choice style:UIAlertActionStyleDefault
+            handler:^(UIAlertAction *action) {
+                NCLRKeymap.shared.bindings[key] = choice;
+                [sender setTitle:choice forState:UIControlStateNormal];
+            }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"自定义…" style:UIAlertActionStyleDefault
         handler:^(UIAlertAction *action) {
-            NSString *value = [alert.textFields.firstObject.text
-                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            if (value.length > 0) {
-                NCLRKeymap.shared.bindings[key] = value;
-                [sender setTitle:value forState:UIControlStateNormal];
-            }
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:names[sender.tag]
+                                                                           message:@"输入自定义按键名"
+                                                                    preferredStyle:UIAlertControllerStyleAlert];
+            [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+                field.text = NCLRKeymap.shared.bindings[key];
+                field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+                field.autocorrectionType = UITextAutocorrectionTypeNo;
+            }];
+            [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+            [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault
+                handler:^(UIAlertAction *done) {
+                    NSString *value = [alert.textFields.firstObject.text
+                        stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                    if (value.length > 0) {
+                        NCLRKeymap.shared.bindings[key] = value;
+                        [sender setTitle:value forState:UIControlStateNormal];
+                    }
+                }]];
+            [self presentViewController:alert animated:YES completion:nil];
         }]];
-    [self presentViewController:alert animated:YES completion:nil];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.sourceView = sender;
+    sheet.popoverPresentationController.sourceRect = sender.bounds;
+    [self presentViewController:sheet animated:YES completion:nil];
 }
-
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
     [UIView performWithoutAnimation:^{
