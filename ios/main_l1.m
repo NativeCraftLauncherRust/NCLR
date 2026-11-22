@@ -2225,11 +2225,12 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         NSDictionary *position = NCLRKeymap.shared.positions[key];
         CGFloat x = [position[@"x"] doubleValue];
         CGFloat y = [position[@"y"] doubleValue];
-        CGFloat size = [position[@"size"] doubleValue] * self.preview.bounds.size.height *
+        CGRect area = [self previewContentRect];
+        CGFloat size = [position[@"size"] doubleValue] * area.size.height *
             NCLRKeymap.shared.buttonSize;
         size = MAX(26.0, size);
-        button.frame = CGRectMake(x * self.preview.bounds.size.width - size / 2.0,
-                                  y * self.preview.bounds.size.height - size / 2.0,
+        button.frame = CGRectMake(area.origin.x + x * area.size.width - size / 2.0,
+                                  area.origin.y + y * area.size.height - size / 2.0,
                                   size, size);
         button.titleLabel.font = [UIFont monospacedSystemFontOfSize:MAX(9.0, 11.0 * NCLRKeymap.shared.buttonSize)
                                                               weight:UIFontWeightBold];
@@ -2300,16 +2301,17 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     CGPoint translation = [sender translationInView:self.preview];
     CGFloat cx = self.dragStartCenter.x + translation.x;
     CGFloat cy = self.dragStartCenter.y + translation.y;
-    CGFloat x = MAX(0.025, MIN(0.975, cx / self.preview.bounds.size.width));
-    CGFloat y = MAX(0.025, MIN(0.975, cy / self.preview.bounds.size.height));
+    CGRect area = [self previewContentRect];
+    CGFloat x = MAX(0.025, MIN(0.975, (cx - area.origin.x) / area.size.width));
+    CGFloat y = MAX(0.025, MIN(0.975, (cy - area.origin.y) / area.size.height));
     NSDictionary *old = NCLRKeymap.shared.positions[key];
     NCLRKeymap.shared.positions[key] = @{
         @"x" : @(x),
         @"y" : @(y),
         @"size" : old[@"size"] ?: @0.12,
     };
-    button.center = CGPointMake(x * self.preview.bounds.size.width,
-                                y * self.preview.bounds.size.height);
+    button.center = CGPointMake(area.origin.x + x * area.size.width,
+                                area.origin.y + y * area.size.height);
     if (sender.state == UIGestureRecognizerStateEnded ||
         sender.state == UIGestureRecognizerStateCancelled) {
         [self.view setNeedsLayout];
@@ -2327,7 +2329,8 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     CGPoint point = [sender locationInView:self.preview];
     CGFloat distance = hypot(point.x - button.center.x, point.y - button.center.y);
     CGFloat size = MAX(28.0, distance * 2.0);
-    CGFloat normalized = size / MAX(1.0, self.preview.bounds.size.height * NCLRKeymap.shared.buttonSize);
+    CGRect area = [self previewContentRect];
+    CGFloat normalized = size / MAX(1.0, area.size.height * NCLRKeymap.shared.buttonSize);
     normalized = MAX(0.045, MIN(0.45, normalized));
     NSDictionary *old = NCLRKeymap.shared.positions[self.selectedKey];
     NCLRKeymap.shared.positions[self.selectedKey] = @{
@@ -2403,19 +2406,43 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     return YES;
 }
 
+- (CGRect)previewContentRect {
+    if (!self.canvasFullscreen) return self.preview.bounds;
+    return UIEdgeInsetsInsetRect(self.preview.bounds, self.view.safeAreaInsets);
+}
+
 - (void)toggleCanvas {
     self.canvasFullscreen = !self.canvasFullscreen;
     for (UIView *view in self.stack.arrangedSubviews) {
         view.hidden = self.canvasFullscreen && view != self.previewCard;
     }
     self.canvasClose.hidden = !self.canvasFullscreen;
-    self.previewHeight.constant = self.canvasFullscreen
-        ? MAX(300.0, self.view.bounds.size.height - 100.0)
-        : MAX(300.0, MIN(640.0, self.view.bounds.size.height * 0.58));
+    self.scroll.scrollEnabled = !self.canvasFullscreen;
+    if (self.canvasFullscreen) {
+        self.previewCard.backgroundColor = UIColor.blackColor;
+        self.previewCard.layer.cornerRadius = 0.0;
+        self.previewCard.layer.borderWidth = 0.0;
+        self.preview.backgroundColor = UIColor.blackColor;
+        self.preview.layer.cornerRadius = 0.0;
+        self.preview.layer.borderWidth = 0.0;
+        self.stackLeading.constant = 0.0;
+        self.stackTrailing.constant = 0.0;
+        self.previewHeight.constant = MAX(300.0, self.view.bounds.size.height -
+            self.view.safeAreaInsets.top - self.view.safeAreaInsets.bottom - 24.0);
+    } else {
+        self.previewCard.backgroundColor = NCLRColor(0.10, 0.10, 0.10, 1.0);
+        self.previewCard.layer.cornerRadius = 16.0;
+        self.previewCard.layer.borderWidth = 1.0;
+        self.preview.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 1.0);
+        self.preview.layer.cornerRadius = 12.0;
+        self.preview.layer.borderWidth = 1.0;
+        self.stackLeading.constant = 24.0;
+        self.stackTrailing.constant = -24.0;
+        self.previewHeight.constant = MAX(300.0, MIN(640.0, self.view.bounds.size.height * 0.58));
+    }
     [self.view setNeedsLayout];
     [self.view layoutIfNeeded];
 }
-
 - (void)saveKeymap {
     NCLRKeymap.shared.buttonSize = self.sizeSlider.value;
     NCLRKeymap.shared.opacity = self.opacitySlider.value;
