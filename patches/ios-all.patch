@@ -1027,7 +1027,7 @@ index ee73abf..3704fed 100644
      pub(super) fn facts(&self) -> &BlockFacts {
          &self.core.facts
 diff --git a/crates/horizon-client/src/game/runtime/window_handler.rs b/crates/horizon-client/src/game/runtime/window_handler.rs
-index 6a86a75..7434a3f 100644
+index 6a86a75..7370a4c 100644
 --- a/crates/horizon-client/src/game/runtime/window_handler.rs
 +++ b/crates/horizon-client/src/game/runtime/window_handler.rs
 @@ -2,6 +2,10 @@
@@ -1065,16 +1065,19 @@ index 6a86a75..7434a3f 100644
          horizon_client::spans::time("pads", || self.poll_pads(event_loop));
          self.settle_after_run(event_loop);
          self.pause_if_inactive();
-@@ -325,10 +346,22 @@ impl Game<'_> {
+@@ -325,10 +346,25 @@ impl Game<'_> {
              event_loop.exit();
              return;
          }
 +        let heartbeat = FRAME_HEARTBEAT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 +        if heartbeat % 120 == 0 {
 +            log::info!(
-+                "Horizon: iOS idle {heartbeat} screen {:?} touch {:?}",
++                "Horizon: iOS idle {heartbeat} screen {:?} touch {:?} max_fps={} vsync={} battery={}",
 +                self.screen,
-+                self.touch.state().left
++                self.touch.state().left,
++                self.settings.max_fps,
++                self.settings.vsync,
++                self.settings.horizon.battery
 +            );
 +        }
          if let Some(w) = &self.window {
@@ -1089,7 +1092,7 @@ index 6a86a75..7434a3f 100644
                  let id = w.id();
                  self.handle_window_event(
                      event_loop,
-@@ -351,11 +384,22 @@ impl Game<'_> {
+@@ -351,11 +387,22 @@ impl Game<'_> {
          }
          // Consume the last frame's result: a hidden compositor may stop sending
          // redraws altogether, leaving a successful result stale indefinitely.
@@ -1114,7 +1117,7 @@ index 6a86a75..7434a3f 100644
      }
  }
  
-@@ -437,14 +481,13 @@ impl ApplicationHandler for Game<'_> {
+@@ -437,14 +484,13 @@ impl ApplicationHandler for Game<'_> {
          };
          self.handle_window_event(event_loop, id, event, input_trace::InputOrigin::User);
          if let Some((event, modifiers)) = key {

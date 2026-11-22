@@ -2255,7 +2255,6 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [button setTitle:[NSString stringWithFormat:@"%@  %@", glyphs[i], compactNames[i]]
                 forState:UIControlStateNormal];
         [button setTitleColor:NCLRColor(0.92, 0.92, 0.92, 1.0) forState:UIControlStateNormal];
-        [button.heightAnchor constraintEqualToConstant:32.0].active = YES;
         [button addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
         [compactNav addArrangedSubview:button];
         [compact addObject:button];
@@ -2342,7 +2341,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     navScroll.translatesAutoresizingMaskIntoConstraints = NO;
     navScroll.backgroundColor = UIColor.clearColor;
     navScroll.showsVerticalScrollIndicator = YES;
-    navScroll.alwaysBounceVertical = YES;
+    navScroll.alwaysBounceVertical = NO;
     navScroll.clipsToBounds = YES;
     navScroll.contentInset = UIEdgeInsetsMake(0, 0, 8, 0);
     [self.sidebar addSubview:navScroll];
@@ -2350,6 +2349,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UIStackView *nav = [[UIStackView alloc] init];
     self.navStack = nav;
     nav.axis = UILayoutConstraintAxisVertical;
+    nav.distribution = UIStackViewDistributionFillEqually;
     nav.spacing = 2.0;
     nav.translatesAutoresizingMaskIntoConstraints = NO;
     NSArray *names = @[@"主页", @"版本", @"模组", @"光影", @"资源包", @"账号", @"设置"];
@@ -2369,7 +2369,6 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [button setTitle:[NSString stringWithFormat:@"%@  %@", glyphs[i], names[i]]
                 forState:UIControlStateNormal];
         [button setTitleColor:NCLRColor(0.92, 0.92, 0.92, 1.0) forState:UIControlStateNormal];
-        [button.heightAnchor constraintEqualToConstant:32.0].active = YES;
         [button addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
         [nav addArrangedSubview:button];
         [buttons addObject:button];
@@ -2440,7 +2439,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [nav.trailingAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.trailingAnchor],
         [nav.topAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.topAnchor],
         [nav.widthAnchor constraintEqualToAnchor:navScroll.frameLayoutGuide.widthAnchor],
-        [nav.heightAnchor constraintEqualToConstant:236.0],
+        [nav.heightAnchor constraintEqualToAnchor:navScroll.frameLayoutGuide.heightAnchor],
         [account.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:12.0],
         [account.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-12.0],
         [account.bottomAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.bottomAnchor constant:-14.0],
@@ -2489,7 +2488,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [super viewDidLayoutSubviews];
     [self updateAdaptiveLayout];
     if (self.navScroll != nil) {
-        CGFloat navHeight = MAX(236.0, self.navScroll.bounds.size.height);
+        CGFloat navHeight = self.navScroll.bounds.size.height;
         self.navScroll.contentSize = CGSizeMake(MAX(1.0, self.navScroll.bounds.size.width), navHeight);
     }
     for (CALayer *layer in self.view.layer.sublayers) {
