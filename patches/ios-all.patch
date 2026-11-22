@@ -302,6 +302,45 @@ index 550d63c..c03f913 100644
          // Horizon's own key bindings live in horizon-extras.txt, not in options.txt.
          let emote = settings.extras.emote_key.clone();
          settings.keys.set("key.emote", &emote);
+diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-render/src/touch.rs
+index b38a955..926af6b 100644
+--- a/crates/horizon-client-render/src/touch.rs
++++ b/crates/horizon-client-render/src/touch.rs
+@@ -61,6 +61,16 @@ enum Role {
+     Button(Button),
+ }
+ 
++/// A control's touch area, with a little slop so a finger near the rim
++/// still presses it. The drawn disc stays the placement's size.
++fn hit(rect: [f32; 4], point: [f32; 2]) -> bool {
++    let pad = 0.018;
++    point[0] >= rect[0] - pad
++        && point[0] <= rect[0] + rect[2] + pad
++        && point[1] >= rect[1] - pad
++        && point[1] <= rect[1] + rect[3] + pad
++}
++
+ /// The on-screen controls' input state. The game feeds it touches with
+ /// [`Self::update`] and reads [`Self::poll_state`] once a tick.
+ #[derive(Default)]
+@@ -174,7 +184,7 @@ impl TouchControls {
+         Control::ALL.into_iter().any(|c| {
+             Self::auxiliary_control(c)
+                 && self.visible(c)
+-                && layout::contains(self.placement(c).rect(self.aspect()), point)
++                && hit(self.placement(c).rect(self.aspect()), point)
+         })
+     }
+ 
+@@ -191,7 +201,7 @@ impl TouchControls {
+                     && !self.moving()
+                     && layout::contains(area, point);
+             }
+-            layout::contains(self.placement(c).rect(self.aspect()), point)
++            hit(self.placement(c).rect(self.aspect()), point)
+         })
+     }
+ 
 diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-client-render/src/touch/draw.rs
 index 9e8d8e4..dc7a05a 100644
 --- a/crates/horizon-client-render/src/touch/draw.rs
@@ -423,7 +462,7 @@ index 9e8d8e4..dc7a05a 100644
      let height_cap = ((h - 6.0).max(1.0) / 8.0).min(1.0);
      let scale = fit_width.min(height_cap);
 diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
-index e57f2d8..b5bfece 100644
+index e57f2d8..890e3d0 100644
 --- a/crates/horizon-client-render/src/touch/layout.rs
 +++ b/crates/horizon-client-render/src/touch/layout.rs
 @@ -100,6 +100,29 @@ impl Control {
@@ -471,7 +510,7 @@ index e57f2d8..b5bfece 100644
 +            return;
 +        };
 +        if let Some(scale) = json.get("buttonSize").and_then(|v| v.as_f64()) {
-+            self.button_scale = (scale as f32).clamp(0.5, 2.0);
++            self.button_scale = (scale as f32).clamp(0.5, 2.5);
 +        }
 +        let opacity = json
 +            .get("opacity")
@@ -521,6 +560,15 @@ index e57f2d8..b5bfece 100644
      pub fn sanitize(&mut self) {
          // Only the D-pad has a split variant (see `Mode::SCHEMES`).
          if self.mode != Mode::Dpad {
+@@ -284,7 +365,7 @@ impl Settings {
+         ] {
+             *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
+         }
+-        self.button_scale = finite_or(self.button_scale, 1.0).clamp(0.5, 2.0);
++        self.button_scale = finite_or(self.button_scale, 1.0).clamp(0.5, 2.5);
+         self.circle_size = finite_or(self.circle_size, 32.0).clamp(16.0, 64.0);
+         self.dynamic_area_x = finite_or(self.dynamic_area_x, 0.25).clamp(0.0, 1.0);
+         self.dynamic_area_y = finite_or(self.dynamic_area_y, 1.0).clamp(0.0, 1.0);
 diff --git a/crates/horizon-client/Cargo.toml b/crates/horizon-client/Cargo.toml
 index 7b7a557..8b097d7 100644
 --- a/crates/horizon-client/Cargo.toml
@@ -726,10 +774,10 @@ index 026382e..c04f78b 100644
              self.pad.in_use = true;
              self.pad.keyboard_took_over = false;
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..dbecf6e 100644
+index 16664ff..c78c988 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
-@@ -55,6 +55,85 @@ impl Game<'_> {
+@@ -55,6 +55,95 @@ impl Game<'_> {
          let zoom = self.zoom_turn_scale();
          self.turn_player(x * zoom, y * zoom);
      }
@@ -769,14 +817,24 @@ index 16664ff..dbecf6e 100644
 +            touch.phase,
 +            winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled
 +        );
-+        // Tapping the hotbar picks its slot. The bar is the bottom strip; its
-+        // nine slots divide the central half of the width. This runs before
-+        // the touch controls so the tap does not also become a world click.
-+        if started && point[1] > 0.86 && point[1] < 0.995 {
-+            let slot = (((point[0] - 0.25) / 0.5).clamp(0.0, 0.999) * 9.0) as usize;
-+            self.hotbar_presses.push(slot.min(8));
-+            self.touch.ignore(touch.id as u64);
-+            return;
++        // Tapping the hotbar picks its slot. Ask the HUD for its real GUI
++        // geometry: the bar is 182x22 GUI pixels, centred at the bottom, so a
++        // normalized strip is off by the GUI scale and the side margins.
++        if started {
++            let gui = horizon_client_render::hud::HudBatch::new(
++                [width, height],
++                self.settings.gui_scale_inputs(),
++            );
++            let (gw, gh) = (gui.width as f32, gui.height as f32);
++            let gx = point[0] * gw;
++            let gy = point[1] * gh;
++            let left = (gw - 182.0) / 2.0;
++            if gy >= gh - 22.0 && gy <= gh && gx >= left && gx <= left + 182.0 {
++                let slot = (((gx - left) / 20.0).floor() as usize).min(8);
++                self.hotbar_presses.push(slot);
++                self.touch.ignore(touch.id as u64);
++                return;
++            }
 +        }
 +        let turns = self
 +            .touch
