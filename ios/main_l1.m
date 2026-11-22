@@ -1082,6 +1082,19 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                                                 encoding:NSUTF8StringEncoding error:nil];
 }
 
+- (void)boostMetalLayers:(UIView *)view {
+    if (view == nil) return;
+    @try {
+        if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) {
+            NSNumber *maxFPS = @(UIScreen.mainScreen.maximumFramesPerSecond);
+            [view.layer setValue:maxFPS forKey:@"maximumFramesPerSecond"];
+            [view.layer setValue:@NO forKey:@"displaySyncEnabled"];
+            [view.layer setValue:@NO forKey:@"presentsWithTransaction"];
+        }
+    } @catch (NSException *e) { (void)e; }
+    for (UIView *sub in view.subviews) [self boostMetalLayers:sub];
+}
+
 - (void)launchTapped {
     [self writePerformanceOptions];
     NSString *resources = [[[NSBundle mainBundle] resourcePath]
@@ -1108,6 +1121,13 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     launcherWindow.userInteractionEnabled = NO;
     [launcherWindow resignKeyWindow];
     launcherWindow.hidden = YES;
+    __block NSInteger boostTicks = 0;
+    [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
+        for (UIWindow *window in UIApplication.sharedApplication.windows) {
+            [self boostMetalLayers:window.rootViewController.view];
+        }
+        if (++boostTicks >= 20) [timer invalidate];
+    }];
     horizon_ios_run(resources.UTF8String, game.UTF8String);
 }
 @end
@@ -2416,6 +2436,11 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [navScroll.topAnchor constraintEqualToAnchor:brand.bottomAnchor constant:16.0],
         [navScroll.bottomAnchor constraintEqualToAnchor:account.topAnchor constant:-8.0],
         [navScroll.heightAnchor constraintGreaterThanOrEqualToConstant:120.0],
+        [nav.leadingAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.leadingAnchor],
+        [nav.trailingAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.trailingAnchor],
+        [nav.topAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.topAnchor],
+        [nav.widthAnchor constraintEqualToAnchor:navScroll.frameLayoutGuide.widthAnchor],
+        [nav.heightAnchor constraintEqualToConstant:236.0],
         [account.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:12.0],
         [account.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-12.0],
         [account.bottomAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.bottomAnchor constant:-14.0],
