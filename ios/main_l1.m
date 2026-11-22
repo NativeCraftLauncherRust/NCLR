@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
 #import <stdlib.h>
+#include <zlib.h>
 
 extern int horizon_ios_run(const char *resources, const char *game_dir);
 
@@ -104,11 +105,104 @@ static void NCLRKeychainWrite(NSString *value) {
 }
 @end
 
+
+static uint16_t NCLRRead16(const uint8_t *p) { return (uint16_t)(p[0] | ((uint16_t)p[1] << 8)); }
+static uint32_t NCLRRead32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static NSData *NCLRInflateRaw(const uint8_t *src, NSUInteger length) {
+    z_stream stream = {0};
+    if (inflateInit2(&stream, -MAX_WBITS) != Z_OK) return nil;
+    NSUInteger capacity = MAX(length * 8, 4096);
+    NSMutableData *out = [NSMutableData dataWithLength:capacity];
+    stream.next_in = (Bytef *)src;
+    stream.avail_in = (uInt)length;
+    int status = Z_OK;
+    while (status == Z_OK) {
+        if (stream.total_out >= out.length) [out increaseLengthBy:capacity];
+        stream.next_out = (Bytef *)out.mutableBytes + stream.total_out;
+        stream.avail_out = (uInt)(out.length - stream.total_out);
+        status = inflate(&stream, Z_NO_FLUSH);
+    }
+    NSUInteger produced = stream.total_out;
+    inflateEnd(&stream);
+    if (status != Z_STREAM_END) return nil;
+    out.length = produced;
+    return out;
+}
+
+static NSString *NCLRModIdentifier(NSString *path) {
+    NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];
+    if (data.length < 30) return nil;
+    const uint8_t *bytes = data.bytes;
+    if (NCLRRead32(bytes) != 0x04034b50) return nil;
+    uint16_t method = NCLRRead16(bytes + 8);
+    uint32_t compressed = NCLRRead32(bytes + 18);
+    uint16_t nameLength = NCLRRead16(bytes + 26);
+    uint16_t extraLength = NCLRRead16(bytes + 28);
+    NSUInteger header = 30 + nameLength + extraLength;
+    if (compressed == 0 || header + compressed > data.length) return nil;
+    NSString *name = [[NSString alloc] initWithBytes:bytes + 30 length:nameLength encoding:NSUTF8StringEncoding];
+    if (![name isEqualToString:@"horizon-mod.toml"]) return nil;
+    NSData *manifest = nil;
+    if (method == 0) {
+        manifest = [data subdataWithRange:NSMakeRange(header, compressed)];
+    } else if (method == 8) {
+        manifest = NCLRInflateRaw(bytes + header, compressed);
+    }
+    if (manifest == nil) return nil;
+    NSString *toml = [[NSString alloc] initWithData:manifest encoding:NSUTF8StringEncoding];
+    NSRange key = [toml rangeOfString:@"id = \""];
+    if (key.location == NSNotFound) return nil;
+    NSUInteger start = NSMaxRange(key);
+    NSRange rest = NSMakeRange(start, toml.length - start);
+    NSRange end = [toml rangeOfString:@"\"" options:0 range:rest];
+    if (end.location == NSNotFound) return nil;
+    return [toml substringWithRange:NSMakeRange(start, end.location - start)];
+}
+
+static NSString *NCLRModSwitchesPath(void) {
+    return [NCLRDocuments() stringByAppendingPathComponent:@"horizon-mods.txt"];
+}
+
+static NSDictionary<NSString *, NSNumber *> *NCLRReadModSwitches(void) {
+    NSString *text = [NSString stringWithContentsOfFile:NCLRModSwitchesPath()
+                                               encoding:NSUTF8StringEncoding error:nil];
+    NSMutableDictionary *switches = [NSMutableDictionary dictionary];
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        if (![line hasPrefix:@"mod."]) continue;
+        NSRange colon = [line rangeOfString:@":"];
+        if (colon.location == NSNotFound) continue;
+        NSString *key = [line substringWithRange:NSMakeRange(3, colon.location - 3)];
+        NSString *value = [[line substringFromIndex:colon.location + 1]
+            stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        switches[key] = @([value isEqualToString:@"true"]);
+    }
+    return switches;
+}
+
+static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) {
+    if (identifier.length == 0) return;
+    NSString *path = NCLRModSwitchesPath();
+    NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] ?: @"";
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    NSString *prefix = [NSString stringWithFormat:@"mod.%@:", identifier];
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        if (line.length == 0 || [line hasPrefix:prefix]) continue;
+        [lines addObject:line];
+    }
+    if (!remove) [lines addObject:[NSString stringWithFormat:@"mod.%@:%@", identifier, enabled ? @"true" : @"false"]];
+    [[lines componentsJoinedByString:@"\n"] writeToFile:path atomically:YES
+        encoding:NSUTF8StringEncoding error:nil];
+}
+
 @interface NCLRMod : NSObject
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, copy) NSString *path;
 @property (nonatomic, assign) unsigned long long size;
 @property (nonatomic, assign) BOOL enabled;
+@property (nonatomic, copy) NSString *identifier;
 @end
 
 @implementation NCLRMod
@@ -416,6 +510,7 @@ static void NCLRKeychainWrite(NSString *value) {
     NSArray<NSString *> *files = [[NSFileManager defaultManager]
         contentsOfDirectoryAtPath:self.modsDirectory error:nil];
     NSDictionary *enabled = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"NCLRModsEnabled"] ?: @{};
+    NSDictionary *switches = NCLRReadModSwitches();
     for (NSString *file in files) {
         NSString *extension = file.pathExtension.lowercaseString;
         if (![extension isEqualToString:@"hmod"]) {
@@ -427,7 +522,9 @@ static void NCLRKeychainWrite(NSString *value) {
         mod.name = file;
         mod.path = path;
         mod.size = [attributes[NSFileSize] unsignedLongLongValue];
-        mod.enabled = [enabled[file] boolValue];
+        mod.identifier = NCLRModIdentifier(path) ?: file.stringByDeletingPathExtension;
+        NSNumber *gameSwitch = switches[mod.identifier];
+        mod.enabled = gameSwitch != nil ? gameSwitch.boolValue : [enabled[file] boolValue];
         [self.mods addObject:mod];
     }
     [self.mods sortUsingComparator:^NSComparisonResult(NCLRMod *a, NCLRMod *b) {
@@ -456,11 +553,18 @@ static void NCLRKeychainWrite(NSString *value) {
     }
     if (ok) {
         [self reloadMods];
+        for (NCLRMod *mod in self.mods) {
+            if ([mod.name isEqualToString:url.lastPathComponent]) {
+                [self setMod:mod enabled:YES];
+                break;
+            }
+        }
     }
     return ok;
 }
 
 - (void)deleteMod:(NCLRMod *)mod {
+    NCLRWriteModSwitch(mod.identifier, NO, YES);
     [[NSFileManager defaultManager] removeItemAtPath:mod.path error:nil];
     [self reloadMods];
 }
@@ -470,6 +574,7 @@ static void NCLRKeychainWrite(NSString *value) {
         dictionaryForKey:@"NCLRModsEnabled"] mutableCopy] ?: [NSMutableDictionary dictionary];
     values[mod.name] = @(enabled);
     [[NSUserDefaults standardUserDefaults] setObject:values forKey:@"NCLRModsEnabled"];
+    NCLRWriteModSwitch(mod.identifier, enabled, NO);
     mod.enabled = enabled;
 }
 @end
@@ -1082,6 +1187,24 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                                                 encoding:NSUTF8StringEncoding error:nil];
 }
 
+static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) {
+    if (layer == nil || depth > 12) return;
+    if ([layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) {
+        id oldSync = nil;
+        @try { oldSync = [layer valueForKey:@"displaySyncEnabled"]; } @catch (NSException *e) { (void)e; }
+        @try { [layer setValue:@NO forKey:@"displaySyncEnabled"]; } @catch (NSException *e) { (void)e; }
+        @try { [layer setValue:@NO forKey:@"presentsWithTransaction"]; } @catch (NSException *e) { (void)e; }
+        @try { [layer setValue:@120 forKey:@"maximumFramesPerSecond"]; } @catch (NSException *e) { (void)e; }
+        [log appendFormat:@"layer=%@ oldSync=%@ screenMax=%ld lowPower=%d\n",
+            NSStringFromClass(layer.class), oldSync,
+            (long)UIScreen.mainScreen.maximumFramesPerSecond,
+            (int)NSProcessInfo.processInfo.isLowPowerModeEnabled];
+    }
+    NSArray *sublayers = nil;
+    @try { sublayers = [layer.sublayers copy]; } @catch (NSException *e) { (void)e; }
+    for (CALayer *sub in sublayers) NCLRBoostLayerTree(sub, log, depth + 1);
+}
+
 - (void)boostMetalLayers:(UIView *)view {
     if (view == nil) return;
     if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) {
@@ -1125,13 +1248,22 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     launcherWindow.userInteractionEnabled = NO;
     [launcherWindow resignKeyWindow];
     launcherWindow.hidden = YES;
-    __block NSInteger boostTicks = 0;
-    [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
-        for (UIWindow *window in UIApplication.sharedApplication.windows) {
-            [self boostMetalLayers:window.rootViewController.view];
+    NSThread *boostThread = [[NSThread alloc] initWithBlock:^{
+        for (int tick = 0; tick < 40; tick++) {
+            [NSThread sleepForTimeInterval:0.25];
+            @autoreleasepool {
+                NSMutableString *log = [NSMutableString string];
+                NSArray *windows = nil;
+                @try { windows = [UIApplication.sharedApplication.windows copy]; } @catch (NSException *e) { (void)e; }
+                for (UIWindow *window in windows) NCLRBoostLayerTree(window.layer, log, 0);
+                if (log.length > 0) {
+                    NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"nclr-layer.txt"];
+                    [log writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                }
+            }
         }
-        if (++boostTicks >= 20) [timer invalidate];
     }];
+    [boostThread start];
     horizon_ios_run(resources.UTF8String, game.UTF8String);
 }
 @end
