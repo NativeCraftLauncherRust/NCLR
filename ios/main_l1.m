@@ -2341,22 +2341,14 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
         button.tag = i;
         button.translatesAutoresizingMaskIntoConstraints = NO;
-        UIButtonConfiguration *cfg = [UIButtonConfiguration plainButtonConfiguration];
-        cfg.title = names[i];
-        cfg.image = [UIImage systemImageNamed:symbols[i]];
-        cfg.imagePadding = 10.0;
-        cfg.contentInsets = NSDirectionalEdgeInsetsMake(0, 13, 0, 8);
-        cfg.baseForegroundColor = NCLRColor(0.92, 0.92, 0.92, 1.0);
-        cfg.background.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.035];
-        cfg.background.cornerRadius = 9.0;
-        cfg.titleTextAttributesTransformer = ^NSAttributedString *(NSAttributedString *incoming) {
-            NSMutableAttributedString *out = [incoming mutableCopy];
-            [out addAttribute:NSFontAttributeName
-                        value:[UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold]
-                        range:NSMakeRange(0, out.length)];
-            return out;
-        };
-        button.configuration = cfg;
+        button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+        button.contentEdgeInsets = UIEdgeInsetsMake(0, 14, 0, 8);
+        button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
+        button.titleLabel.lineBreakMode = NSLineBreakByClipping;
+        NSArray *glyphs = @[@"⌂", @"▤", @"⧉", @"☀", @"▦", @"●", @"⚙"];
+        [button setTitle:[NSString stringWithFormat:@"%@  %@", glyphs[i], names[i]]
+                forState:UIControlStateNormal];
+        [button setTitleColor:NCLRColor(0.92, 0.92, 0.92, 1.0) forState:UIControlStateNormal];
         [button.heightAnchor constraintEqualToConstant:32.0].active = YES;
         [button addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
         [nav addArrangedSubview:button];
