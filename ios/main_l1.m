@@ -2427,11 +2427,11 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [self.sidebar addSubview:account];
 
     [NSLayoutConstraint activateConstraints:@[
-        [brand.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:18.0],
-        [brand.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-18.0],
+        [brand.leadingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.leadingAnchor constant:18.0],
+        [brand.trailingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.trailingAnchor constant:-18.0],
         [brand.topAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.topAnchor constant:14.0],
-        [navScroll.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:10.0],
-        [navScroll.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-10.0],
+        [navScroll.leadingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.leadingAnchor constant:10.0],
+        [navScroll.trailingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.trailingAnchor constant:-10.0],
         [navScroll.topAnchor constraintEqualToAnchor:brand.bottomAnchor constant:16.0],
         [navScroll.bottomAnchor constraintEqualToAnchor:account.topAnchor constant:-8.0],
         [navScroll.heightAnchor constraintGreaterThanOrEqualToConstant:120.0],
@@ -2440,8 +2440,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [nav.topAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.topAnchor],
         [nav.widthAnchor constraintEqualToAnchor:navScroll.frameLayoutGuide.widthAnchor],
         [nav.heightAnchor constraintEqualToAnchor:navScroll.frameLayoutGuide.heightAnchor],
-        [account.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor constant:12.0],
-        [account.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:-12.0],
+        [account.leadingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.leadingAnchor constant:12.0],
+        [account.trailingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.trailingAnchor constant:-12.0],
         [account.bottomAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.bottomAnchor constant:-14.0],
         [account.heightAnchor constraintGreaterThanOrEqualToConstant:56.0],
     ]];
