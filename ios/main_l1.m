@@ -1084,22 +1084,18 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
 - (void)boostMetalLayers:(UIView *)view {
     if (view == nil) return;
-    @try {
-        if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) {
-            NSNumber *maxFPS = @(UIScreen.mainScreen.maximumFramesPerSecond);
-            id oldMax = [view.layer valueForKey:@"maximumFramesPerSecond"];
-            id oldSync = [view.layer valueForKey:@"displaySyncEnabled"];
-            [view.layer setValue:maxFPS forKey:@"maximumFramesPerSecond"];
-            [view.layer setValue:@NO forKey:@"displaySyncEnabled"];
-            [view.layer setValue:@NO forKey:@"presentsWithTransaction"];
-            NSString *line = [NSString stringWithFormat:@"view=%@ layer=%@ oldMax=%@ oldSync=%@ screenMax=%ld\n",
-                              NSStringFromClass(view.class), NSStringFromClass(view.layer.class),
-                              oldMax, oldSync, (long)UIScreen.mainScreen.maximumFramesPerSecond];
-            NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"nclr-layer.txt"];
-            FILE *f = fopen(path.UTF8String, "a");
-            if (f) { fputs(line.UTF8String, f); fclose(f); }
-        }
-    } @catch (NSException *e) { (void)e; }
+    if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) {
+        id oldSync = nil;
+        @try { oldSync = [view.layer valueForKey:@"displaySyncEnabled"]; } @catch (NSException *e) { (void)e; }
+        @try { [view.layer setValue:@NO forKey:@"displaySyncEnabled"]; } @catch (NSException *e) { (void)e; }
+        @try { [view.layer setValue:@NO forKey:@"presentsWithTransaction"]; } @catch (NSException *e) { (void)e; }
+        NSString *line = [NSString stringWithFormat:@"view=%@ layer=%@ oldSync=%@ screenMax=%ld\n",
+                          NSStringFromClass(view.class), NSStringFromClass(view.layer.class),
+                          oldSync, (long)UIScreen.mainScreen.maximumFramesPerSecond];
+        NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"nclr-layer.txt"];
+        FILE *f = fopen(path.UTF8String, "a");
+        if (f) { fputs(line.UTF8String, f); fclose(f); }
+    }
     for (UIView *sub in view.subviews) [self boostMetalLayers:sub];
 }
 
