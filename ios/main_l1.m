@@ -114,6 +114,8 @@ static NSString *NCLRModIdentifier(NSString *path) {
 }
 
 
+static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth);
+
 @interface NCLRFramePump : NSObject
 @end
 
