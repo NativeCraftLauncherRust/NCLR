@@ -3,6 +3,7 @@
 //! This first milestone only reports what was compiled and linked. The game
 //! entry point will replace it once the client library builds for iOS.
 
+use mod_api::__private::game::Fields;
 use std::ffi::{CStr, CString, c_char};
 use std::path::PathBuf;
 use std::sync::OnceLock;
