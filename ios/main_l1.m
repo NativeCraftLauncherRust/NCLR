@@ -200,6 +200,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 @property (nonatomic, assign) CGFloat sensitivity;
 @property (nonatomic, assign) CGFloat joystickDeadzone;
 @property (nonatomic, assign) BOOL sprintButton;
+@property (nonatomic, assign) NSInteger buttonStyle;
 @property (nonatomic, strong) NSMutableSet<NSString *> *hiddenKeys;
 + (instancetype)shared;
 - (BOOL)isHidden:(NSString *)key;
@@ -256,6 +257,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     self.sensitivity = 1.0;
     self.joystickDeadzone = 0.16;
     self.sprintButton = YES;
+    self.buttonStyle = 0;
     self.hiddenKeys = [NSMutableSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]];
     self.touchMode = @"crosshair";
     self.dynamicJoystick = NO;
@@ -319,6 +321,10 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     NSNumber *sprintButton = json[@"sprintButton"];
     if ([sprintButton isKindOfClass:[NSNumber class]]) {
         self.sprintButton = sprintButton.boolValue;
+    }
+    NSNumber *buttonStyle = json[@"buttonStyle"];
+    if ([buttonStyle isKindOfClass:[NSNumber class]]) {
+        self.buttonStyle = MAX(0, MIN(2, buttonStyle.integerValue));
     }
     NSDictionary *saved = json[@"bindings"];
     if ([saved isKindOfClass:[NSDictionary class]]) {
@@ -446,6 +452,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"sensitivity" : @(self.sensitivity),
         @"joystickDeadzone" : @(self.joystickDeadzone),
         @"sprintButton" : @(self.sprintButton),
+        @"buttonStyle" : @(self.buttonStyle),
         @"hidden" : self.hiddenKeys.allObjects ?: @[],
         @"bindings" : self.bindings ?: @{},
         @"layout" : self.positions ?: @{},
@@ -1906,6 +1913,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @property (nonatomic, strong) UISegmentedControl *modeControl;
 @property (nonatomic, strong) UISwitch *dynamicSwitch;
 @property (nonatomic, strong) UISegmentedControl *presetControl;
+@property (nonatomic, strong) UISegmentedControl *styleControl;
 @property (nonatomic, strong) UISwitch *leftHandedSwitch;
 @property (nonatomic, strong) UISwitch *joystickSprintSwitch;
 @property (nonatomic, strong) UISlider *sensitivitySlider;
@@ -2215,6 +2223,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.presetControl.selectedSegmentIndex = 0;
     [self.presetControl addTarget:self action:@selector(presetChanged:)
                  forControlEvents:UIControlEventValueChanged];
+    self.styleControl = [[UISegmentedControl alloc] initWithItems:@[@"圆盘", @"方框", @"极简"]];
+    self.styleControl.selectedSegmentIndex = NCLRKeymap.shared.buttonStyle;
+    [self.styleControl addTarget:self action:@selector(styleChanged:)
+                forControlEvents:UIControlEventValueChanged];
     UIButton *addKey = [self button:@"+ 添加触控键" action:@selector(addKeyTapped) primary:NO];
     UIButton *gridButton = [self button:@"网格" action:@selector(toggleGrid) primary:NO];
     UIButton *resetButton = [self button:@"重置布局" action:@selector(resetLayoutTapped) primary:NO];
@@ -2230,7 +2242,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     tools.spacing = 8.0;
     tools.distribution = UIStackViewDistributionFillEqually;
     UIStackView *menuStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.menuToggle, self.presetControl, self.sizeRow, opacityRow, self.modeControl, dynamicRow, leftRow, sprintRow, sensitivityRow, deadzoneRow, sprintButtonRow, addKey, tools, ioRow]];
+        @[self.menuToggle, self.presetControl, self.styleControl, self.sizeRow, opacityRow, self.modeControl, dynamicRow, leftRow, sprintRow, sensitivityRow, deadzoneRow, sprintButtonRow, addKey, tools, ioRow]];
     menuStack.axis = UILayoutConstraintAxisVertical;
     menuStack.spacing = 8.0;
     menuStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2587,6 +2599,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.sensitivityValue.text = [NSString stringWithFormat:@"%.1fx", slider.value];
 }
 
+- (void)styleChanged:(UISegmentedControl *)control {
+    NCLRKeymap.shared.buttonStyle = control.selectedSegmentIndex;
+}
+
 - (void)presetChanged:(UISegmentedControl *)control {
     NSArray<NSString *> *presets = @[@"fcl", @"classic", @"minimal"];
     NSInteger index = MAX(0, MIN((NSInteger)presets.count - 1, control.selectedSegmentIndex));
@@ -2753,6 +2769,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     NCLRKeymap.shared.sensitivity = self.sensitivitySlider.value;
     NCLRKeymap.shared.joystickDeadzone = self.deadzoneSlider.value;
     NCLRKeymap.shared.sprintButton = self.sprintButtonSwitch.on;
+    NCLRKeymap.shared.buttonStyle = self.styleControl.selectedSegmentIndex;
     [NCLRKeymap.shared save];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存"
                                                                    message:[NSString stringWithFormat:

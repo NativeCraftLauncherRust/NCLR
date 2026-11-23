@@ -303,7 +303,7 @@ index 550d63c..c03f913 100644
          let emote = settings.extras.emote_key.clone();
          settings.keys.set("key.emote", &emote);
 diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-render/src/touch.rs
-index b38a955..c05d45f 100644
+index b38a955..edd5a9e 100644
 --- a/crates/horizon-client-render/src/touch.rs
 +++ b/crates/horizon-client-render/src/touch.rs
 @@ -61,6 +61,16 @@ enum Role {
@@ -365,7 +365,7 @@ index b38a955..c05d45f 100644
 +                    // A small centre dead zone, then a smooth 0..1 ramp: a
 +                    // resting thumb does not creep the player, and a full push
 +                    // still reaches walking speed.
-+                    let dead = 0.16;
++                    let dead = self.settings.joystick_deadzone;
 +                    let length = raw[0].hypot(raw[1]);
 +                    let magnitude = ((length - dead) / (1.0 - dead)).clamp(0.0, 1.0);
 +                    let direction = if length > 0.0 {
@@ -387,7 +387,7 @@ index b38a955..c05d45f 100644
                          state.set(Button::LeftStick, true);
                      }
 diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-client-render/src/touch/draw.rs
-index 9e8d8e4..dc7a05a 100644
+index 9e8d8e4..d6bc676 100644
 --- a/crates/horizon-client-render/src/touch/draw.rs
 +++ b/crates/horizon-client-render/src/touch/draw.rs
 @@ -10,7 +10,6 @@
@@ -398,6 +398,15 @@ index 9e8d8e4..dc7a05a 100644
  
  const BUTTON: &str = "gui/sprites/widget/button";
  const BUTTON_HELD: &str = "gui/sprites/widget/button_highlighted";
+@@ -36,7 +35,7 @@ impl TouchControls {
+                     .fingers
+                     .values()
+                     .any(|(_, point)| layout::contains(rect, *point));
+-            button(b, a, bounds, &self.label(control), pressed, color);
++            button(b, a, bounds, &self.label(control), pressed, color, self.settings.button_style);
+         }
+         if let Some(point) = self.pointer() {
+             let center = [point[0] * b.width, point[1] * b.height];
 @@ -64,30 +63,26 @@ impl TouchControls {
          })
      }
@@ -445,7 +454,11 @@ index 9e8d8e4..dc7a05a 100644
      }
  
      /// The joystick (a rim and a knob) or the D-pad (four arrow buttons).
-@@ -174,39 +169,23 @@ fn button(
+@@ -171,42 +166,36 @@ fn button(
+     label: &str,
+     pressed: bool,
+     color: u32,
++    style: u8,
  ) {
      let [x, y, w, h] = bounds;
      let [r, g, blue, opacity] = color.to_le_bytes();
@@ -456,7 +469,17 @@ index 9e8d8e4..dc7a05a 100644
 -            BUTTON
 -        };
 -        crate::ui::nine_slice(b, a, sprite, x, y, w, h, color);
--    } else {
++    let radius = w.min(h) / 2.0;
++    let middle = [x + w / 2.0, y + h / 2.0];
++    // NCLR's own controls: a flat translucent disc with a hairline rim, no
++    // resource-pack button sprite. Held buttons fill slightly brighter.
++    let fill = if pressed { 92 } else { 46 };
++    if style == 1 {
++        square_outline(b, a, bounds, 1.6, rgba(255, 255, 255, (u16::from(opacity) * 170 / 255) as u8));
++        if pressed {
++            square_fill(b, a, bounds, rgba(255, 255, 255, (u16::from(opacity) * 34 / 255) as u8));
++        }
+     } else {
 -        let fill = if pressed { 150 } else { 90 };
 -        b.fill(
 -            a,
@@ -473,16 +496,13 @@ index 9e8d8e4..dc7a05a 100644
 -            [x + w - 1.0, y, 1.0, h],
 -        ] {
 -            b.fill(a, edge[0], edge[1], edge[2], edge[3], color);
--        }
-+    let radius = w.min(h) / 2.0;
-+    let middle = [x + w / 2.0, y + h / 2.0];
-+    // NCLR's own controls: a flat translucent disc with a hairline rim, no
-+    // resource-pack button sprite. Held buttons fill slightly brighter.
-+    let fill = if pressed { 78 } else { 42 };
-+    disc(b, a, middle, radius, rgba(0, 0, 0, (u16::from(opacity) * fill / 255) as u8));
-+    ring(b, a, middle, radius, rgba(255, 255, 255, (u16::from(opacity) * 150 / 255) as u8));
-+    if pressed {
-+        ring(b, a, middle, (radius - 2.0).max(0.0), rgba(255, 255, 255, (u16::from(opacity) * 220 / 255) as u8));
++        disc(b, a, middle, radius, rgba(0, 0, 0, (u16::from(opacity) * fill / 255) as u8));
++        if style != 2 {
++            ring(b, a, middle, radius, rgba(255, 255, 255, (u16::from(opacity) * 150 / 255) as u8));
++        }
++        if pressed {
++            ring(b, a, middle, (radius - 2.0).max(0.0), rgba(255, 255, 255, (u16::from(opacity) * 220 / 255) as u8));
+         }
      }
      if label.is_empty() {
          return;
@@ -496,7 +516,7 @@ index 9e8d8e4..dc7a05a 100644
      };
      let drop = if pressed { (h / 18.0).min(2.0) } else { 0.0 };
      let width = HudBatch::text_width(a, label);
-@@ -219,9 +198,6 @@ fn button(
+@@ -219,15 +208,23 @@ fn button(
          text,
          true,
      );
@@ -506,8 +526,25 @@ index 9e8d8e4..dc7a05a 100644
      let fit_width = (w - 6.0).max(1.0) / width.max(1.0);
      let height_cap = ((h - 6.0).max(1.0) / 8.0).min(1.0);
      let scale = fit_width.min(height_cap);
+     b.scale_since(start, x + w / 2.0, y + h / 2.0 + drop, scale, scale);
+ }
+ 
++fn square_fill(b: &mut HudBatch, a: &HudAtlas, [x, y, w, h]: [f32; 4], color: u32) {
++    b.fill_quad(a, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], color);
++}
++
++fn square_outline(b: &mut HudBatch, a: &HudAtlas, [x, y, w, h]: [f32; 4], t: f32, color: u32) {
++    b.fill_quad(a, [[x, y], [x + w, y], [x + w, y + t], [x, y + t]], color);
++    b.fill_quad(a, [[x, y + h - t], [x + w, y + h - t], [x + w, y + h], [x, y + h]], color);
++    b.fill_quad(a, [[x, y], [x + t, y], [x + t, y + h], [x, y + h]], color);
++    b.fill_quad(a, [[x + w - t, y], [x + w, y], [x + w, y + h], [x + w - t, y + h]], color);
++}
++
+ /// How far the mining disc reaches inside a marker of `radius`, by progress.
+ fn mining_radius(radius: f32, progress: f32) -> f32 {
+     if progress.is_finite() {
 diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
-index e57f2d8..c9d36f0 100644
+index e57f2d8..d286d7c 100644
 --- a/crates/horizon-client-render/src/touch/layout.rs
 +++ b/crates/horizon-client-render/src/touch/layout.rs
 @@ -100,6 +100,29 @@ impl Control {
@@ -540,7 +577,27 @@ index e57f2d8..c9d36f0 100644
  }
  
  /// Where one control sits: its centre (0..1 of the surface), its size (a
-@@ -264,6 +287,80 @@ impl Settings {
+@@ -170,6 +193,10 @@ pub struct Settings {
+     pub layouts: [[Placement; CONTROLS]; 3],
+     /// Camera turn speed for look drags; scales both axes.
+     pub sensitivity: f32,
++    /// Joystick centre dead zone (0.05..0.35), as a fraction of its radius.
++    pub joystick_deadzone: f32,
++    /// Button look: 0 disc, 1 square outline, 2 minimal filled disc.
++    pub button_style: u8,
+     /// Extra scale on the yaw (left and right) turn.
+     pub sensitivity_horizontal: f32,
+     /// Extra scale on the pitch (up and down) turn.
+@@ -231,6 +258,8 @@ impl Default for Settings {
+             button_visibility: [FOLLOW_SCHEME; CONTROLS],
+             layouts,
+             sensitivity: 1.0,
++            joystick_deadzone: 0.16,
++            button_style: 0,
+             sensitivity_horizontal: 1.0,
+             sensitivity_vertical: 1.0,
+             sprint_toggle: false,
+@@ -264,6 +293,95 @@ impl Settings {
          std::fs::rename(temp, path)
      }
  
@@ -580,6 +637,21 @@ index e57f2d8..c9d36f0 100644
 +        }
 +        if let Some(sensitivity) = json.get("sensitivity").and_then(|v| v.as_f64()) {
 +            self.sensitivity = (sensitivity as f32).clamp(0.3, 2.5);
++        }
++        if let Some(deadzone) = json.get("joystickDeadzone").and_then(|v| v.as_f64()) {
++            self.joystick_deadzone = (deadzone as f32).clamp(0.05, 0.35);
++        }
++        if let Some(swap) = json.get("swapJumpSneak").and_then(|v| v.as_bool()) {
++            self.swap_jump_sneak = swap;
++        }
++        if let Some(button) = json.get("sprintButton").and_then(|v| v.as_bool()) {
++            self.sprint_button = button;
++        }
++        if let Some(toggle) = json.get("sprintToggle").and_then(|v| v.as_bool()) {
++            self.sprint_toggle = toggle;
++        }
++        if let Some(style) = json.get("buttonStyle").and_then(|v| v.as_u64()) {
++            self.button_style = (style as u8).min(2);
 +        }
 +        let Some(layout) = json.get("layout").and_then(|v| v.as_object()) else {
 +            return;
@@ -621,11 +693,13 @@ index e57f2d8..c9d36f0 100644
      pub fn sanitize(&mut self) {
          // Only the D-pad has a split variant (see `Mode::SCHEMES`).
          if self.mode != Mode::Dpad {
-@@ -284,7 +381,7 @@ impl Settings {
+@@ -284,7 +402,9 @@ impl Settings {
          ] {
              *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
          }
 -        self.button_scale = finite_or(self.button_scale, 1.0).clamp(0.5, 2.0);
++        self.joystick_deadzone = finite_or(self.joystick_deadzone, 0.16).clamp(0.05, 0.35);
++        self.button_style = self.button_style.min(2);
 +        self.button_scale = finite_or(self.button_scale, 1.0).clamp(0.5, 2.5);
          self.circle_size = finite_or(self.circle_size, 32.0).clamp(16.0, 64.0);
          self.dynamic_area_x = finite_or(self.dynamic_area_x, 0.25).clamp(0.0, 1.0);
