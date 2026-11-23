@@ -195,6 +195,9 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 @property (nonatomic, copy) NSString *touchMode;
 @property (nonatomic, assign) BOOL dynamicJoystick;
 @property (nonatomic, assign) NSInteger layoutVersion;
+@property (nonatomic, assign) BOOL leftHanded;
+@property (nonatomic, assign) BOOL joystickSprint;
+@property (nonatomic, assign) CGFloat sensitivity;
 @property (nonatomic, strong) NSMutableSet<NSString *> *hiddenKeys;
 + (instancetype)shared;
 - (BOOL)isHidden:(NSString *)key;
@@ -246,6 +249,9 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     } mutableCopy];
     self.opacity = 0.55;
     self.layoutVersion = 2;
+    self.leftHanded = NO;
+    self.joystickSprint = NO;
+    self.sensitivity = 1.0;
     self.hiddenKeys = [NSMutableSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]];
     self.touchMode = @"crosshair";
     self.dynamicJoystick = NO;
@@ -293,6 +299,14 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     NSNumber *dynamic = json[@"dynamicJoystick"];
     if ([dynamic isKindOfClass:[NSNumber class]]) {
         self.dynamicJoystick = dynamic.boolValue;
+    }
+    NSNumber *left = json[@"leftHanded"];
+    if ([left isKindOfClass:[NSNumber class]]) self.leftHanded = left.boolValue;
+    NSNumber *joystickSprint = json[@"joystickSprint"];
+    if ([joystickSprint isKindOfClass:[NSNumber class]]) self.joystickSprint = joystickSprint.boolValue;
+    NSNumber *sensitivity = json[@"sensitivity"];
+    if ([sensitivity isKindOfClass:[NSNumber class]]) {
+        self.sensitivity = MAX(0.3, MIN(2.5, sensitivity.doubleValue));
     }
     NSDictionary *saved = json[@"bindings"];
     if ([saved isKindOfClass:[NSDictionary class]]) {
@@ -415,6 +429,9 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"opacity" : @(self.opacity),
         @"touchMode" : self.touchMode ?: @"crosshair",
         @"dynamicJoystick" : @(self.dynamicJoystick),
+        @"leftHanded" : @(self.leftHanded),
+        @"joystickSprint" : @(self.joystickSprint),
+        @"sensitivity" : @(self.sensitivity),
         @"hidden" : self.hiddenKeys.allObjects ?: @[],
         @"bindings" : self.bindings ?: @{},
         @"layout" : self.positions ?: @{},
@@ -1875,6 +1892,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @property (nonatomic, strong) UISegmentedControl *modeControl;
 @property (nonatomic, strong) UISwitch *dynamicSwitch;
 @property (nonatomic, strong) UISegmentedControl *presetControl;
+@property (nonatomic, strong) UISwitch *leftHandedSwitch;
+@property (nonatomic, strong) UISwitch *joystickSprintSwitch;
+@property (nonatomic, strong) UISlider *sensitivitySlider;
+@property (nonatomic, strong) UILabel *sensitivityValue;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, UISwitch *> *visibilitySwitches;
 @property (nonatomic, strong) NSMutableArray<UIButton *> *keyButtons;
 @property (nonatomic, strong) UIView *preview;
@@ -2099,6 +2120,49 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         @[dynamicLabel, dynamicSpacer, self.dynamicSwitch]];
     dynamicRow.axis = UILayoutConstraintAxisHorizontal;
     dynamicRow.alignment = UIStackViewAlignmentCenter;
+    UILabel *leftLabel = [self label:@"左手模式" size:12.0 weight:UIFontWeightSemibold
+                               color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
+    self.leftHandedSwitch = [[UISwitch alloc] init];
+    self.leftHandedSwitch.on = NCLRKeymap.shared.leftHanded;
+    [self.leftHandedSwitch addTarget:self action:@selector(leftHandedChanged:)
+                    forControlEvents:UIControlEventValueChanged];
+    UIView *leftSpacer = [[UIView alloc] init];
+    UIStackView *leftRow = [[UIStackView alloc] initWithArrangedSubviews:
+        @[leftLabel, leftSpacer, self.leftHandedSwitch]];
+    leftRow.axis = UILayoutConstraintAxisHorizontal;
+    leftRow.alignment = UIStackViewAlignmentCenter;
+
+    UILabel *sprintLabel = [self label:@"摇杆冲刺" size:12.0 weight:UIFontWeightSemibold
+                                 color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
+    self.joystickSprintSwitch = [[UISwitch alloc] init];
+    self.joystickSprintSwitch.on = NCLRKeymap.shared.joystickSprint;
+    [self.joystickSprintSwitch addTarget:self action:@selector(joystickSprintChanged:)
+                        forControlEvents:UIControlEventValueChanged];
+    UIView *sprintSpacer = [[UIView alloc] init];
+    UIStackView *sprintRow = [[UIStackView alloc] initWithArrangedSubviews:
+        @[sprintLabel, sprintSpacer, self.joystickSprintSwitch]];
+    sprintRow.axis = UILayoutConstraintAxisHorizontal;
+    sprintRow.alignment = UIStackViewAlignmentCenter;
+
+    UILabel *sensitivityLabel = [self label:@"视角灵敏度" size:12.0 weight:UIFontWeightSemibold
+                                      color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
+    self.sensitivitySlider = [[UISlider alloc] init];
+    self.sensitivitySlider.minimumValue = 0.4f;
+    self.sensitivitySlider.maximumValue = 2.5f;
+    self.sensitivitySlider.value = NCLRKeymap.shared.sensitivity;
+    self.sensitivitySlider.minimumTrackTintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
+    [self.sensitivitySlider addTarget:self action:@selector(sensitivityChanged:)
+                     forControlEvents:UIControlEventValueChanged];
+    self.sensitivityValue = [self label:[NSString stringWithFormat:@"%.1fx", NCLRKeymap.shared.sensitivity]
+                                  size:11.0 weight:UIFontWeightSemibold
+                                 color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
+    self.sensitivityValue.textAlignment = NSTextAlignmentRight;
+    UIStackView *sensitivityRow = [[UIStackView alloc] initWithArrangedSubviews:
+        @[sensitivityLabel, self.sensitivitySlider, self.sensitivityValue]];
+    sensitivityRow.axis = UILayoutConstraintAxisHorizontal;
+    sensitivityRow.spacing = 10.0;
+    sensitivityRow.alignment = UIStackViewAlignmentCenter;
+    [self.sensitivityValue.widthAnchor constraintEqualToConstant:44.0].active = YES;
     self.presetControl = [[UISegmentedControl alloc] initWithItems:@[@"FCL", @"经典", @"极简"]];
     self.presetControl.selectedSegmentIndex = 0;
     [self.presetControl addTarget:self action:@selector(presetChanged:)
@@ -2118,7 +2182,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     tools.spacing = 8.0;
     tools.distribution = UIStackViewDistributionFillEqually;
     UIStackView *menuStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.menuToggle, self.presetControl, self.sizeRow, opacityRow, self.modeControl, dynamicRow, addKey, tools, ioRow]];
+        @[self.menuToggle, self.presetControl, self.sizeRow, opacityRow, self.modeControl, dynamicRow, leftRow, sprintRow, sensitivityRow, addKey, tools, ioRow]];
     menuStack.axis = UILayoutConstraintAxisVertical;
     menuStack.spacing = 8.0;
     menuStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2453,6 +2517,19 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
              @"debug", @"perspective", @"offhand", @"shield"];
 }
 
+- (void)leftHandedChanged:(UISwitch *)sender {
+    NCLRKeymap.shared.leftHanded = sender.on;
+}
+
+- (void)joystickSprintChanged:(UISwitch *)sender {
+    NCLRKeymap.shared.joystickSprint = sender.on;
+}
+
+- (void)sensitivityChanged:(UISlider *)slider {
+    NCLRKeymap.shared.sensitivity = slider.value;
+    self.sensitivityValue.text = [NSString stringWithFormat:@"%.1fx", slider.value];
+}
+
 - (void)presetChanged:(UISegmentedControl *)control {
     NSArray<NSString *> *presets = @[@"fcl", @"classic", @"minimal"];
     NSInteger index = MAX(0, MIN((NSInteger)presets.count - 1, control.selectedSegmentIndex));
@@ -2614,6 +2691,9 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     NCLRKeymap.shared.opacity = self.opacitySlider.value;
     NCLRKeymap.shared.touchMode = @[@"crosshair", @"tap", @"dpad"][MAX(0, self.modeControl.selectedSegmentIndex)];
     NCLRKeymap.shared.dynamicJoystick = self.dynamicSwitch.on;
+    NCLRKeymap.shared.leftHanded = self.leftHandedSwitch.on;
+    NCLRKeymap.shared.joystickSprint = self.joystickSprintSwitch.on;
+    NCLRKeymap.shared.sensitivity = self.sensitivitySlider.value;
     [NCLRKeymap.shared save];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存"
                                                                    message:[NSString stringWithFormat:
