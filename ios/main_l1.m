@@ -195,7 +195,11 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 @property (nonatomic, copy) NSString *touchMode;
 @property (nonatomic, assign) BOOL dynamicJoystick;
 @property (nonatomic, assign) NSInteger layoutVersion;
+@property (nonatomic, strong) NSMutableSet<NSString *> *hiddenKeys;
 + (instancetype)shared;
+- (BOOL)isHidden:(NSString *)key;
+- (void)setHidden:(BOOL)hidden forKey:(NSString *)key;
+- (void)applyPreset:(NSString *)preset;
 - (void)load;
 - (void)save;
 - (NSString *)path;
@@ -242,6 +246,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     } mutableCopy];
     self.opacity = 0.55;
     self.layoutVersion = 2;
+    self.hiddenKeys = [NSMutableSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]];
     self.touchMode = @"crosshair";
     self.dynamicJoystick = NO;
     self.positions = [@{
@@ -312,6 +317,13 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         [self resetLayout];
         [self save];
     }
+    NSArray *hidden = json[@"hidden"];
+    if ([hidden isKindOfClass:[NSArray class]]) {
+        [self.hiddenKeys removeAllObjects];
+        for (NSString *key in hidden) {
+            if ([key isKindOfClass:[NSString class]]) [self.hiddenKeys addObject:key];
+        }
+    }
     if (self.bindings[@"move"] == nil) {
         self.bindings[@"move"] = @"移动";
     }
@@ -349,6 +361,51 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"shield" : @{ @"x" : @0.36, @"y" : @0.12, @"size" : @0.060 },
         @"move" : @{ @"x" : @0.14, @"y" : @0.74, @"size" : @0.28 },
     } mutableCopy];
+    [self.hiddenKeys setSet:[NSSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]]];
+}
+
+- (BOOL)isHidden:(NSString *)key {
+    return [self.hiddenKeys containsObject:key];
+}
+
+- (void)setHidden:(BOOL)hidden forKey:(NSString *)key {
+    if (key.length == 0) return;
+    if (hidden) {
+        [self.hiddenKeys addObject:key];
+    } else {
+        [self.hiddenKeys removeObject:key];
+    }
+}
+
+- (void)applyPreset:(NSString *)preset {
+    if ([preset isEqualToString:@"classic"]) {
+        self.positions = [@{
+            @"forward" : @{ @"x" : @0.13, @"y" : @0.76, @"size" : @0.16 },
+            @"back" : @{ @"x" : @0.24, @"y" : @0.86, @"size" : @0.10 },
+            @"left" : @{ @"x" : @0.08, @"y" : @0.86, @"size" : @0.10 },
+            @"right" : @{ @"x" : @0.24, @"y" : @0.66, @"size" : @0.10 },
+            @"jump" : @{ @"x" : @0.92, @"y" : @0.78, @"size" : @0.16 },
+            @"sneak" : @{ @"x" : @0.81, @"y" : @0.88, @"size" : @0.10 },
+            @"sprint" : @{ @"x" : @0.72, @"y" : @0.78, @"size" : @0.10 },
+            @"attack" : @{ @"x" : @0.80, @"y" : @0.62, @"size" : @0.16 },
+            @"use" : @{ @"x" : @0.92, @"y" : @0.48, @"size" : @0.16 },
+            @"inventory" : @{ @"x" : @0.72, @"y" : @0.95, @"size" : @0.08 },
+            @"chat" : @{ @"x" : @0.84, @"y" : @0.12, @"size" : @0.065 },
+            @"pause" : @{ @"x" : @0.92, @"y" : @0.12, @"size" : @0.065 },
+            @"settings" : @{ @"x" : @0.68, @"y" : @0.12, @"size" : @0.060 },
+            @"debug" : @{ @"x" : @0.60, @"y" : @0.12, @"size" : @0.055 },
+            @"perspective" : @{ @"x" : @0.52, @"y" : @0.12, @"size" : @0.055 },
+            @"offhand" : @{ @"x" : @0.44, @"y" : @0.12, @"size" : @0.060 },
+            @"shield" : @{ @"x" : @0.36, @"y" : @0.12, @"size" : @0.060 },
+            @"move" : @{ @"x" : @0.16, @"y" : @0.78, @"size" : @0.30 },
+        } mutableCopy];
+        [self.hiddenKeys removeAllObjects];
+    } else {
+        [self resetLayout];
+        if ([preset isEqualToString:@"minimal"]) {
+            [self.hiddenKeys addObjectsFromArray:@[@"chat", @"inventory"]];
+        }
+    }
 }
 
 - (void)save {
@@ -358,6 +415,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"opacity" : @(self.opacity),
         @"touchMode" : self.touchMode ?: @"crosshair",
         @"dynamicJoystick" : @(self.dynamicJoystick),
+        @"hidden" : self.hiddenKeys.allObjects ?: @[],
         @"bindings" : self.bindings ?: @{},
         @"layout" : self.positions ?: @{},
     };
@@ -1807,7 +1865,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 }
 @end
 
-@interface NCLRKeymapController : NCLRPageController
+@interface NCLRKeymapController : NCLRPageController <UIDocumentPickerDelegate>
 @property (nonatomic, strong) UISlider *sizeSlider;
 @property (nonatomic, strong) UILabel *sizeValue;
 @property (nonatomic, strong) UIButton *menuToggle;
@@ -1816,6 +1874,8 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @property (nonatomic, strong) UILabel *opacityValue;
 @property (nonatomic, strong) UISegmentedControl *modeControl;
 @property (nonatomic, strong) UISwitch *dynamicSwitch;
+@property (nonatomic, strong) UISegmentedControl *presetControl;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, UISwitch *> *visibilitySwitches;
 @property (nonatomic, strong) NSMutableArray<UIButton *> *keyButtons;
 @property (nonatomic, strong) UIView *preview;
 @property (nonatomic, strong) UIView *grid;
@@ -1966,6 +2026,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.scroll.delaysContentTouches = NO;
     self.scroll.canCancelContentTouches = YES;
     self.keyButtons = [NSMutableArray array];
+    self.visibilitySwitches = [NSMutableDictionary dictionary];
     self.previewButtons = [NSMutableDictionary dictionary];
     [self setupPage];
     [self.stack addArrangedSubview:[self headerWithTitle:@"触控界面"
@@ -2038,16 +2099,26 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         @[dynamicLabel, dynamicSpacer, self.dynamicSwitch]];
     dynamicRow.axis = UILayoutConstraintAxisHorizontal;
     dynamicRow.alignment = UIStackViewAlignmentCenter;
+    self.presetControl = [[UISegmentedControl alloc] initWithItems:@[@"FCL", @"经典", @"极简"]];
+    self.presetControl.selectedSegmentIndex = 0;
+    [self.presetControl addTarget:self action:@selector(presetChanged:)
+                 forControlEvents:UIControlEventValueChanged];
     UIButton *addKey = [self button:@"+ 添加触控键" action:@selector(addKeyTapped) primary:NO];
     UIButton *gridButton = [self button:@"网格" action:@selector(toggleGrid) primary:NO];
     UIButton *resetButton = [self button:@"重置布局" action:@selector(resetLayoutTapped) primary:NO];
     UIButton *fullButton = [self button:@"全屏编辑" action:@selector(toggleCanvas) primary:NO];
+    UIButton *exportButton = [self button:@"导出" action:@selector(exportKeymap) primary:NO];
+    UIButton *importButton = [self button:@"导入" action:@selector(importKeymap) primary:NO];
+    UIStackView *ioRow = [[UIStackView alloc] initWithArrangedSubviews:@[exportButton, importButton]];
+    ioRow.axis = UILayoutConstraintAxisHorizontal;
+    ioRow.spacing = 8.0;
+    ioRow.distribution = UIStackViewDistributionFillEqually;
     UIStackView *tools = [[UIStackView alloc] initWithArrangedSubviews:@[gridButton, resetButton, fullButton]];
     tools.axis = UILayoutConstraintAxisHorizontal;
     tools.spacing = 8.0;
     tools.distribution = UIStackViewDistributionFillEqually;
     UIStackView *menuStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.menuToggle, self.sizeRow, opacityRow, self.modeControl, dynamicRow, addKey, tools]];
+        @[self.menuToggle, self.presetControl, self.sizeRow, opacityRow, self.modeControl, dynamicRow, addKey, tools, ioRow]];
     menuStack.axis = UILayoutConstraintAxisVertical;
     menuStack.spacing = 8.0;
     menuStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2184,16 +2255,24 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
                                                           weight:UIFontWeightSemibold];
         key.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
         [self.keyButtons addObject:key];
+        UISwitch *vis = [[UISwitch alloc] init];
+        vis.on = ![NCLRKeymap.shared isHidden:keys[i]];
+        vis.tag = i;
+        [vis addTarget:self action:@selector(visibilityChanged:) forControlEvents:UIControlEventValueChanged];
+        self.visibilitySwitches[keys[i]] = vis;
         [card addSubview:name];
         [card addSubview:key];
+        [card addSubview:vis];
         [NSLayoutConstraint activateConstraints:@[
             [name.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
             [name.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
-            [name.trailingAnchor constraintLessThanOrEqualToAnchor:key.leadingAnchor constant:-12.0],
-            [key.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-14.0],
-            [key.topAnchor constraintEqualToAnchor:card.topAnchor constant:8.0],
-            [key.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-8.0],
-            [key.widthAnchor constraintEqualToConstant:128.0],
+            [name.trailingAnchor constraintLessThanOrEqualToAnchor:key.leadingAnchor constant:-10.0],
+            [key.trailingAnchor constraintEqualToAnchor:vis.leadingAnchor constant:-10.0],
+            [key.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
+            [key.widthAnchor constraintEqualToConstant:96.0],
+            [key.heightAnchor constraintEqualToConstant:36.0],
+            [vis.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-14.0],
+            [vis.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
         ]];
         [self.stack addArrangedSubview:card];
     }
@@ -2239,6 +2318,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     for (NSString *key in self.previewButtons) {
         UIButton *button = self.previewButtons[key];
         NSDictionary *position = NCLRKeymap.shared.positions[key];
+        if (position == nil) position = @{ @"x" : @0.5, @"y" : @0.5, @"size" : @0.08 };
         CGFloat x = [position[@"x"] doubleValue];
         CGFloat y = [position[@"y"] doubleValue];
         CGRect area = [self previewContentRect];
@@ -2251,6 +2331,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         button.titleLabel.font = [UIFont monospacedSystemFontOfSize:MAX(9.0, 11.0 * NCLRKeymap.shared.buttonSize)
                                                               weight:UIFontWeightBold];
         BOOL move = [key isEqualToString:@"move"];
+        button.alpha = [NCLRKeymap.shared isHidden:key] ? 0.22 : 1.0;
         button.layer.cornerRadius = move ? size / 2.0 : 8.0;
         button.layer.borderWidth = move ? 2.0 : ([key isEqualToString:self.selectedKey] ? 2.0 : 0.0);
         button.layer.borderColor = (move ? [UIColor colorWithWhite:1.0 alpha:0.35]
@@ -2364,6 +2445,75 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 - (void)resetLayoutTapped {
     [NCLRKeymap.shared resetLayout];
     [self.view setNeedsLayout];
+}
+
+- (NSArray<NSString *> *)controlKeys {
+    return @[@"move", @"jump", @"sneak", @"sprint", @"attack",
+             @"use", @"inventory", @"chat", @"pause", @"settings",
+             @"debug", @"perspective", @"offhand", @"shield"];
+}
+
+- (void)presetChanged:(UISegmentedControl *)control {
+    NSArray<NSString *> *presets = @[@"fcl", @"classic", @"minimal"];
+    NSInteger index = MAX(0, MIN((NSInteger)presets.count - 1, control.selectedSegmentIndex));
+    [NCLRKeymap.shared applyPreset:presets[index]];
+    [NCLRKeymap.shared save];
+    for (NSString *key in self.visibilitySwitches) {
+        self.visibilitySwitches[key].on = ![NCLRKeymap.shared isHidden:key];
+    }
+    [self.view setNeedsLayout];
+    [self.view layoutIfNeeded];
+}
+
+- (void)visibilityChanged:(UISwitch *)sender {
+    NSArray<NSString *> *keys = [self controlKeys];
+    if (sender.tag < 0 || sender.tag >= (NSInteger)keys.count) return;
+    NSString *key = keys[sender.tag];
+    [NCLRKeymap.shared setHidden:!sender.on forKey:key];
+    [NCLRKeymap.shared save];
+    UIButton *preview = self.previewButtons[key];
+    preview.alpha = sender.on ? 1.0 : 0.22;
+}
+
+- (void)exportKeymap {
+    [NCLRKeymap.shared save];
+    NSURL *url = [NSURL fileURLWithPath:NCLRKeymap.shared.path];
+    UIActivityViewController *share = [[UIActivityViewController alloc]
+        initWithActivityItems:@[url] applicationActivities:nil];
+    share.popoverPresentationController.sourceView = self.view;
+    share.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width / 2.0, 80.0, 1.0, 1.0);
+    [self presentViewController:share animated:YES completion:nil];
+}
+
+- (void)importKeymap {
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
+        initWithDocumentTypes:@[@"public.data"] inMode:UIDocumentPickerModeImport];
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    NSURL *url = urls.firstObject;
+    if (url == nil) return;
+    BOOL scoped = [url startAccessingSecurityScopedResource];
+    NSString *path = NCLRKeymap.shared.path;
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    NSError *error = nil;
+    BOOL ok = [[NSFileManager defaultManager] copyItemAtURL:url
+                                                     toURL:[NSURL fileURLWithPath:path]
+                                                     error:&error];
+    if (scoped) [url stopAccessingSecurityScopedResource];
+    if (ok) {
+        [NCLRKeymap.shared load];
+    }
+    NSString *message = ok ? @"已导入，退出触控编辑再进入即可看到新布局。"
+                           : (error.localizedDescription ?: @"无法导入");
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:ok ? @"导入成功" : @"导入失败"
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)opacityChanged:(UISlider *)slider {
