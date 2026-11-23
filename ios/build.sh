@@ -96,7 +96,13 @@ if [ -n "${SHIP_BUNDLE:-}" ]; then
     ls -lh "$APP/ship.hzr3"
 fi
 
-# The wasm loader finds the game's std member beside the executable.
+# The wasm loader finds one or more std members beside the executable.
+if [ -n "${WASM_STD_DIR:-}" ]; then
+    test -d "$WASM_STD_DIR"
+    mkdir -p "$APP/horizon-wasm-std"
+    cp "$WASM_STD_DIR/"*.wasm "$APP/horizon-wasm-std/"
+    ls -lh "$APP/horizon-wasm-std/"
+fi
 if [ -n "${WASM_STD:-}" ]; then
     test -f "$WASM_STD"
     cp "$WASM_STD" "$APP/horizon-wasm-std.wasm"

@@ -47,7 +47,7 @@ jobs:
             IPA_NAME=NCLR-L1.1-unsigned.ipa \
             ICON_DIR="$PWD/ios/icons" \
             RESOURCE_DIR="" SHIP_BUNDLE="" \
-            WASM_STD="$PWD/ios/wasm-std/horizon-wasm-std.wasm" \
+            WASM_STD_DIR="$PWD/ios/wasm-std" \
             BUILD_DIR="$PWD/build-nclr" DIST_DIR="$PWD/dist-nclr" \
             bash ios/build.sh
       - name: Upload IPA artifact

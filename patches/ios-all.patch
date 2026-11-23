@@ -1630,6 +1630,314 @@ index 4c35972..1d82e98 100644
  mod tests {
      #[test]
      fn the_frame_average_is_sent_as_unknown() {
+diff --git a/crates/horizon-mod-wasm/src/lib.rs b/crates/horizon-mod-wasm/src/lib.rs
+index 2ec0718..ae33266 100644
+--- a/crates/horizon-mod-wasm/src/lib.rs
++++ b/crates/horizon-mod-wasm/src/lib.rs
+@@ -569,11 +569,9 @@ pub fn load_installed(
+             ..Loaded::default()
+         },
+         Ok(_) => {
+-            let std = std::env::current_exe()
+-                .ok()
+-                .and_then(|exe| std::fs::read(exe.with_file_name("horizon-wasm-std.wasm")).ok());
+-            load_available_std(
+-                std.as_deref(),
++            let stds = installed_stds();
++            load_available_stds(
++                &stds,
+                 packages,
+                 Some(&cache),
+                 memory_cap_mib,
+@@ -672,6 +670,57 @@ fn initialize_modules(modules: &[WasmMod], inventory: &[mod_api::PackageInfo]) -
+     succeeded
+ }
+ 
++/// Every std member shipped with this build. A mod's core crate hash depends
++/// on the rustc that built it, so one std cannot link every version; the
++/// loader tries each candidate for a group.
++fn installed_stds() -> Vec<Vec<u8>> {
++    let Some(exe) = std::env::current_exe().ok() else {
++        return Vec::new();
++    };
++    let dir = exe.with_file_name("horizon-wasm-std");
++    let mut paths: Vec<_> = std::fs::read_dir(&dir)
++        .ok()
++        .into_iter()
++        .flatten()
++        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
++        .filter(|path| path.extension().is_some_and(|ext| ext == std::ffi::OsStr::new("wasm")))
++        .collect();
++    paths.sort();
++    let mut stds: Vec<Vec<u8>> = paths
++        .into_iter()
++        .filter_map(|path| std::fs::read(path).ok())
++        .collect();
++    // Older packages carry one std beside the executable.
++    if stds.is_empty()
++        && let Ok(bytes) = std::fs::read(exe.with_file_name("horizon-wasm-std.wasm"))
++    {
++        stds.push(bytes);
++    }
++    stds
++}
++
++/// Loads with every shipped std; a group whose mods need another rustc's
++/// core crate links against the first candidate that works.
++fn load_available_stds(
++    stds: &[Vec<u8>],
++    packages: Vec<WasmPackage>,
++    cache: Option<&module_cache::ModuleCache>,
++    memory_cap_mib: u32,
++    side: horizon_mod_package::manifest::Side,
++) -> Loaded {
++    if stds.is_empty() {
++        return Loaded {
++            refused: packages
++                .into_iter()
++                .map(|p| (p.manifest.id, Refusal::NoStd))
++                .collect(),
++            ..Loaded::default()
++        };
++    }
++    let members: Vec<&[u8]> = stds.iter().map(Vec::as_slice).collect();
++    load_with_cache_multi(&members, packages, cache, memory_cap_mib, side)
++}
++
+ fn load_available_std(
+     std: Option<&[u8]>,
+     packages: Vec<WasmPackage>,
+@@ -730,6 +779,16 @@ fn load_with_cache(
+     cache: Option<&module_cache::ModuleCache>,
+     memory_cap_mib: u32,
+     side: horizon_mod_package::manifest::Side,
++) -> Loaded {
++    load_with_cache_multi(&[std_member], packages, cache, memory_cap_mib, side)
++}
++
++fn load_with_cache_multi(
++    std_members: &[&[u8]],
++    packages: Vec<WasmPackage>,
++    cache: Option<&module_cache::ModuleCache>,
++    memory_cap_mib: u32,
++    side: horizon_mod_package::manifest::Side,
+ ) -> Loaded {
+     let (groups, refused) = groups(&packages, side);
+     let mut loaded = Loaded {
+@@ -748,86 +807,53 @@ fn load_with_cache(
+         }
+     };
+     for indices in groups {
+-        let mut members = vec![link::Member {
+-            name: "libstd.so",
+-            module: std_member,
+-        }];
+         let names: Vec<_> = indices
+             .iter()
+             .map(|&i| format!("lib{}.so", packages[i].manifest.id))
+             .collect();
+-        members.extend(indices.iter().zip(&names).map(|(&i, name)| link::Member {
+-            name,
+-            module: &packages[i].module,
+-        }));
+         let manifests: Vec<_> = indices
+             .iter()
+             .zip(&names)
+             .map(|(&i, name)| (name.as_str(), &packages[i].manifest))
+             .collect();
+-        let result = group_memory(&manifests, memory_cap_mib)
+-            .and_then(|memory_mib| WasmMod::instantiate(&engine, memory_mib, &members, cache))
+-            .and_then(|mods| {
+-                if mods.len() != indices.len() {
+-                    return Err(Refusal::Runtime("missing mod boundary exports".into()));
+-                }
+-                let _timer = load_times::timer(load_times::Phase::Subscribe);
+-                let mut checked = Vec::new();
+-                for mut module in mods {
+-                    let subscriptions: Vec<(String, i32, bool)> = module
+-                        .call(
+-                            CallClass::Load,
+-                            boundary::Frame::default(),
+-                            boundary::SUBSCRIBED,
+-                            None,
+-                            |_| {},
+-                            |r| r.take(),
+-                        )
+-                        .ok_or_else(|| Refusal::Runtime("subscriptions failed".into()))?;
+-                    registration_capabilities::check(&subscriptions)?;
+-                    module
+-                        .check_prepared_hooks(
+-                            &subscriptions
+-                                .iter()
+-                                .map(|(name, _, _)| boundary::hook_id(name))
+-                                .collect::<Vec<_>>(),
+-                        )
+-                        .map_err(Refusal::Runtime)?;
+-                    let names: Vec<String> = subscriptions
+-                        .iter()
+-                        .map(|(name, _, _)| name.clone())
+-                        .collect();
+-                    module.listeners = subscriptions
+-                        .into_iter()
+-                        .filter_map(|(name, priority, receive_cancelled)| {
+-                            boundary::hook_id(&name).map(|hook| mod_api::Listener {
+-                                hook: Some(hook),
+-                                priority,
+-                                receive_cancelled,
+-                            })
+-                        })
+-                        .collect::<Vec<_>>()
+-                        .leak();
+-                    // The ground provider runs on the worldgen workers, a contract wasm lacks yet.
+-                    if names.iter().any(|name| name == "alter_ground") {
+-                        return Err(Refusal::Runtime(
+-                        "alter_ground: worldgen ground providers are not yet available to wasm mods"
+-                            .into(),
+-                    ));
+-                    }
+-                    // A hook the wasm side cannot serve yet refuses the load by
+-                    // name with its reason, never a silent skip past a dead
+-                    // subscription.
+-                    if let Some(reason) = names.iter().find_map(|name| native_only_hook(name)) {
+-                        return Err(Refusal::Runtime(reason.into()));
+-                    }
+-                    module.subscribed = boundary::subscriptions_of("wasm mod", names);
+-                    checked.push(module);
+-                }
+-                Ok(checked)
++        let mod_members: Vec<_> = indices
++            .iter()
++            .zip(&names)
++            .map(|(&i, name)| link::Member {
++                name,
++                module: &packages[i].module,
++            })
++            .collect();
++        let mut last_error = None;
++        let mut chosen = None;
++        // The same mod group may have been built by different rustc releases;
++        // its core crate hash is part of the symbol name. Try every shipped
++        // std and keep the first that links and subscribes cleanly.
++        for std_member in std_members {
++            let mut members = Vec::with_capacity(mod_members.len() + 1);
++            members.push(link::Member {
++                name: "libstd.so",
++                module: std_member,
+             });
+-        match result {
+-            Ok(mods) => {
++            members.extend(mod_members.iter().map(|member| link::Member {
++                name: member.name,
++                module: member.module,
++            }));
++            let attempt = group_memory(&manifests, memory_cap_mib)
++                .and_then(|memory_mib| {
++                    WasmMod::instantiate(&engine, memory_mib, &members, cache)
++                })
++                .and_then(|mods| check_subscriptions(mods, indices.len()));
++            match attempt {
++                Ok(mods) => {
++                    chosen = Some(mods);
++                    break;
++                }
++                Err(why) => last_error = Some(why),
++            }
++        }
++        match chosen {
++            Some(mods) => {
+                 for (module, i) in mods.into_iter().zip(indices) {
+                     let manifest = packages[i].manifest.clone();
+                     let id = Box::leak(manifest.id.clone().into_boxed_str());
+@@ -838,16 +864,84 @@ fn load_with_cache(
+                     loaded.manifests.push(manifest);
+                 }
+             }
+-            Err(why) => loaded.refused.extend(
+-                indices
+-                    .into_iter()
+-                    .map(|i| (packages[i].manifest.id.clone(), why.clone())),
+-            ),
++            None => {
++                let why = last_error.unwrap_or_else(|| {
++                    Refusal::Runtime("no shipped wasm std member linked".into())
++                });
++                loaded.refused.extend(
++                    indices
++                        .into_iter()
++                        .map(|i| (packages[i].manifest.id.clone(), why.clone())),
++                );
++            }
+         }
+     }
+     loaded
+ }
+ 
++fn check_subscriptions(
++    mods: Vec<WasmMod>,
++    expected: usize,
++) -> Result<Vec<WasmMod>, Refusal> {
++    if mods.len() != expected {
++        return Err(Refusal::Runtime("missing mod boundary exports".into()));
++    }
++    let _timer = load_times::timer(load_times::Phase::Subscribe);
++    let mut checked = Vec::new();
++    for mut module in mods {
++        let subscriptions: Vec<(String, i32, bool)> = module
++            .call(
++                CallClass::Load,
++                boundary::Frame::default(),
++                boundary::SUBSCRIBED,
++                None,
++                |_| {},
++                |r| r.take(),
++            )
++            .ok_or_else(|| Refusal::Runtime("subscriptions failed".into()))?;
++        registration_capabilities::check(&subscriptions)?;
++        module
++            .check_prepared_hooks(
++                &subscriptions
++                    .iter()
++                    .map(|(name, _, _)| boundary::hook_id(name))
++                    .collect::<Vec<_>>(),
++            )
++            .map_err(Refusal::Runtime)?;
++        let names: Vec<String> = subscriptions
++            .iter()
++            .map(|(name, _, _)| name.clone())
++            .collect();
++        module.listeners = subscriptions
++            .into_iter()
++            .filter_map(|(name, priority, receive_cancelled)| {
++                boundary::hook_id(&name).map(|hook| mod_api::Listener {
++                    hook: Some(hook),
++                    priority,
++                    receive_cancelled,
++                })
++            })
++            .collect::<Vec<_>>()
++            .leak();
++        // The ground provider runs on the worldgen workers, a contract wasm lacks yet.
++        if names.iter().any(|name| name == "alter_ground") {
++            return Err(Refusal::Runtime(
++                "alter_ground: worldgen ground providers are not yet available to wasm mods"
++                    .into(),
++            ));
++        }
++        // A hook the wasm side cannot serve yet refuses the load by
++        // name with its reason, never a silent skip past a dead
++        // subscription.
++        if let Some(reason) = names.iter().find_map(|name| native_only_hook(name)) {
++            return Err(Refusal::Runtime(reason.into()));
++        }
++        module.subscribed = boundary::subscriptions_of("wasm mod", names);
++        checked.push(module);
++    }
++    Ok(checked)
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
 diff --git a/crates/horizon-mod-wasm/src/module_cache.rs b/crates/horizon-mod-wasm/src/module_cache.rs
 index 4d01b0d..41b93cf 100644
 --- a/crates/horizon-mod-wasm/src/module_cache.rs
