@@ -303,7 +303,7 @@ index 550d63c..c03f913 100644
          let emote = settings.extras.emote_key.clone();
          settings.keys.set("key.emote", &emote);
 diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-render/src/touch.rs
-index b38a955..926af6b 100644
+index b38a955..c05d45f 100644
 --- a/crates/horizon-client-render/src/touch.rs
 +++ b/crates/horizon-client-render/src/touch.rs
 @@ -61,6 +61,16 @@ enum Role {
@@ -341,6 +341,51 @@ index b38a955..926af6b 100644
          })
      }
  
+@@ -595,21 +605,37 @@ impl TouchControls {
+             match role {
+                 Role::Move(anchor) => {
+                     let radius = self.placement(Control::Move).size / 2.0;
+-                    let mut left = [
++                    let raw = [
+                         (point[0] - anchor[0]) * self.aspect() / radius,
+                         (anchor[1] - point[1]) / radius,
+                     ];
+                     if self.settings.mode == Mode::Dpad {
+-                        left = left.map(|v| if v.abs() < 1.0 / 3.0 { 0.0 } else { v.signum() });
++                        let mut left = raw
++                            .map(|v| if v.abs() < 1.0 / 3.0 { 0.0 } else { v.signum() });
++                        state.left = left;
++                        if left[1] > 0.5
++                            && self.settings.sprint_with_joystick
++                        {
++                            state.set(Button::LeftStick, true);
++                        }
++                        continue;
+                     }
++                    // A small centre dead zone, then a smooth 0..1 ramp: a
++                    // resting thumb does not creep the player, and a full push
++                    // still reaches walking speed.
++                    let dead = 0.16;
++                    let length = raw[0].hypot(raw[1]);
++                    let magnitude = ((length - dead) / (1.0 - dead)).clamp(0.0, 1.0);
++                    let direction = if length > 0.0 {
++                        [raw[0] / length, raw[1] / length]
++                    } else {
++                        [0.0, 0.0]
++                    };
++                    state.left = [direction[0] * magnitude, direction[1] * magnitude];
+                     // Pushing forward past the joystick's rim sprints; coming
+                     // back inside stops.
+-                    let sprint = left[1] > 1.0;
+-                    let length = left[0].hypot(left[1]).max(1.0);
+-                    state.left = left.map(|v| v / length);
+-                    if sprint
++                    if raw[1] > 1.0
+                         && self.settings.sprint_with_joystick
+-                        && self.settings.mode != Mode::Dpad
+                     {
+                         state.set(Button::LeftStick, true);
+                     }
 diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-client-render/src/touch/draw.rs
 index 9e8d8e4..dc7a05a 100644
 --- a/crates/horizon-client-render/src/touch/draw.rs
@@ -774,10 +819,10 @@ index 026382e..c04f78b 100644
              self.pad.in_use = true;
              self.pad.keyboard_took_over = false;
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..c78c988 100644
+index 16664ff..dca7a16 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
-@@ -55,6 +55,95 @@ impl Game<'_> {
+@@ -55,6 +55,98 @@ impl Game<'_> {
          let zoom = self.zoom_turn_scale();
          self.turn_player(x * zoom, y * zoom);
      }
@@ -856,6 +901,9 @@ index 16664ff..c78c988 100644
 +    /// Acts on the one-shot touch buttons that are not pad buttons.
 +    pub(super) fn apply_touch_requests(&mut self) {
 +        use horizon_client::debug_keys::KeyAction;
++        if std::mem::take(&mut self.touch.clicked) {
++            self.audio.play_button_click();
++        }
 +        if std::mem::take(&mut self.touch.debug_requested) {
 +            self.debug_key(KeyCode::F3, KeyAction::Press);
 +            self.debug_key(KeyCode::F3, KeyAction::Release);
@@ -1352,7 +1400,7 @@ index 6d86d1f..ad08c0c 100644
  libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["extended"] }
  
 diff --git a/crates/horizon-threads/src/alloc_count.rs b/crates/horizon-threads/src/alloc_count.rs
-index 5e2e8b6..dcf50cb 100644
+index 5e2e8b6..88b9f0e 100644
 --- a/crates/horizon-threads/src/alloc_count.rs
 +++ b/crates/horizon-threads/src/alloc_count.rs
 @@ -5,6 +5,11 @@ use std::{
@@ -1360,7 +1408,7 @@ index 5e2e8b6..dcf50cb 100644
  };
  
 +#[cfg(not(target_os = "ios"))]
-+use BackingAlloc as BackingAlloc;
++use mimalloc::MiMalloc as BackingAlloc;
 +#[cfg(target_os = "ios")]
 +use std::alloc::System as BackingAlloc;
 +
