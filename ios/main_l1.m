@@ -1935,7 +1935,6 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @property (nonatomic, strong) UIView *grid;
 @property (nonatomic, strong) UIView *selection;
 @property (nonatomic, strong) UIView *resizeHandle;
-@property (nonatomic, strong) UILabel *selectionInfo;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, UIButton *> *previewButtons;
 @property (nonatomic, copy) NSString *selectedKey;
 @property (nonatomic, assign) CGPoint dragStartCenter;
@@ -2285,10 +2284,6 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.preview.clipsToBounds = YES;
     [previewCard addSubview:previewLabel];
     [previewCard addSubview:self.preview];
-    self.selectionInfo = [self label:@"选择一个按钮后拖动位置，拖右下角圆点调整大小"
-                                size:10.0 weight:UIFontWeightRegular
-                               color:NCLRColor(0.62, 0.62, 0.62, 1.0)];
-    [previewCard addSubview:self.selectionInfo];
     self.previewCard = previewCard;
     self.previewHeight = [self.preview.heightAnchor constraintEqualToConstant:200.0];
     self.canvasClose = [self button:@"退出全屏" action:@selector(toggleCanvas) primary:NO];
@@ -2302,15 +2297,15 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [NSLayoutConstraint activateConstraints:@[
         [previewLabel.leadingAnchor constraintEqualToAnchor:previewCard.leadingAnchor constant:16.0],
         [previewLabel.topAnchor constraintEqualToAnchor:previewCard.topAnchor constant:12.0],
-        [self.preview.leadingAnchor constraintEqualToAnchor:previewCard.leadingAnchor constant:12.0],
-        [self.preview.trailingAnchor constraintEqualToAnchor:previewCard.trailingAnchor constant:-12.0],
+        [self.preview.centerXAnchor constraintEqualToAnchor:previewCard.centerXAnchor],
         [self.preview.topAnchor constraintEqualToAnchor:previewLabel.bottomAnchor constant:8.0],
+        [self.preview.widthAnchor constraintLessThanOrEqualToAnchor:previewCard.widthAnchor constant:-24.0],
+        [self.preview.bottomAnchor constraintLessThanOrEqualToAnchor:previewCard.bottomAnchor constant:-12.0],
         self.previewHeight,
-        [self.selectionInfo.leadingAnchor constraintEqualToAnchor:self.preview.leadingAnchor],
-        [self.selectionInfo.trailingAnchor constraintEqualToAnchor:self.preview.trailingAnchor],
-        [self.selectionInfo.topAnchor constraintEqualToAnchor:self.preview.bottomAnchor constant:6.0],
-        [self.selectionInfo.bottomAnchor constraintEqualToAnchor:previewCard.bottomAnchor constant:-10.0],
     ]];
+    NSLayoutConstraint *previewAspect = [self.preview.widthAnchor constraintEqualToAnchor:self.preview.heightAnchor multiplier:16.0 / 9.0];
+    previewAspect.priority = 999.0;
+    previewAspect.active = YES;
     self.grid = [[NCLRGridOverlay alloc] initWithFrame:self.preview.bounds];
     self.grid.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.grid.userInteractionEnabled = NO;
@@ -2500,7 +2495,6 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     if (self.selectedKey.length == 0) {
         self.selection.hidden = YES;
         self.resizeHandle.hidden = YES;
-        self.selectionInfo.text = @"选择一个按钮后拖动位置，拖右下角圆点调整大小";
         return;
     }
     UIButton *button = self.previewButtons[self.selectedKey];
@@ -2514,13 +2508,6 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.selection.hidden = NO;
     self.resizeHandle.center = CGPointMake(CGRectGetMaxX(frame), CGRectGetMaxY(frame));
     self.resizeHandle.hidden = NO;
-    NSDictionary *position = NCLRKeymap.shared.positions[self.selectedKey];
-    self.selectionInfo.text = [NSString stringWithFormat:
-        @"%@  ·  x %.0f%%  y %.0f%%  ·  大小 %.2fx  ·  拖动移动，拖圆点缩放",
-        NCLRKeymap.shared.bindings[self.selectedKey] ?: self.selectedKey,
-        [position[@"x"] doubleValue] * 100.0,
-        [position[@"y"] doubleValue] * 100.0,
-        [position[@"size"] doubleValue] * NCLRKeymap.shared.buttonSize];
 }
 
 - (void)tapKey:(UITapGestureRecognizer *)sender {
