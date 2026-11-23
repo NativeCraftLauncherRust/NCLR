@@ -2073,7 +2073,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     NCLRThemeSet(control.selectedSegmentIndex == 0);
     UIWindow *window = self.view.window;
     window.overrideUserInterfaceStyle = NCLRDarkMode ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
-    window.rootViewController = [[NCLRRootController alloc] init];
+    Class rootClass = NSClassFromString(@"NCLRRootController");
+    if (rootClass != Nil) {
+        window.rootViewController = [[rootClass alloc] init];
+    }
 }
 
 - (void)openKeymap {
