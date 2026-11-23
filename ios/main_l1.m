@@ -194,6 +194,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 @property (nonatomic, assign) CGFloat opacity;
 @property (nonatomic, copy) NSString *touchMode;
 @property (nonatomic, assign) BOOL dynamicJoystick;
+@property (nonatomic, assign) NSInteger layoutVersion;
 + (instancetype)shared;
 - (void)load;
 - (void)save;
@@ -240,30 +241,32 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"move" : @"移动",
     } mutableCopy];
     self.opacity = 0.55;
+    self.layoutVersion = 2;
     self.touchMode = @"crosshair";
     self.dynamicJoystick = NO;
     self.positions = [@{
-        @"forward" : @{ @"x" : @0.13, @"y" : @0.76, @"size" : @0.16 },
-        @"back" : @{ @"x" : @0.24, @"y" : @0.86, @"size" : @0.10 },
-        @"left" : @{ @"x" : @0.08, @"y" : @0.86, @"size" : @0.10 },
-        @"right" : @{ @"x" : @0.24, @"y" : @0.66, @"size" : @0.10 },
-        @"jump" : @{ @"x" : @0.92, @"y" : @0.78, @"size" : @0.16 },
-        @"sneak" : @{ @"x" : @0.81, @"y" : @0.88, @"size" : @0.10 },
-        @"sprint" : @{ @"x" : @0.72, @"y" : @0.78, @"size" : @0.10 },
-        @"attack" : @{ @"x" : @0.80, @"y" : @0.62, @"size" : @0.16 },
-        @"use" : @{ @"x" : @0.92, @"y" : @0.48, @"size" : @0.16 },
-        @"inventory" : @{ @"x" : @0.72, @"y" : @0.95, @"size" : @0.08 },
-        @"chat" : @{ @"x" : @0.52, @"y" : @0.95, @"size" : @0.08 },
-        @"pause" : @{ @"x" : @0.62, @"y" : @0.06, @"size" : @0.08 },
-        @"settings" : @{ @"x" : @0.72, @"y" : @0.06, @"size" : @0.08 },
-        @"debug" : @{ @"x" : @0.82, @"y" : @0.06, @"size" : @0.07 },
-        @"perspective" : @{ @"x" : @0.92, @"y" : @0.06, @"size" : @0.07 },
-        @"offhand" : @{ @"x" : @0.82, @"y" : @0.88, @"size" : @0.08 },
-        @"shield" : @{ @"x" : @0.88, @"y" : @0.78, @"size" : @0.10 },
-        @"move" : @{ @"x" : @0.16, @"y" : @0.78, @"size" : @0.30 },
+        @"forward" : @{ @"x" : @0.10, @"y" : @0.80, @"size" : @0.10 },
+        @"back" : @{ @"x" : @0.16, @"y" : @0.88, @"size" : @0.08 },
+        @"left" : @{ @"x" : @0.07, @"y" : @0.88, @"size" : @0.08 },
+        @"right" : @{ @"x" : @0.20, @"y" : @0.74, @"size" : @0.08 },
+        @"jump" : @{ @"x" : @0.86, @"y" : @0.78, @"size" : @0.15 },
+        @"sneak" : @{ @"x" : @0.72, @"y" : @0.88, @"size" : @0.09 },
+        @"sprint" : @{ @"x" : @0.30, @"y" : @0.90, @"size" : @0.07 },
+        @"attack" : @{ @"x" : @0.93, @"y" : @0.62, @"size" : @0.13 },
+        @"use" : @{ @"x" : @0.78, @"y" : @0.64, @"size" : @0.12 },
+        @"inventory" : @{ @"x" : @0.76, @"y" : @0.12, @"size" : @0.065 },
+        @"chat" : @{ @"x" : @0.84, @"y" : @0.12, @"size" : @0.065 },
+        @"pause" : @{ @"x" : @0.92, @"y" : @0.12, @"size" : @0.065 },
+        @"settings" : @{ @"x" : @0.68, @"y" : @0.12, @"size" : @0.060 },
+        @"debug" : @{ @"x" : @0.60, @"y" : @0.12, @"size" : @0.055 },
+        @"perspective" : @{ @"x" : @0.52, @"y" : @0.12, @"size" : @0.055 },
+        @"offhand" : @{ @"x" : @0.44, @"y" : @0.12, @"size" : @0.060 },
+        @"shield" : @{ @"x" : @0.36, @"y" : @0.12, @"size" : @0.060 },
+        @"move" : @{ @"x" : @0.14, @"y" : @0.74, @"size" : @0.28 },
     } mutableCopy];
     NSData *data = [NSData dataWithContentsOfFile:self.path];
     if (data.length == 0) {
+        [self save];
         return;
     }
     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
@@ -304,6 +307,11 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
             }
         }
     }
+    NSInteger savedVersion = [json[@"layoutVersion"] integerValue];
+    if (savedVersion < 2) {
+        [self resetLayout];
+        [self save];
+    }
     if (self.bindings[@"move"] == nil) {
         self.bindings[@"move"] = @"移动";
     }
@@ -322,22 +330,30 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 
 - (void)resetLayout {
     self.positions = [@{
-        @"forward" : @{ @"x" : @0.13, @"y" : @0.76, @"size" : @0.16 },
-        @"back" : @{ @"x" : @0.24, @"y" : @0.86, @"size" : @0.10 },
-        @"left" : @{ @"x" : @0.08, @"y" : @0.86, @"size" : @0.10 },
-        @"right" : @{ @"x" : @0.24, @"y" : @0.66, @"size" : @0.10 },
-        @"jump" : @{ @"x" : @0.92, @"y" : @0.78, @"size" : @0.16 },
-        @"sneak" : @{ @"x" : @0.81, @"y" : @0.88, @"size" : @0.10 },
-        @"sprint" : @{ @"x" : @0.72, @"y" : @0.78, @"size" : @0.10 },
-        @"attack" : @{ @"x" : @0.80, @"y" : @0.62, @"size" : @0.16 },
-        @"use" : @{ @"x" : @0.92, @"y" : @0.48, @"size" : @0.16 },
-        @"inventory" : @{ @"x" : @0.72, @"y" : @0.95, @"size" : @0.08 },
-        @"move" : @{ @"x" : @0.16, @"y" : @0.78, @"size" : @0.30 },
+        @"forward" : @{ @"x" : @0.10, @"y" : @0.80, @"size" : @0.10 },
+        @"back" : @{ @"x" : @0.16, @"y" : @0.88, @"size" : @0.08 },
+        @"left" : @{ @"x" : @0.07, @"y" : @0.88, @"size" : @0.08 },
+        @"right" : @{ @"x" : @0.20, @"y" : @0.74, @"size" : @0.08 },
+        @"jump" : @{ @"x" : @0.86, @"y" : @0.78, @"size" : @0.15 },
+        @"sneak" : @{ @"x" : @0.72, @"y" : @0.88, @"size" : @0.09 },
+        @"sprint" : @{ @"x" : @0.30, @"y" : @0.90, @"size" : @0.07 },
+        @"attack" : @{ @"x" : @0.93, @"y" : @0.62, @"size" : @0.13 },
+        @"use" : @{ @"x" : @0.78, @"y" : @0.64, @"size" : @0.12 },
+        @"inventory" : @{ @"x" : @0.76, @"y" : @0.12, @"size" : @0.065 },
+        @"chat" : @{ @"x" : @0.84, @"y" : @0.12, @"size" : @0.065 },
+        @"pause" : @{ @"x" : @0.92, @"y" : @0.12, @"size" : @0.065 },
+        @"settings" : @{ @"x" : @0.68, @"y" : @0.12, @"size" : @0.060 },
+        @"debug" : @{ @"x" : @0.60, @"y" : @0.12, @"size" : @0.055 },
+        @"perspective" : @{ @"x" : @0.52, @"y" : @0.12, @"size" : @0.055 },
+        @"offhand" : @{ @"x" : @0.44, @"y" : @0.12, @"size" : @0.060 },
+        @"shield" : @{ @"x" : @0.36, @"y" : @0.12, @"size" : @0.060 },
+        @"move" : @{ @"x" : @0.14, @"y" : @0.74, @"size" : @0.28 },
     } mutableCopy];
 }
 
 - (void)save {
     NSDictionary *json = @{
+        @"layoutVersion" : @(self.layoutVersion),
         @"buttonSize" : @(self.buttonSize),
         @"opacity" : @(self.opacity),
         @"touchMode" : self.touchMode ?: @"crosshair",
