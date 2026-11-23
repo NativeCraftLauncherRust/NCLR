@@ -10,7 +10,31 @@ static NSString *const kNCLRAccount = @"minecraft-access-token";
 static NSString *const kNCLRClientKey = @"NCLRMicrosoftClientID";
 static NSString *const kNCLRAccountNameKey = @"NCLRAccountName";
 
+@class NCLRRootController;
+static BOOL NCLRDarkMode = YES;
+static NSString *const kNCLRThemeKey = @"NCLRThemeDark";
+
+static void NCLRThemeLoad(void) {
+    NSNumber *saved = [[NSUserDefaults standardUserDefaults] objectForKey:kNCLRThemeKey];
+    NCLRDarkMode = saved == nil ? YES : saved.boolValue;
+}
+
+static void NCLRThemeSet(BOOL dark) {
+    NCLRDarkMode = dark;
+    [[NSUserDefaults standardUserDefaults] setBool:dark forKey:kNCLRThemeKey];
+}
+
+/// The launcher palette is authored for the dark theme. Light mode inverts
+/// near-neutral colours so backgrounds, cards, text and hairlines flip
+/// together; saturated accents keep their hue.
 static UIColor *NCLRColor(CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
+    if (!NCLRDarkMode) {
+        CGFloat hi = MAX(r, MAX(g, b));
+        CGFloat lo = MIN(r, MIN(g, b));
+        if (hi - lo <= 0.10 || hi <= 0.12) {
+            r = 1.0 - r; g = 1.0 - g; b = 1.0 - b;
+        }
+    }
     return [UIColor colorWithRed:r green:g blue:b alpha:a];
 }
 
@@ -1958,6 +1982,27 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [self.stack addArrangedSubview:[self headerWithTitle:@"设置" subtitle:@"启动器、存储和关于"
                                              actionTitle:nil action:nil]];
 
+    UIView *theme = [self card];
+    UILabel *themeTitle = [self eyebrow:@"外观"];
+    UILabel *themeText = [self label:@"切换启动器的黑夜 / 白天配色，设置会保存。"
+                                size:12.0 weight:UIFontWeightRegular
+                               color:NCLRColor(0.70, 0.70, 0.70, 1.0)];
+    UISegmentedControl *themeControl = [[UISegmentedControl alloc] initWithItems:@[@"黑夜", @"白天"]];
+    themeControl.selectedSegmentIndex = NCLRDarkMode ? 0 : 1;
+    [themeControl addTarget:self action:@selector(themeChanged:) forControlEvents:UIControlEventValueChanged];
+    UIStackView *themeStack = [[UIStackView alloc] initWithArrangedSubviews:@[themeTitle, themeText, themeControl]];
+    themeStack.axis = UILayoutConstraintAxisVertical;
+    themeStack.spacing = 8.0;
+    themeStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [theme addSubview:themeStack];
+    [NSLayoutConstraint activateConstraints:@[
+        [themeStack.leadingAnchor constraintEqualToAnchor:theme.leadingAnchor constant:16.0],
+        [themeStack.trailingAnchor constraintEqualToAnchor:theme.trailingAnchor constant:-16.0],
+        [themeStack.topAnchor constraintEqualToAnchor:theme.topAnchor constant:14.0],
+        [themeStack.bottomAnchor constraintEqualToAnchor:theme.bottomAnchor constant:-14.0],
+    ]];
+    [self.stack addArrangedSubview:theme];
+
     UIView *mode = [self card];
     UILabel *modeTitle = [self eyebrow:@"启动器架构"];
     UILabel *modeText = [self label:@"NCLR 只运行启动器本身：账号、版本、模组、设置都在这里管理。游戏端是独立应用，通过 nclr-game:// 接收版本；不需要退出启动器，也不再使用单生命周期切换。"
@@ -2022,6 +2067,13 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     UIButton *clear = [self button:@"清除本地启动器数据" action:@selector(clearData) primary:NO];
     clear.layer.borderColor = NCLRColor(0.95, 0.35, 0.35, 0.5).CGColor;
     [self.stack addArrangedSubview:clear];
+}
+
+- (void)themeChanged:(UISegmentedControl *)control {
+    NCLRThemeSet(control.selectedSegmentIndex == 0);
+    UIWindow *window = self.view.window;
+    window.overrideUserInterfaceStyle = NCLRDarkMode ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
+    window.rootViewController = [[NCLRRootController alloc] init];
 }
 
 - (void)openKeymap {
@@ -2887,14 +2939,21 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         button.tag = i;
         button.translatesAutoresizingMaskIntoConstraints = NO;
         button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.035];
-        button.layer.cornerRadius = 9.0;
+        button.layer.cornerRadius = 10.0;
+        button.layer.borderWidth = 1.0;
+        button.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.05].CGColor;
         button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-        button.contentEdgeInsets = UIEdgeInsetsMake(0, 14, 0, 8);
-        button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
+        button.contentEdgeInsets = UIEdgeInsetsMake(0, 10, 0, 6);
+        button.titleLabel.font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightSemibold];
         button.titleLabel.lineBreakMode = NSLineBreakByClipping;
-        NSArray *glyphs = @[@"⌂", @"▤", @"⧉", @"☀", @"▦", @"●", @"⚙"];
-        [button setTitle:[NSString stringWithFormat:@"%@  %@", glyphs[i], compactNames[i]]
-                forState:UIControlStateNormal];
+        NSArray *compactSymbols = @[@"house.fill", @"square.stack.3d.up.fill", @"puzzlepiece.extension.fill",
+                                    @"sun.max.fill", @"square.grid.2x2.fill",
+                                    @"person.crop.circle.fill", @"gearshape.fill"];
+        [button setImage:[UIImage systemImageNamed:compactSymbols[i]] forState:UIControlStateNormal];
+        button.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        button.imageEdgeInsets = UIEdgeInsetsMake(0, 0, 0, 5);
+        button.titleEdgeInsets = UIEdgeInsetsMake(0, 5, 0, 0);
+        [button setTitle:compactNames[i] forState:UIControlStateNormal];
         [button setTitleColor:NCLRColor(0.92, 0.92, 0.92, 1.0) forState:UIControlStateNormal];
         [button addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
         [compactNav addArrangedSubview:button];
@@ -3006,9 +3065,14 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         button.contentEdgeInsets = UIEdgeInsetsMake(0, 14, 0, 8);
         button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
         button.titleLabel.lineBreakMode = NSLineBreakByClipping;
-        NSArray *glyphs = @[@"⌂", @"▤", @"⧉", @"☀", @"▦", @"●", @"⚙"];
-        [button setTitle:[NSString stringWithFormat:@"%@  %@", glyphs[i], names[i]]
-                forState:UIControlStateNormal];
+        button.layer.cornerRadius = 11.0;
+        button.layer.borderWidth = 1.0;
+        button.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.045].CGColor;
+        [button setImage:[UIImage systemImageNamed:symbols[i]] forState:UIControlStateNormal];
+        button.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        button.imageEdgeInsets = UIEdgeInsetsMake(0, 0, 0, 8);
+        button.titleEdgeInsets = UIEdgeInsetsMake(0, 8, 0, 0);
+        [button setTitle:names[i] forState:UIControlStateNormal];
         [button setTitleColor:NCLRColor(0.92, 0.92, 0.92, 1.0) forState:UIControlStateNormal];
         [button addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
         [nav addArrangedSubview:button];
@@ -3191,12 +3255,20 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         [button setTitleColor:(selected ? NCLRColor(0.06, 0.06, 0.06, 1.0)
                                         : NCLRColor(0.92, 0.92, 0.92, 1.0))
                      forState:UIControlStateNormal];
+        button.tintColor = selected ? NCLRColor(0.06, 0.06, 0.06, 1.0)
+                                    : NCLRColor(0.92, 0.92, 0.92, 1.0);
+        button.layer.borderColor = selected ? UIColor.clearColor.CGColor
+                                            : [UIColor colorWithWhite:1.0 alpha:0.045].CGColor;
         button.alpha = selected ? 1.0 : 0.82;
     }
     for (NSInteger i = 0; i < self.compactButtons.count; i++) {
         UIButton *button = self.compactButtons[i];
         BOOL selected = i == page;
-        button.backgroundColor = selected ? [UIColor colorWithWhite:1.0 alpha:0.075] : UIColor.clearColor;
+        button.backgroundColor = selected ? [UIColor colorWithWhite:1.0 alpha:0.10] : UIColor.clearColor;
+        button.tintColor = selected ? NCLRColor(0.98, 0.98, 0.98, 1.0)
+                                    : NCLRColor(0.85, 0.85, 0.85, 1.0);
+        button.layer.borderColor = selected ? [UIColor colorWithWhite:1.0 alpha:0.16].CGColor
+                                            : [UIColor colorWithWhite:1.0 alpha:0.05].CGColor;
         button.alpha = selected ? 1.0 : 0.72;
     }
     if (self.childViewControllers.count > 0) {
@@ -3273,9 +3345,11 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         return;
     }
     UIWindowScene *windowScene = (UIWindowScene *)scene;
+    NCLRThemeLoad();
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
     self.window.rootViewController = [[NCLRRootController alloc] init];
     self.window.windowLevel = UIWindowLevelNormal;
+    self.window.overrideUserInterfaceStyle = NCLRDarkMode ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
     [self.window makeKeyAndVisible];
 }
 @end
