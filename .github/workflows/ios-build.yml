@@ -6,11 +6,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
-    runs-on: macos-13
+    runs-on: macos-14
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -45,12 +45,9 @@ jobs:
             RESOURCE_DIR="" SHIP_BUNDLE="" \
             BUILD_DIR="$PWD/build-nclr" DIST_DIR="$PWD/dist-nclr" \
             bash ios/build.sh
-      - name: Publish IPA
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euxo pipefail
-          tag="nclr-$(date -u +%Y%m%d-%H%M%S)"
-          gh release create "$tag" dist-nclr/*.ipa \
-            --title "NCLR L1.1 $tag" \
-            --notes "NCLR L1.1 clean launcher build"
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NCLR-unsigned
+          path: dist-nclr/*.ipa
+          if-no-files-found: error
