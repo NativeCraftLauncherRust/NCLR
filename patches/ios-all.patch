@@ -303,7 +303,7 @@ index 550d63c..c03f913 100644
          let emote = settings.extras.emote_key.clone();
          settings.keys.set("key.emote", &emote);
 diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-render/src/touch.rs
-index b38a955..aa1d88d 100644
+index b38a955..d9d9ad0 100644
 --- a/crates/horizon-client-render/src/touch.rs
 +++ b/crates/horizon-client-render/src/touch.rs
 @@ -61,6 +61,16 @@ enum Role {
@@ -323,7 +323,15 @@ index b38a955..aa1d88d 100644
  /// The on-screen controls' input state. The game feeds it touches with
  /// [`Self::update`] and reads [`Self::poll_state`] once a tick.
  #[derive(Default)]
-@@ -174,7 +184,7 @@ impl TouchControls {
+@@ -100,6 +110,7 @@ pub struct TouchControls {
+     /// A button was pressed; the game plays the click and clears it.
+     pub clicked: bool,
+     pub chat_requested: bool,
++    pub keyboard_requested: bool,
+     pub settings_requested: bool,
+     pub debug_requested: bool,
+     pub perspective_requested: bool,
+@@ -174,7 +185,7 @@ impl TouchControls {
          Control::ALL.into_iter().any(|c| {
              Self::auxiliary_control(c)
                  && self.visible(c)
@@ -332,7 +340,7 @@ index b38a955..aa1d88d 100644
          })
      }
  
-@@ -191,7 +201,7 @@ impl TouchControls {
+@@ -191,7 +202,7 @@ impl TouchControls {
                      && !self.moving()
                      && layout::contains(area, point);
              }
@@ -341,7 +349,7 @@ index b38a955..aa1d88d 100644
          })
      }
  
-@@ -454,6 +464,10 @@ impl TouchControls {
+@@ -454,6 +465,10 @@ impl TouchControls {
                  self.perspective_requested = true;
                  Role::Ignore
              }
@@ -352,7 +360,7 @@ index b38a955..aa1d88d 100644
              Some(Control::Sneak)
                  if self.settings.mode == Mode::Dpad
                      && !self.vertical_movement
-@@ -509,6 +523,7 @@ impl TouchControls {
+@@ -509,6 +524,7 @@ impl TouchControls {
          self.holding_use = false;
          self.holding = false;
          self.chat_requested = false;
@@ -360,7 +368,7 @@ index b38a955..aa1d88d 100644
          self.settings_requested = false;
          self.debug_requested = false;
          self.perspective_requested = false;
-@@ -517,6 +532,11 @@ impl TouchControls {
+@@ -517,6 +533,11 @@ impl TouchControls {
      /// A short world tap since the last call, and whether it uses the item.
      /// A tap never holds attack or use into the next tick: the game acts once
      /// at [`Self::aim`].
@@ -372,7 +380,7 @@ index b38a955..aa1d88d 100644
      pub fn take_tap(&mut self) -> Option<bool> {
          self.pending_tap.take()
      }
-@@ -595,21 +615,37 @@ impl TouchControls {
+@@ -595,21 +616,37 @@ impl TouchControls {
              match role {
                  Role::Move(anchor) => {
                      let radius = self.placement(Control::Move).size / 2.0;
