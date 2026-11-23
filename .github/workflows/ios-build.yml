@@ -30,14 +30,10 @@ jobs:
           cd "$HORIZON_DIR"
           IPHONEOS_DEPLOYMENT_TARGET=15.0 \
             cargo build -p horizon-ios --target aarch64-apple-ios --profile fast
-      - name: Build wasm standard library
-        env:
-          HORIZON_DIR: ${{ runner.temp }}/horizon
-        run: |
-          set -euxo pipefail
-          cd "$HORIZON_DIR"
-          cargo run --locked -p cargo-horizon-mod -- wasm-std "$GITHUB_WORKSPACE/horizon-wasm-std.wasm"
-          ls -lh "$GITHUB_WORKSPACE/horizon-wasm-std.wasm"
+      # The std member must be built by the same toolchain as the mods. The
+      # checked-in copy matches the 1.100.0-generated core symbols; rebuilding
+      # it here with another rustc produces a different core hash and wasm mods
+      # fail to link with "which no earlier member has".
       - name: Package NCLR
         env:
           HORIZON_DIR: ${{ runner.temp }}/horizon
@@ -51,7 +47,7 @@ jobs:
             IPA_NAME=NCLR-L1.1-unsigned.ipa \
             ICON_DIR="$PWD/ios/icons" \
             RESOURCE_DIR="" SHIP_BUNDLE="" \
-            WASM_STD="$PWD/horizon-wasm-std.wasm" \
+            WASM_STD="$PWD/ios/wasm-std/horizon-wasm-std.wasm" \
             BUILD_DIR="$PWD/build-nclr" DIST_DIR="$PWD/dist-nclr" \
             bash ios/build.sh
       - name: Upload IPA artifact
