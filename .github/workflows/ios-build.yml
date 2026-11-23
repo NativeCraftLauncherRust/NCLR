@@ -17,7 +17,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.100.0
-          targets: aarch64-apple-ios
+          targets: aarch64-apple-ios, wasm32-unknown-unknown
       - name: Prepare Horizon
         env:
           HORIZON_DIR: ${{ runner.temp }}/horizon
@@ -30,6 +30,11 @@ jobs:
           cd "$HORIZON_DIR"
           IPHONEOS_DEPLOYMENT_TARGET=15.0 \
             cargo build -p horizon-ios --target aarch64-apple-ios --profile fast
+      - name: Build wasm standard library
+        run: |
+          set -euxo pipefail
+          cargo run --locked -p cargo-horizon-mod -- wasm-std "$PWD/horizon-wasm-std.wasm"
+          ls -lh horizon-wasm-std.wasm
       - name: Package NCLR
         env:
           HORIZON_DIR: ${{ runner.temp }}/horizon
@@ -43,6 +48,7 @@ jobs:
             IPA_NAME=NCLR-L1.1-unsigned.ipa \
             ICON_DIR="$PWD/ios/icons" \
             RESOURCE_DIR="" SHIP_BUNDLE="" \
+            WASM_STD="$PWD/horizon-wasm-std.wasm" \
             BUILD_DIR="$PWD/build-nclr" DIST_DIR="$PWD/dist-nclr" \
             bash ios/build.sh
       - name: Upload IPA artifact

@@ -90,11 +90,27 @@ pub extern "C" fn horizon_ios_run(resources: *const c_char, game_dir: *const c_c
     mod_render::render::install();
     horizon_client::entry::start(
         horizon_mod_package::runtime::Runtime::default(),
-        |_, _| (Vec::new(), ()),
+        |_, launch| {
+            // Content and behaviour are one mod: load the wasm group before the
+            // game selects content, so a refused behaviour also hides its
+            // models and items (`code_startup_refused`).
+            let mut wasm = horizon_mod_wasm::load_installed(
+                launch,
+                &horizon_client::logging::player_dir(),
+            );
+            let mods = std::mem::take(&mut wasm.mods);
+            let ids: Vec<_> = mods.iter().map(|entry| entry.fields().id).collect();
+            mod_api::__private::install(mods.into());
+            (ids, wasm)
+        },
         horizon_client::entry::CodeRuntime {
-            initialize: |_| {},
-            refusal: |_| None,
-            startup_refused: |_| false,
+            initialize: horizon_mod_wasm::initialize,
+            refusal: |id| horizon_mod_wasm::refusal(id).map(|reason| reason.to_string()),
+            startup_refused: |id| {
+                horizon_mod_wasm::refused()
+                    .iter()
+                    .any(|(owner, _)| owner == id)
+            },
         },
         startup,
     );

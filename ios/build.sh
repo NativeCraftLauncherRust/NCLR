@@ -14,6 +14,8 @@
 #   BUILD_NUMBER      CFBundleVersion (default: UTC timestamp)
 #   SHIP_BUNDLE       ship.hzr3 to place in the app for first-run assembly
 #                     (default: $ROOT/ship.hzr3 when present)
+#   WASM_STD          horizon-wasm-std.wasm placed beside the executable
+#                     (optional; wasm mods refuse to load without it)
 set -euxo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -92,6 +94,13 @@ if [ -n "${SHIP_BUNDLE:-}" ]; then
     test -f "$SHIP_BUNDLE"
     cp "$SHIP_BUNDLE" "$APP/ship.hzr3"
     ls -lh "$APP/ship.hzr3"
+fi
+
+# The wasm loader finds the game's std member beside the executable.
+if [ -n "${WASM_STD:-}" ]; then
+    test -f "$WASM_STD"
+    cp "$WASM_STD" "$APP/horizon-wasm-std.wasm"
+    ls -lh "$APP/horizon-wasm-std.wasm"
 fi
 
 # Ad-hoc signature only: the IPA stays re-signable by Sideloadly/AltStore.

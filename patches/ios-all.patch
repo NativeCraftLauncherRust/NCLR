@@ -1630,6 +1630,23 @@ index 4c35972..1d82e98 100644
  mod tests {
      #[test]
      fn the_frame_average_is_sent_as_unknown() {
+diff --git a/crates/horizon-mod-wasm/src/runtime.rs b/crates/horizon-mod-wasm/src/runtime.rs
+index 08e1688..932545a 100644
+--- a/crates/horizon-mod-wasm/src/runtime.rs
++++ b/crates/horizon-mod-wasm/src/runtime.rs
+@@ -176,6 +176,12 @@ pub(crate) fn test_engine() -> Engine {
+ /// The settings of the engine mods run on, without its epoch ticker.
+ pub(crate) fn engine_config() -> wasmtime::Config {
+     let mut config = wasmtime::Config::new();
++    // iOS forbids JIT code pages. Pulley is Wasmtime's portable interpreter and
++    // needs no executable memory, so the same modules run on device.
++    #[cfg(target_os = "ios")]
++    config
++        .target("pulley64")
++        .expect("wasmtime supports the pulley64 interpreter target");
+     without_threads(&mut config);
+     config.epoch_interruption(ENGINE_CONFIG.1);
+     config.max_wasm_stack(horizon_guest_stack::GUEST_STACK_BYTES);
 diff --git a/crates/horizon-threads/Cargo.toml b/crates/horizon-threads/Cargo.toml
 index 6d86d1f..ad08c0c 100644
 --- a/crates/horizon-threads/Cargo.toml
