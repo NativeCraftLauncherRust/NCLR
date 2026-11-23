@@ -1918,6 +1918,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @property (nonatomic, strong) UILabel *sizeValue;
 @property (nonatomic, strong) UIButton *menuToggle;
 @property (nonatomic, strong) UIStackView *sizeRow;
+@property (nonatomic, strong) UISegmentedControl *sizePresetControl;
 @property (nonatomic, strong) UISlider *opacitySlider;
 @property (nonatomic, strong) UILabel *opacityValue;
 @property (nonatomic, strong) UISegmentedControl *modeControl;
@@ -2093,6 +2094,12 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.menuToggle = [self button:@"触控设置  ▾" action:@selector(toggleMenu) primary:NO];
     self.menuToggle.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
     self.menuToggle.titleLabel.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightSemibold];
+    self.sizePresetControl = [[UISegmentedControl alloc] initWithItems:@[@"小", @"标准", @"大"]];
+    CGFloat currentSize = NCLRKeymap.shared.buttonSize;
+    self.sizePresetControl.selectedSegmentIndex = currentSize <= 0.88 ? 0 : (currentSize >= 1.12 ? 2 : 1);
+    [self.sizePresetControl addTarget:self action:@selector(sizePresetChanged:)
+                     forControlEvents:UIControlEventValueChanged];
+
     UILabel *sizeLabel = [self label:@"按键大小" size:12.0 weight:UIFontWeightSemibold
                                color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
     self.sizeSlider = [[UISlider alloc] init];
@@ -2263,7 +2270,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     tools.spacing = 8.0;
     tools.distribution = UIStackViewDistributionFillEqually;
     UIStackView *menuStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.menuToggle, self.presetControl, self.styleControl, self.sizeRow, opacityRow, self.modeControl, dynamicRow, leftRow, sprintRow, sensitivityRow, deadzoneRow, sprintButtonRow, iconLabelsRow, addKey, tools, ioRow]];
+        @[self.menuToggle, self.sizePresetControl, self.presetControl, self.styleControl, self.sizeRow, opacityRow, self.modeControl, dynamicRow, leftRow, sprintRow, sensitivityRow, deadzoneRow, sprintButtonRow, iconLabelsRow, addKey, tools, ioRow]];
     menuStack.axis = UILayoutConstraintAxisVertical;
     menuStack.spacing = 8.0;
     menuStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2440,6 +2447,12 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
                      forState:UIControlStateNormal];
 }
 
+- (void)sizePresetChanged:(UISegmentedControl *)control {
+    CGFloat sizes[3] = {0.85, 1.0, 1.15};
+    self.sizeSlider.value = sizes[control.selectedSegmentIndex];
+    [self sizeChanged:self.sizeSlider];
+}
+
 - (void)sizeChanged:(UISlider *)slider {
     self.sizeValue.text = [NSString stringWithFormat:@"%.2fx", slider.value];
     NCLRKeymap.shared.buttonSize = slider.value;
@@ -2576,8 +2589,17 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 }
 
 - (void)resetLayoutTapped {
-    [NCLRKeymap.shared resetLayout];
-    [self.view setNeedsLayout];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"重置布局"
+                                                                   message:@"当前预设的位置和显隐会被恢复为默认值。"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"重置" style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction *action) {
+        [NCLRKeymap.shared resetLayout];
+        [NCLRKeymap.shared save];
+        [self.view setNeedsLayout];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (NSArray<NSString *> *)controlKeys {
