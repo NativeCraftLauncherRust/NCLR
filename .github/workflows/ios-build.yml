@@ -31,10 +31,13 @@ jobs:
           IPHONEOS_DEPLOYMENT_TARGET=15.0 \
             cargo build -p horizon-ios --target aarch64-apple-ios --profile fast
       - name: Build wasm standard library
+        env:
+          HORIZON_DIR: ${{ runner.temp }}/horizon
         run: |
           set -euxo pipefail
-          cargo run --locked -p cargo-horizon-mod -- wasm-std "$PWD/horizon-wasm-std.wasm"
-          ls -lh horizon-wasm-std.wasm
+          cd "$HORIZON_DIR"
+          cargo run --locked -p cargo-horizon-mod -- wasm-std "$GITHUB_WORKSPACE/horizon-wasm-std.wasm"
+          ls -lh "$GITHUB_WORKSPACE/horizon-wasm-std.wasm"
       - name: Package NCLR
         env:
           HORIZON_DIR: ${{ runner.temp }}/horizon
