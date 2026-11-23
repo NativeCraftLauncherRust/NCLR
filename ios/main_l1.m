@@ -260,7 +260,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     self.sprintButton = YES;
     self.buttonStyle = 0;
     self.iconLabels = NO;
-    self.hiddenKeys = [NSMutableSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]];
+    self.hiddenKeys = [NSMutableSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield", @"keyboard"]];
     self.touchMode = @"crosshair";
     self.dynamicJoystick = NO;
     self.positions = [@{
@@ -281,6 +281,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"perspective" : @{ @"x" : @0.52, @"y" : @0.12, @"size" : @0.055 },
         @"offhand" : @{ @"x" : @0.44, @"y" : @0.12, @"size" : @0.060 },
         @"shield" : @{ @"x" : @0.36, @"y" : @0.12, @"size" : @0.060 },
+        @"keyboard" : @{ @"x" : @0.66, @"y" : @0.12, @"size" : @0.065 },
         @"move" : @{ @"x" : @0.14, @"y" : @0.74, @"size" : @0.28 },
     } mutableCopy];
     NSData *data = [NSData dataWithContentsOfFile:self.path];
@@ -397,9 +398,10 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"perspective" : @{ @"x" : @0.52, @"y" : @0.12, @"size" : @0.055 },
         @"offhand" : @{ @"x" : @0.44, @"y" : @0.12, @"size" : @0.060 },
         @"shield" : @{ @"x" : @0.36, @"y" : @0.12, @"size" : @0.060 },
+        @"keyboard" : @{ @"x" : @0.66, @"y" : @0.12, @"size" : @0.065 },
         @"move" : @{ @"x" : @0.14, @"y" : @0.74, @"size" : @0.28 },
     } mutableCopy];
-    [self.hiddenKeys setSet:[NSSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]]];
+    [self.hiddenKeys setSet:[NSSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield", @"keyboard"]]];
 }
 
 - (BOOL)isHidden:(NSString *)key {
@@ -435,6 +437,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
             @"perspective" : @{ @"x" : @0.52, @"y" : @0.12, @"size" : @0.055 },
             @"offhand" : @{ @"x" : @0.44, @"y" : @0.12, @"size" : @0.060 },
             @"shield" : @{ @"x" : @0.36, @"y" : @0.12, @"size" : @0.060 },
+            @"keyboard" : @{ @"x" : @0.66, @"y" : @0.12, @"size" : @0.065 },
             @"move" : @{ @"x" : @0.16, @"y" : @0.78, @"size" : @0.30 },
         } mutableCopy];
         [self.hiddenKeys removeAllObjects];
@@ -2378,10 +2381,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
     NSArray<NSString *> *names = @[@"移动摇杆", @"跳跃", @"潜行", @"冲刺", @"攻击",
                                    @"使用", @"背包", @"聊天", @"暂停", @"触控设置",
-                                   @"调试", @"视角", @"副手", @"盾牌"];
+                                   @"调试", @"视角", @"副手", @"盾牌", @"系统键盘"];
     NSArray<NSString *> *keys = @[@"move", @"jump", @"sneak", @"sprint", @"attack",
                                   @"use", @"inventory", @"chat", @"pause", @"settings",
-                                  @"debug", @"perspective", @"offhand", @"shield"];
+                                  @"debug", @"perspective", @"offhand", @"shield", @"keyboard"];
     for (NSInteger i = 0; i < names.count; i++) {
         UIView *card = [self card];
         UILabel *name = [self label:names[i] size:13.0 weight:UIFontWeightSemibold
@@ -2580,7 +2583,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 - (NSArray<NSString *> *)controlKeys {
     return @[@"move", @"jump", @"sneak", @"sprint", @"attack",
              @"use", @"inventory", @"chat", @"pause", @"settings",
-             @"debug", @"perspective", @"offhand", @"shield"];
+             @"debug", @"perspective", @"offhand", @"shield", @"keyboard"];
 }
 
 - (void)deadzoneChanged:(UISlider *)slider {
@@ -2700,10 +2703,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 - (void)editKey:(UIButton *)sender {
     NSArray<NSString *> *keys = @[@"move", @"jump", @"sneak", @"sprint", @"attack",
                                   @"use", @"inventory", @"chat", @"pause", @"settings",
-                                  @"debug", @"perspective", @"offhand", @"shield"];
+                                  @"debug", @"perspective", @"offhand", @"shield", @"keyboard"];
     NSArray<NSString *> *names = @[@"移动摇杆", @"跳跃", @"潜行", @"冲刺", @"攻击",
                                    @"使用", @"背包", @"聊天", @"暂停", @"触控设置",
-                                   @"调试", @"视角", @"副手", @"盾牌"];
+                                   @"调试", @"视角", @"副手", @"盾牌", @"系统键盘"];
     if (sender.tag < 0 || sender.tag >= (NSInteger)keys.count) {
         return;
     }

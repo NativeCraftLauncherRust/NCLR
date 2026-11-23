@@ -303,7 +303,7 @@ index 550d63c..c03f913 100644
          let emote = settings.extras.emote_key.clone();
          settings.keys.set("key.emote", &emote);
 diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-render/src/touch.rs
-index b38a955..edd5a9e 100644
+index b38a955..aa1d88d 100644
 --- a/crates/horizon-client-render/src/touch.rs
 +++ b/crates/horizon-client-render/src/touch.rs
 @@ -61,6 +61,16 @@ enum Role {
@@ -341,7 +341,38 @@ index b38a955..edd5a9e 100644
          })
      }
  
-@@ -595,21 +605,37 @@ impl TouchControls {
+@@ -454,6 +464,10 @@ impl TouchControls {
+                 self.perspective_requested = true;
+                 Role::Ignore
+             }
++            Some(Control::Keyboard) => {
++                self.keyboard_requested = true;
++                Role::Ignore
++            }
+             Some(Control::Sneak)
+                 if self.settings.mode == Mode::Dpad
+                     && !self.vertical_movement
+@@ -509,6 +523,7 @@ impl TouchControls {
+         self.holding_use = false;
+         self.holding = false;
+         self.chat_requested = false;
++        self.keyboard_requested = false;
+         self.settings_requested = false;
+         self.debug_requested = false;
+         self.perspective_requested = false;
+@@ -517,6 +532,11 @@ impl TouchControls {
+     /// A short world tap since the last call, and whether it uses the item.
+     /// A tap never holds attack or use into the next tick: the game acts once
+     /// at [`Self::aim`].
++    /// A tap on the dedicated system-keyboard button since the last call.
++    pub fn take_keyboard_request(&mut self) -> bool {
++        std::mem::take(&mut self.keyboard_requested)
++    }
++
+     pub fn take_tap(&mut self) -> Option<bool> {
+         self.pending_tap.take()
+     }
+@@ -595,21 +615,37 @@ impl TouchControls {
              match role {
                  Role::Move(anchor) => {
                      let radius = self.placement(Control::Move).size / 2.0;
@@ -387,7 +418,7 @@ index b38a955..edd5a9e 100644
                          state.set(Button::LeftStick, true);
                      }
 diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-client-render/src/touch/draw.rs
-index 9e8d8e4..39ce7b9 100644
+index 9e8d8e4..5bef143 100644
 --- a/crates/horizon-client-render/src/touch/draw.rs
 +++ b/crates/horizon-client-render/src/touch/draw.rs
 @@ -10,7 +10,6 @@
@@ -407,7 +438,7 @@ index 9e8d8e4..39ce7b9 100644
          }
          if let Some(point) = self.pointer() {
              let center = [point[0] * b.width, point[1] * b.height];
-@@ -64,30 +63,45 @@ impl TouchControls {
+@@ -64,30 +63,47 @@ impl TouchControls {
          })
      }
  
@@ -433,6 +464,7 @@ index 9e8d8e4..39ce7b9 100644
 +                Control::Settings => "*",
 +                Control::Offhand => "F",
 +                Control::Shield => "O",
++                Control::Keyboard => "K",
 +            };
 +            return icon.to_owned();
 +        }
@@ -467,13 +499,14 @@ index 9e8d8e4..39ce7b9 100644
 +            Control::Settings => "F1",
 +            Control::Offhand => "F",
 +            Control::Shield => "RMB",
++            Control::Keyboard => "KEY",
          };
 -        lang::get(key)
 +        key.to_owned()
      }
  
      /// The joystick (a rim and a knob) or the D-pad (four arrow buttons).
-@@ -114,7 +128,7 @@ impl TouchControls {
+@@ -114,7 +130,7 @@ impl TouchControls {
              let cell = size / 3.0;
              for ([dx, dy], label, pressed) in dpad(state.left) {
                  let bounds = [x + cell * dx, y + cell * dy, cell, cell];
@@ -482,7 +515,7 @@ index 9e8d8e4..39ce7b9 100644
              }
              return;
          }
-@@ -171,42 +185,36 @@ fn button(
+@@ -171,42 +187,36 @@ fn button(
      label: &str,
      pressed: bool,
      color: u32,
@@ -544,7 +577,7 @@ index 9e8d8e4..39ce7b9 100644
      };
      let drop = if pressed { (h / 18.0).min(2.0) } else { 0.0 };
      let width = HudBatch::text_width(a, label);
-@@ -219,15 +227,23 @@ fn button(
+@@ -219,15 +229,23 @@ fn button(
          text,
          true,
      );
@@ -572,13 +605,40 @@ index 9e8d8e4..39ce7b9 100644
  fn mining_radius(radius: f32, progress: f32) -> f32 {
      if progress.is_finite() {
 diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
-index e57f2d8..2ce9ffe 100644
+index e57f2d8..480c7ee 100644
 --- a/crates/horizon-client-render/src/touch/layout.rs
 +++ b/crates/horizon-client-render/src/touch/layout.rs
-@@ -100,6 +100,29 @@ impl Control {
+@@ -58,13 +58,14 @@ pub enum Control {
+     Perspective,
+     Offhand,
+     Shield,
++    Keyboard,
+ }
+ 
+ /// How many built-in controls a layout row holds.
+ pub const CONTROLS: usize = Control::ALL.len();
+ 
+ impl Control {
+-    pub const ALL: [Self; 14] = [
++    pub const ALL: [Self; 15] = [
+         Self::Move,
+         Self::Sprint,
+         Self::Jump,
+@@ -79,6 +80,7 @@ impl Control {
+         Self::Perspective,
+         Self::Offhand,
+         Self::Shield,
++        Self::Keyboard,
+     ];
+ 
+     /// The name the layout editor shows.
+@@ -98,6 +100,31 @@ impl Control {
+             Self::Perspective => "Camera perspective (F5)",
+             Self::Offhand => "Swap hands",
              Self::Shield => "Raise shield",
-         }
-     }
++            Self::Keyboard => "System keyboard",
++        }
++    }
 +
 +    /// The control the NCLR launcher's `keymap.json` id moves, if it maps to
 +    /// one of the built-in touch controls. The four movement ids share the
@@ -599,13 +659,12 @@ index e57f2d8..2ce9ffe 100644
 +            "perspective" => Some(Self::Perspective),
 +            "offhand" => Some(Self::Offhand),
 +            "shield" => Some(Self::Shield),
++            "keyboard" => Some(Self::Keyboard),
 +            _ => None,
-+        }
-+    }
+         }
+     }
  }
- 
- /// Where one control sits: its centre (0..1 of the surface), its size (a
-@@ -170,6 +193,12 @@ pub struct Settings {
+@@ -170,6 +197,12 @@ pub struct Settings {
      pub layouts: [[Placement; CONTROLS]; 3],
      /// Camera turn speed for look drags; scales both axes.
      pub sensitivity: f32,
@@ -618,7 +677,15 @@ index e57f2d8..2ce9ffe 100644
      /// Extra scale on the yaw (left and right) turn.
      pub sensitivity_horizontal: f32,
      /// Extra scale on the pitch (up and down) turn.
-@@ -231,6 +260,9 @@ impl Default for Settings {
+@@ -214,6 +247,7 @@ impl Default for Settings {
+             Placement::new(0.58, 0.055, 0.075), // Perspective
+             Placement::new(0.80, 0.96, 0.075),  // Offhand
+             Placement::new(0.92, 0.36, 0.12),   // Shield
++            Placement::new(0.66, 0.12, 0.075),  // Keyboard
+         ];
+         let mut layouts = [row; 3];
+         // The D-pad sits where the joystick does; sneak becomes its centre.
+@@ -231,6 +265,9 @@ impl Default for Settings {
              button_visibility: [FOLLOW_SCHEME; CONTROLS],
              layouts,
              sensitivity: 1.0,
@@ -628,7 +695,7 @@ index e57f2d8..2ce9ffe 100644
              sensitivity_horizontal: 1.0,
              sensitivity_vertical: 1.0,
              sprint_toggle: false,
-@@ -264,6 +296,98 @@ impl Settings {
+@@ -264,6 +301,98 @@ impl Settings {
          std::fs::rename(temp, path)
      }
  
@@ -727,7 +794,7 @@ index e57f2d8..2ce9ffe 100644
      pub fn sanitize(&mut self) {
          // Only the D-pad has a split variant (see `Mode::SCHEMES`).
          if self.mode != Mode::Dpad {
-@@ -284,7 +408,9 @@ impl Settings {
+@@ -284,7 +413,9 @@ impl Settings {
          ] {
              *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
          }
@@ -827,10 +894,19 @@ index 78cfdee..44bd551 100644
  /// Cells cannot roll back: each copy merges all requesting rows, so stopping the whole
  /// start is how we ensure none of a refused mod's rows run.
 diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.rs
-index 55bd735..d4f4140 100644
+index 55bd735..7e0abaf 100644
 --- a/crates/horizon-client/src/game.rs
 +++ b/crates/horizon-client/src/game.rs
-@@ -1189,6 +1189,10 @@ struct Game<'a> {
+@@ -1113,6 +1113,8 @@ struct Game<'a> {
+     focus_after_run: Option<bool>,
+     /// Whether the window currently accepts input method events.
+     ime_allowed: bool,
++    /// The keyboard button hid the keyboard without leaving the text field.
++    ime_hidden: bool,
+     /// The candidate window's area last given to the window, in pixels.
+     ime_area: Option<[i32; 4]>,
+     /// When the window lost focus, while it is still without
+@@ -1189,6 +1191,10 @@ struct Game<'a> {
      last_input: Instant,
      /// Controllers (Horizon's own).
      pad: pad::Pads,
@@ -841,7 +917,7 @@ index 55bd735..d4f4140 100644
      frames: u64,
      /// The glint clock and options, read once per frame (game/interface/item_draw.rs).
      glint_frame: horizon_client::item_render::GlintFrame,
-@@ -5306,6 +5310,21 @@ impl Game<'_> {
+@@ -5306,6 +5312,21 @@ impl Game<'_> {
          self.draw_studio_bars(&mut batch);
          if show_hud {
              self.draw_pad_guide(&mut batch, guide_from);
@@ -863,7 +939,15 @@ index 55bd735..d4f4140 100644
          }
          batch
      }
-@@ -10741,6 +10760,16 @@ impl<'a> Game<'a> {
+@@ -10701,6 +10722,7 @@ impl<'a> Game<'a> {
+             unclaimed_modifiers: None,
+             focus_after_run: None,
+             ime_allowed: false,
++            ime_hidden: false,
+             ime_area: None,
+             focus_lost: None,
+             modifiers: winit::keyboard::ModifiersState::empty(),
+@@ -10741,6 +10763,16 @@ impl<'a> Game<'a> {
              previous: now,
              last_input: now,
              pad: Default::default(),
@@ -881,17 +965,22 @@ index 55bd735..d4f4140 100644
              glint_frame: Default::default(),
              kept_block_entities: Default::default(),
 diff --git a/crates/horizon-client/src/game/interface/ime.rs b/crates/horizon-client/src/game/interface/ime.rs
-index 22e0915..3775e5a 100644
+index 22e0915..22feefb 100644
 --- a/crates/horizon-client/src/game/interface/ime.rs
 +++ b/crates/horizon-client/src/game/interface/ime.rs
-@@ -46,7 +46,9 @@ impl Game<'_> {
+@@ -46,7 +46,14 @@ impl Game<'_> {
  
      /// Allow the input method only while a text box has focus.
      pub(super) fn sync_ime(&mut self) {
 -        let want = self.text_field_focused();
-+        // iOS's system keyboard cannot be dismissed from the game and covers
-+        // the screen; text fields take hardware keys only there.
-+        let want = self.text_field_focused() && !cfg!(target_os = "ios");
++        // The dedicated touch button can hide the iOS keyboard without
++        // leaving the field; `ime_hidden` keeps sync_ime from reopening it
++        // until the field changes.
++        let focused = self.text_field_focused();
++        if !focused {
++            self.ime_hidden = false;
++        }
++        let want = focused && !self.ime_hidden;
          if want != self.ime_allowed
              && let Some(window) = &self.window
          {
@@ -943,10 +1032,10 @@ index 026382e..c04f78b 100644
              self.pad.in_use = true;
              self.pad.keyboard_took_over = false;
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..dca7a16 100644
+index 16664ff..0abc477 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
-@@ -55,6 +55,98 @@ impl Game<'_> {
+@@ -55,6 +55,113 @@ impl Game<'_> {
          let zoom = self.zoom_turn_scale();
          self.turn_player(x * zoom, y * zoom);
      }
@@ -1037,6 +1126,21 @@ index 16664ff..dca7a16 100644
 +        }
 +        if std::mem::take(&mut self.touch.settings_requested) {
 +            let _ = self.key_pressed(KeyCode::F1, KeyCode::F1);
++        }
++        if self.touch.take_keyboard_request() {
++            if self.text_field_focused() {
++                let show = !self.ime_allowed;
++                self.ime_hidden = !show;
++                if let Some(window) = &self.window {
++                    window.set_ime_allowed(show);
++                }
++                self.ime_allowed = show;
++                self.ime_area = None;
++            } else {
++                // No text field yet: the keyboard button opens chat, and
++                // sync_ime shows the keyboard with the field.
++                self.open_chat_method("");
++            }
 +        }
 +        if std::mem::take(&mut self.touch.chat_requested) {
 +            self.open_chat_method("");
@@ -1329,7 +1433,7 @@ index ee73abf..3704fed 100644
      pub(super) fn facts(&self) -> &BlockFacts {
          &self.core.facts
 diff --git a/crates/horizon-client/src/game/runtime/window_handler.rs b/crates/horizon-client/src/game/runtime/window_handler.rs
-index 6a86a75..7370a4c 100644
+index 6a86a75..051d735 100644
 --- a/crates/horizon-client/src/game/runtime/window_handler.rs
 +++ b/crates/horizon-client/src/game/runtime/window_handler.rs
 @@ -2,6 +2,10 @@
@@ -1419,7 +1523,15 @@ index 6a86a75..7370a4c 100644
      }
  }
  
-@@ -437,14 +484,13 @@ impl ApplicationHandler for Game<'_> {
+@@ -417,6 +464,7 @@ impl ApplicationHandler for Game<'_> {
+         self.resize_state = Some(self.resize_state_of(window.inner_size()));
+         self.window = Some(window);
+         self.ime_allowed = false;
++        self.ime_hidden = false;
+         self.ime_area = None;
+         self.apply_settings();
+         self.previous = Instant::now();
+@@ -437,14 +485,13 @@ impl ApplicationHandler for Game<'_> {
          };
          self.handle_window_event(event_loop, id, event, input_trace::InputOrigin::User);
          if let Some((event, modifiers)) = key {
