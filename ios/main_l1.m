@@ -198,6 +198,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 @property (nonatomic, assign) BOOL leftHanded;
 @property (nonatomic, assign) BOOL joystickSprint;
 @property (nonatomic, assign) CGFloat sensitivity;
+@property (nonatomic, assign) CGFloat joystickDeadzone;
+@property (nonatomic, assign) BOOL sprintButton;
 @property (nonatomic, strong) NSMutableSet<NSString *> *hiddenKeys;
 + (instancetype)shared;
 - (BOOL)isHidden:(NSString *)key;
@@ -252,6 +254,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     self.leftHanded = NO;
     self.joystickSprint = NO;
     self.sensitivity = 1.0;
+    self.joystickDeadzone = 0.16;
+    self.sprintButton = YES;
     self.hiddenKeys = [NSMutableSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]];
     self.touchMode = @"crosshair";
     self.dynamicJoystick = NO;
@@ -307,6 +311,14 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     NSNumber *sensitivity = json[@"sensitivity"];
     if ([sensitivity isKindOfClass:[NSNumber class]]) {
         self.sensitivity = MAX(0.3, MIN(2.5, sensitivity.doubleValue));
+    }
+    NSNumber *deadzone = json[@"joystickDeadzone"];
+    if ([deadzone isKindOfClass:[NSNumber class]]) {
+        self.joystickDeadzone = MAX(0.05, MIN(0.35, deadzone.doubleValue));
+    }
+    NSNumber *sprintButton = json[@"sprintButton"];
+    if ([sprintButton isKindOfClass:[NSNumber class]]) {
+        self.sprintButton = sprintButton.boolValue;
     }
     NSDictionary *saved = json[@"bindings"];
     if ([saved isKindOfClass:[NSDictionary class]]) {
@@ -432,6 +444,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"leftHanded" : @(self.leftHanded),
         @"joystickSprint" : @(self.joystickSprint),
         @"sensitivity" : @(self.sensitivity),
+        @"joystickDeadzone" : @(self.joystickDeadzone),
+        @"sprintButton" : @(self.sprintButton),
         @"hidden" : self.hiddenKeys.allObjects ?: @[],
         @"bindings" : self.bindings ?: @{},
         @"layout" : self.positions ?: @{},
@@ -1896,6 +1910,9 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @property (nonatomic, strong) UISwitch *joystickSprintSwitch;
 @property (nonatomic, strong) UISlider *sensitivitySlider;
 @property (nonatomic, strong) UILabel *sensitivityValue;
+@property (nonatomic, strong) UISlider *deadzoneSlider;
+@property (nonatomic, strong) UILabel *deadzoneValue;
+@property (nonatomic, strong) UISwitch *sprintButtonSwitch;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, UISwitch *> *visibilitySwitches;
 @property (nonatomic, strong) NSMutableArray<UIButton *> *keyButtons;
 @property (nonatomic, strong) UIView *preview;
@@ -2163,6 +2180,37 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     sensitivityRow.spacing = 10.0;
     sensitivityRow.alignment = UIStackViewAlignmentCenter;
     [self.sensitivityValue.widthAnchor constraintEqualToConstant:44.0].active = YES;
+    UILabel *deadzoneLabel = [self label:@"摇杆死区" size:12.0 weight:UIFontWeightSemibold
+                                    color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
+    self.deadzoneSlider = [[UISlider alloc] init];
+    self.deadzoneSlider.minimumValue = 0.05f;
+    self.deadzoneSlider.maximumValue = 0.35f;
+    self.deadzoneSlider.value = NCLRKeymap.shared.joystickDeadzone;
+    self.deadzoneSlider.minimumTrackTintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
+    [self.deadzoneSlider addTarget:self action:@selector(deadzoneChanged:)
+                  forControlEvents:UIControlEventValueChanged];
+    self.deadzoneValue = [self label:[NSString stringWithFormat:@"%.0f%%", NCLRKeymap.shared.joystickDeadzone * 100.0]
+                                  size:11.0 weight:UIFontWeightSemibold
+                                 color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
+    self.deadzoneValue.textAlignment = NSTextAlignmentRight;
+    UIStackView *deadzoneRow = [[UIStackView alloc] initWithArrangedSubviews:
+        @[deadzoneLabel, self.deadzoneSlider, self.deadzoneValue]];
+    deadzoneRow.axis = UILayoutConstraintAxisHorizontal;
+    deadzoneRow.spacing = 10.0;
+    deadzoneRow.alignment = UIStackViewAlignmentCenter;
+    [self.deadzoneValue.widthAnchor constraintEqualToConstant:44.0].active = YES;
+
+    UILabel *sprintButtonLabel = [self label:@"显示冲刺键" size:12.0 weight:UIFontWeightSemibold
+                                        color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
+    self.sprintButtonSwitch = [[UISwitch alloc] init];
+    self.sprintButtonSwitch.on = NCLRKeymap.shared.sprintButton;
+    [self.sprintButtonSwitch addTarget:self action:@selector(sprintButtonChanged:)
+                      forControlEvents:UIControlEventValueChanged];
+    UIView *sprintButtonSpacer = [[UIView alloc] init];
+    UIStackView *sprintButtonRow = [[UIStackView alloc] initWithArrangedSubviews:
+        @[sprintButtonLabel, sprintButtonSpacer, self.sprintButtonSwitch]];
+    sprintButtonRow.axis = UILayoutConstraintAxisHorizontal;
+    sprintButtonRow.alignment = UIStackViewAlignmentCenter;
     self.presetControl = [[UISegmentedControl alloc] initWithItems:@[@"FCL", @"经典", @"极简"]];
     self.presetControl.selectedSegmentIndex = 0;
     [self.presetControl addTarget:self action:@selector(presetChanged:)
@@ -2182,7 +2230,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     tools.spacing = 8.0;
     tools.distribution = UIStackViewDistributionFillEqually;
     UIStackView *menuStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.menuToggle, self.presetControl, self.sizeRow, opacityRow, self.modeControl, dynamicRow, leftRow, sprintRow, sensitivityRow, addKey, tools, ioRow]];
+        @[self.menuToggle, self.presetControl, self.sizeRow, opacityRow, self.modeControl, dynamicRow, leftRow, sprintRow, sensitivityRow, deadzoneRow, sprintButtonRow, addKey, tools, ioRow]];
     menuStack.axis = UILayoutConstraintAxisVertical;
     menuStack.spacing = 8.0;
     menuStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2517,6 +2565,15 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
              @"debug", @"perspective", @"offhand", @"shield"];
 }
 
+- (void)deadzoneChanged:(UISlider *)slider {
+    NCLRKeymap.shared.joystickDeadzone = slider.value;
+    self.deadzoneValue.text = [NSString stringWithFormat:@"%.0f%%", slider.value * 100.0];
+}
+
+- (void)sprintButtonChanged:(UISwitch *)sender {
+    NCLRKeymap.shared.sprintButton = sender.on;
+}
+
 - (void)leftHandedChanged:(UISwitch *)sender {
     NCLRKeymap.shared.leftHanded = sender.on;
 }
@@ -2694,6 +2751,8 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     NCLRKeymap.shared.leftHanded = self.leftHandedSwitch.on;
     NCLRKeymap.shared.joystickSprint = self.joystickSprintSwitch.on;
     NCLRKeymap.shared.sensitivity = self.sensitivitySlider.value;
+    NCLRKeymap.shared.joystickDeadzone = self.deadzoneSlider.value;
+    NCLRKeymap.shared.sprintButton = self.sprintButtonSwitch.on;
     [NCLRKeymap.shared save];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已保存"
                                                                    message:[NSString stringWithFormat:
