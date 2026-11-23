@@ -1630,6 +1630,31 @@ index 4c35972..1d82e98 100644
  mod tests {
      #[test]
      fn the_frame_average_is_sent_as_unknown() {
+diff --git a/crates/horizon-mod-wasm/src/module_cache.rs b/crates/horizon-mod-wasm/src/module_cache.rs
+index 4d01b0d..41b93cf 100644
+--- a/crates/horizon-mod-wasm/src/module_cache.rs
++++ b/crates/horizon-mod-wasm/src/module_cache.rs
+@@ -147,7 +147,10 @@ impl ModuleCache {
+         engine: &Engine,
+         bytes: &[u8],
+     ) -> wasmtime::Result<(Module, Source)> {
+-        #[cfg(unix)]
++        // iOS forbids spawning the compiler child. Without it the budget
++        // cannot be enforced, so compile inline; the cache is also disabled
++        // there because the app container rejects the private cache folder.
++        #[cfg(all(unix, not(target_os = "ios")))]
+         let child = if cfg!(test) {
+             None
+         } else {
+@@ -156,7 +159,7 @@ impl ModuleCache {
+                 self.budget.limit,
+             ))
+         };
+-        #[cfg(not(unix))]
++        #[cfg(any(not(unix), target_os = "ios"))]
+         let child = None;
+         self.load_with_child(engine, bytes, child)
+     }
 diff --git a/crates/horizon-mod-wasm/src/runtime.rs b/crates/horizon-mod-wasm/src/runtime.rs
 index 08e1688..932545a 100644
 --- a/crates/horizon-mod-wasm/src/runtime.rs
