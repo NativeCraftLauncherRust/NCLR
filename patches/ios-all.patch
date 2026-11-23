@@ -387,7 +387,7 @@ index b38a955..edd5a9e 100644
                          state.set(Button::LeftStick, true);
                      }
 diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-client-render/src/touch/draw.rs
-index 9e8d8e4..780ddc6 100644
+index 9e8d8e4..39ce7b9 100644
 --- a/crates/horizon-client-render/src/touch/draw.rs
 +++ b/crates/horizon-client-render/src/touch/draw.rs
 @@ -10,7 +10,6 @@
@@ -407,7 +407,7 @@ index 9e8d8e4..780ddc6 100644
          }
          if let Some(point) = self.pointer() {
              let center = [point[0] * b.width, point[1] * b.height];
-@@ -64,30 +63,26 @@ impl TouchControls {
+@@ -64,30 +63,45 @@ impl TouchControls {
          })
      }
  
@@ -417,6 +417,25 @@ index 9e8d8e4..780ddc6 100644
 +    /// keyboard and mouse, so it shows key names instead of controller glyphs.
      fn label(&self, control: Control) -> String {
 -        let vertical = self.swimming || self.vertical_movement;
++        if self.settings.icon_labels {
++            let icon = match control {
++                Control::Move => return String::new(),
++                Control::Pause => "II",
++                Control::Inventory => "E",
++                Control::Debug => "F3",
++                Control::Perspective => "F5",
++                Control::Sprint => ">>",
++                Control::Jump => "^",
++                Control::Sneak => "v",
++                Control::Attack => "X",
++                Control::Use => "+",
++                Control::Chat => "T",
++                Control::Settings => "*",
++                Control::Offhand => "F",
++                Control::Shield => "O",
++            };
++            return icon.to_owned();
++        }
          let key = match control {
              Control::Move => return String::new(),
 -            Control::Pause => return "II".to_owned(),
@@ -454,7 +473,7 @@ index 9e8d8e4..780ddc6 100644
      }
  
      /// The joystick (a rim and a knob) or the D-pad (four arrow buttons).
-@@ -114,7 +109,7 @@ impl TouchControls {
+@@ -114,7 +128,7 @@ impl TouchControls {
              let cell = size / 3.0;
              for ([dx, dy], label, pressed) in dpad(state.left) {
                  let bounds = [x + cell * dx, y + cell * dy, cell, cell];
@@ -463,7 +482,7 @@ index 9e8d8e4..780ddc6 100644
              }
              return;
          }
-@@ -171,42 +166,36 @@ fn button(
+@@ -171,42 +185,36 @@ fn button(
      label: &str,
      pressed: bool,
      color: u32,
@@ -525,7 +544,7 @@ index 9e8d8e4..780ddc6 100644
      };
      let drop = if pressed { (h / 18.0).min(2.0) } else { 0.0 };
      let width = HudBatch::text_width(a, label);
-@@ -219,15 +208,23 @@ fn button(
+@@ -219,15 +227,23 @@ fn button(
          text,
          true,
      );
@@ -553,7 +572,7 @@ index 9e8d8e4..780ddc6 100644
  fn mining_radius(radius: f32, progress: f32) -> f32 {
      if progress.is_finite() {
 diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
-index e57f2d8..d286d7c 100644
+index e57f2d8..2ce9ffe 100644
 --- a/crates/horizon-client-render/src/touch/layout.rs
 +++ b/crates/horizon-client-render/src/touch/layout.rs
 @@ -100,6 +100,29 @@ impl Control {
@@ -586,7 +605,7 @@ index e57f2d8..d286d7c 100644
  }
  
  /// Where one control sits: its centre (0..1 of the surface), its size (a
-@@ -170,6 +193,10 @@ pub struct Settings {
+@@ -170,6 +193,12 @@ pub struct Settings {
      pub layouts: [[Placement; CONTROLS]; 3],
      /// Camera turn speed for look drags; scales both axes.
      pub sensitivity: f32,
@@ -594,19 +613,22 @@ index e57f2d8..d286d7c 100644
 +    pub joystick_deadzone: f32,
 +    /// Button look: 0 disc, 1 square outline, 2 minimal filled disc.
 +    pub button_style: u8,
++    /// Use short symbol labels instead of key names.
++    pub icon_labels: bool,
      /// Extra scale on the yaw (left and right) turn.
      pub sensitivity_horizontal: f32,
      /// Extra scale on the pitch (up and down) turn.
-@@ -231,6 +258,8 @@ impl Default for Settings {
+@@ -231,6 +260,9 @@ impl Default for Settings {
              button_visibility: [FOLLOW_SCHEME; CONTROLS],
              layouts,
              sensitivity: 1.0,
 +            joystick_deadzone: 0.16,
 +            button_style: 0,
++            icon_labels: false,
              sensitivity_horizontal: 1.0,
              sensitivity_vertical: 1.0,
              sprint_toggle: false,
-@@ -264,6 +293,95 @@ impl Settings {
+@@ -264,6 +296,98 @@ impl Settings {
          std::fs::rename(temp, path)
      }
  
@@ -662,6 +684,9 @@ index e57f2d8..d286d7c 100644
 +        if let Some(style) = json.get("buttonStyle").and_then(|v| v.as_u64()) {
 +            self.button_style = (style as u8).min(2);
 +        }
++        if let Some(icons) = json.get("iconLabels").and_then(|v| v.as_bool()) {
++            self.icon_labels = icons;
++        }
 +        let Some(layout) = json.get("layout").and_then(|v| v.as_object()) else {
 +            return;
 +        };
@@ -702,7 +727,7 @@ index e57f2d8..d286d7c 100644
      pub fn sanitize(&mut self) {
          // Only the D-pad has a split variant (see `Mode::SCHEMES`).
          if self.mode != Mode::Dpad {
-@@ -284,7 +402,9 @@ impl Settings {
+@@ -284,7 +408,9 @@ impl Settings {
          ] {
              *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
          }
