@@ -387,7 +387,7 @@ index b38a955..edd5a9e 100644
                          state.set(Button::LeftStick, true);
                      }
 diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-client-render/src/touch/draw.rs
-index 9e8d8e4..d6bc676 100644
+index 9e8d8e4..780ddc6 100644
 --- a/crates/horizon-client-render/src/touch/draw.rs
 +++ b/crates/horizon-client-render/src/touch/draw.rs
 @@ -10,7 +10,6 @@
@@ -454,6 +454,15 @@ index 9e8d8e4..d6bc676 100644
      }
  
      /// The joystick (a rim and a knob) or the D-pad (four arrow buttons).
+@@ -114,7 +109,7 @@ impl TouchControls {
+             let cell = size / 3.0;
+             for ([dx, dy], label, pressed) in dpad(state.left) {
+                 let bounds = [x + cell * dx, y + cell * dy, cell, cell];
+-                button(b, a, bounds, label, pressed, color);
++                button(b, a, bounds, label, pressed, color, self.settings.button_style);
+             }
+             return;
+         }
 @@ -171,42 +166,36 @@ fn button(
      label: &str,
      pressed: bool,
