@@ -48,6 +48,14 @@ static NSString *NCLRDocuments(void) {
     return paths.firstObject ?: NSTemporaryDirectory();
 }
 
+static NSString *NCLRWasmRefusalText(void) {
+    NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"nclr-wasm-refusals.txt"];
+    NSString *text = [NSString stringWithContentsOfFile:path
+                                              encoding:NSUTF8StringEncoding
+                                                 error:nil];
+    return [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
 static void NCLRCreateDirectory(NSString *path) {
     [[NSFileManager defaultManager] createDirectoryAtPath:path
                               withIntermediateDirectories:YES
@@ -1507,6 +1515,30 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [self.stack addArrangedSubview:[self headerWithTitle:@"模组"
                                                 subtitle:@"导入、启用和删除本地模组"
                                              actionTitle:@"导入模组" action:@selector(importTapped)]];
+    NSString *refusals = NCLRWasmRefusalText();
+    if (refusals.length > 0) {
+        UIView *warning = [self card];
+        UILabel *title = [self label:@"WASM 行为未加载，相关模组内容已禁用"
+                                  size:12.0 weight:UIFontWeightSemibold
+                                 color:NCLRColor(0.95, 0.42, 0.42, 1.0)];
+        UILabel *body = [self label:refusals
+                                size:10.0 weight:UIFontWeightRegular
+                               color:NCLRColor(0.78, 0.62, 0.62, 1.0)];
+        body.numberOfLines = 0;
+        UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[title, body]];
+        stack.axis = UILayoutConstraintAxisVertical;
+        stack.spacing = 5.0;
+        stack.translatesAutoresizingMaskIntoConstraints = NO;
+        [warning addSubview:stack];
+        [NSLayoutConstraint activateConstraints:@[
+            [stack.leadingAnchor constraintEqualToAnchor:warning.leadingAnchor constant:16.0],
+            [stack.trailingAnchor constraintEqualToAnchor:warning.trailingAnchor constant:-16.0],
+            [stack.topAnchor constraintEqualToAnchor:warning.topAnchor constant:14.0],
+            [stack.bottomAnchor constraintEqualToAnchor:warning.bottomAnchor constant:-14.0],
+        ]];
+        [self.stack addArrangedSubview:warning];
+    }
+
     NCLRStore *store = NCLRStore.shared;
     if (store.mods.count == 0) {
         UIView *card = [self card];

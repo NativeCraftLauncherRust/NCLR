@@ -99,6 +99,17 @@ pub extern "C" fn horizon_ios_run(resources: *const c_char, game_dir: *const c_c
                 launch,
                 &horizon_client::logging::player_dir(),
             );
+            // The launcher's Mods page reads this after the run; a refused
+            // behaviour also disables that mod's content (`startup_refused`).
+            let report: String = wasm
+                .refused
+                .iter()
+                .map(|(id, why)| format!("{id}\t{why}\n"))
+                .collect();
+            let _ = std::fs::write(
+                launch.context.game_dir.join("nclr-wasm-refusals.txt"),
+                report,
+            );
             let mods = std::mem::take(&mut wasm.mods);
             let ids: Vec<_> = mods.iter().map(|entry| entry.fields().id).collect();
             mod_api::__private::install(mods.into());
