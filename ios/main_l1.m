@@ -3025,24 +3025,50 @@ static NSString *NCLRSHA1Hex(NSData *data) {
         NSDictionary *index = [NSJSONSerialization JSONObjectWithData:indexData options:0 error:nil];
         NSDictionary *objectsMap = index[@"objects"];
         NSArray *names = [objectsMap.allKeys sortedArrayUsingSelector:@selector(compare:)];
-        NSInteger done = 0;
+        // 4,900 small objects: a serial loop is dominated by round trips. Eight
+        // workers keep the first run practical on a phone.
+        NSOperationQueue *assetQueue = [[NSOperationQueue alloc] init];
+        assetQueue.maxConcurrentOperationCount = 8;
+        NSLock *state = [[NSLock alloc] init];
+        __block NSInteger done = 0;
+        __block NSString *assetError = nil;
         for (NSString *name in names) {
-            NSDictionary *object = objectsMap[name];
-            NSString *hash = object[@"hash"];
-            if (hash.length < 2) continue;
-            NSString *folder = [objects stringByAppendingPathComponent:[hash substringToIndex:2]];
-            NCLRCreateDirectory(folder);
-            NSString *file = [folder stringByAppendingPathComponent:hash];
-            if ([[NSFileManager defaultManager] fileExistsAtPath:file]) { done++; continue; }
-            NSString *url = [NSString stringWithFormat:@"https://resources.download.minecraft.net/%@/%@",
-                             [hash substringToIndex:2], hash];
-            NSData *data = [self download:url error:&error];
-            if (data == nil) { completion(error); return; }
-            if (![NCLRSHA1Hex(data) isEqualToString:hash]) { completion([NSString stringWithFormat:@"资源校验失败：%@", name]); return; }
-            [data writeToFile:file atomically:YES];
-            done++;
-            if (done % 50 == 0) report([NSString stringWithFormat:@"下载资源 %ld/%lu…", (long)done, (unsigned long)names.count]);
+            [assetQueue addOperationWithBlock:^{
+                [state lock];
+                if (assetError != nil) { [state unlock]; return; }
+                [state unlock];
+                NSDictionary *object = objectsMap[name];
+                NSString *hash = object[@"hash"];
+                if (hash.length < 2) return;
+                NSString *folder = [objects stringByAppendingPathComponent:[hash substringToIndex:2]];
+                NCLRCreateDirectory(folder);
+                NSString *file = [folder stringByAppendingPathComponent:hash];
+                if ([[NSFileManager defaultManager] fileExistsAtPath:file]) {
+                    [state lock]; done++; [state unlock];
+                    return;
+                }
+                NSString *url = [NSString stringWithFormat:@"https://resources.download.minecraft.net/%@/%@",
+                                 [hash substringToIndex:2], hash];
+                NSString *oneError = nil;
+                NSData *data = [self download:url error:&oneError];
+                if (data == nil || ![NCLRSHA1Hex(data) isEqualToString:hash]) {
+                    [state lock];
+                    if (assetError == nil) assetError = oneError ?: [NSString stringWithFormat:@"资源校验失败：%@", name];
+                    [state unlock];
+                    [assetQueue cancelAllOperations];
+                    return;
+                }
+                [data writeToFile:file atomically:YES];
+                NSInteger current;
+                [state lock]; current = ++done; [state unlock];
+                if (current % 50 == 0) {
+                    report([NSString stringWithFormat:@"下载资源 %ld/%lu…", (long)current, (unsigned long)names.count]);
+                }
+            }];
         }
+        [assetQueue waitUntilAllOperationsAreFinished];
+        [state lock]; NSString *finalAssetError = assetError; [state unlock];
+        if (finalAssetError != nil) { completion(finalAssetError); return; }
 
         NSString *bundle = [[NSBundle mainBundle] pathForResource:@"ship" ofType:@"hzr3"];
         if (bundle.length == 0) { completion(@"IPA 内缺少 ship.hzr3"); return; }
