@@ -56,6 +56,88 @@ static NSString *NCLRWasmRefusalText(void) {
     return [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 }
 
+static NSString *NCLROptionsPath(void) {
+    return [NCLRDocuments() stringByAppendingPathComponent:@"options.txt"];
+}
+
+static NSString *NCLRGraphicsPath(void) {
+    return [NCLRDocuments() stringByAppendingPathComponent:@"graphics.txt"];
+}
+
+static NSString *NCLRSelectedShader(void) {
+    NSString *text = [NSString stringWithContentsOfFile:NCLRGraphicsPath()
+                                               encoding:NSUTF8StringEncoding
+                                                  error:nil];
+    for (NSString *line in [text componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
+        if ([line hasPrefix:@"pickedShaderPack:"]) {
+            return [line substringFromIndex:@"pickedShaderPack:".length];
+        }
+    }
+    return @"";
+}
+
+static void NCLRSelectShader(NSString *file) {
+    NSString *path = NCLRGraphicsPath();
+    NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] ?: @"";
+    NSMutableArray<NSString *> *lines = [[text componentsSeparatedByCharactersInSet:
+        [NSCharacterSet newlineCharacterSet]] mutableCopy];
+    NSMutableArray<NSString *> *kept = [NSMutableArray array];
+    for (NSString *line in lines) {
+        if (line.length == 0 || [line hasPrefix:@"pickedShaderPack:"]) continue;
+        [kept addObject:line];
+    }
+    if (file.length > 0) {
+        [kept addObject:[NSString stringWithFormat:@"pickedShaderPack:%@", file]];
+    }
+    [[kept componentsJoinedByString:@"\n"] writeToFile:path atomically:YES
+                                                encoding:NSUTF8StringEncoding error:nil];
+}
+
+static NSArray<NSString *> *NCLRResourcePacks(void) {
+    NSString *text = [NSString stringWithContentsOfFile:NCLROptionsPath()
+                                               encoding:NSUTF8StringEncoding
+                                                  error:nil];
+    for (NSString *line in [text componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
+        NSRange colon = [line rangeOfString:@":"];
+        if (colon.location == NSNotFound) continue;
+        if (![[line substringToIndex:colon.location] isEqualToString:@"resourcePacks"]) continue;
+        NSString *json = [line substringFromIndex:colon.location + 1];
+        NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
+        id value = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        if ([value isKindOfClass:[NSArray class]]) return value;
+    }
+    return @[];
+}
+
+static BOOL NCLRResourcePackEnabled(NSString *file) {
+    NSString *entry = [NSString stringWithFormat:@"file/%@", file];
+    return [NCLRResourcePacks() containsObject:entry];
+}
+
+static void NCLRSetResourcePack(NSString *file, BOOL enabled) {
+    NSMutableArray<NSString *> *packs = [NCLRResourcePacks() mutableCopy];
+    NSString *entry = [NSString stringWithFormat:@"file/%@", file];
+    [packs removeObject:entry];
+    if (enabled) [packs addObject:entry];
+    NSData *data = [NSJSONSerialization dataWithJSONObject:packs options:0 error:nil];
+    NSString *json = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"[]";
+    NSString *path = NCLROptionsPath();
+    NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] ?: @"";
+    NSMutableArray<NSString *> *lines = [[text componentsSeparatedByCharactersInSet:
+        [NSCharacterSet newlineCharacterSet]] mutableCopy];
+    BOOL replaced = NO;
+    for (NSUInteger i = 0; i < lines.count; i++) {
+        if ([lines[i] hasPrefix:@"resourcePacks:"]) {
+            lines[i] = [NSString stringWithFormat:@"resourcePacks:%@", json];
+            replaced = YES;
+            break;
+        }
+    }
+    if (!replaced) [lines addObject:[NSString stringWithFormat:@"resourcePacks:%@", json]];
+    [[lines componentsJoinedByString:@"\n"] writeToFile:path atomically:YES
+                                                 encoding:NSUTF8StringEncoding error:nil];
+}
+
 static void NCLRCreateDirectory(NSString *path) {
     [[NSFileManager defaultManager] createDirectoryAtPath:path
                               withIntermediateDirectories:YES
@@ -1587,6 +1669,26 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [self.stack addArrangedSubview:note];
 }
 
+- (void)useShader:(UIButton *)sender {
+    if (sender.tag < 0 || sender.tag >= (NSInteger)self.packFiles.count) return;
+    NCLRSelectShader(self.packFiles[sender.tag]);
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"光影已选择"
+                                                                   message:@"重新进入游戏后生效。"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)togglePack:(UISwitch *)sender {
+    if (sender.tag < 0 || sender.tag >= (NSInteger)self.packFiles.count) return;
+    NCLRSetResourcePack(self.packFiles[sender.tag], sender.on);
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:(sender.on ? @"资源包已启用" : @"资源包已关闭")
+                                                                   message:@"重新进入游戏后生效。"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)importTapped {
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
         initWithDocumentTypes:@[@"public.data"] inMode:UIDocumentPickerModeImport];
@@ -1624,6 +1726,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @property (nonatomic, copy) NSString *emptyText;
 @property (nonatomic, copy) NSString *noteText;
 @property (nonatomic, copy) NSArray<NSString *> *extensions;
+@property (nonatomic, copy) NSArray<NSString *> *packFiles;
 @end
 
 @implementation NCLRPackController
@@ -1666,6 +1769,8 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         [shown addObject:file];
     }
     [shown sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+    self.packFiles = shown;
+    BOOL shaderMode = [self.directoryName isEqualToString:@"shaderpacks"];
     if (shown.count == 0) {
         UIView *card = [self card];
         UILabel *empty = [self label:self.emptyText ?: @"还没有文件。点击右上角导入。"
@@ -1680,7 +1785,8 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         ]];
         [self.stack addArrangedSubview:card];
     }
-    for (NSString *file in shown) {
+    for (NSInteger i = 0; i < shown.count; i++) {
+        NSString *file = shown[i];
         NSString *path = [self.directoryPath stringByAppendingPathComponent:file];
         NSDictionary *attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
         unsigned long long size = [attributes[NSFileSize] unsignedLongLongValue];
@@ -1695,15 +1801,46 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
                                 color:NCLRColor(0.62, 0.62, 0.62, 1.0)];
         [card addSubview:name];
         [card addSubview:detail];
-        [NSLayoutConstraint activateConstraints:@[
-            [name.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
-            [name.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor constant:-16.0],
-            [name.topAnchor constraintEqualToAnchor:card.topAnchor constant:12.0],
-            [detail.leadingAnchor constraintEqualToAnchor:name.leadingAnchor],
-            [detail.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor constant:-16.0],
-            [detail.topAnchor constraintEqualToAnchor:name.bottomAnchor constant:3.0],
-            [detail.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-12.0],
-        ]];
+        if (shaderMode) {
+            BOOL current = [[NCLRSelectedShader() lastPathComponent] isEqualToString:file];
+            UIButton *use = [self button:(current ? @"当前" : @"使用")
+                                  action:@selector(useShader:) primary:current];
+            use.tag = i;
+            use.enabled = !current;
+            use.translatesAutoresizingMaskIntoConstraints = NO;
+            [card addSubview:use];
+            [NSLayoutConstraint activateConstraints:@[
+                [name.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+                [name.trailingAnchor constraintLessThanOrEqualToAnchor:use.leadingAnchor constant:-12.0],
+                [name.topAnchor constraintEqualToAnchor:card.topAnchor constant:12.0],
+                [detail.leadingAnchor constraintEqualToAnchor:name.leadingAnchor],
+                [detail.trailingAnchor constraintLessThanOrEqualToAnchor:use.leadingAnchor constant:-12.0],
+                [detail.topAnchor constraintEqualToAnchor:name.bottomAnchor constant:3.0],
+                [detail.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-12.0],
+                [use.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+                [use.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
+                [use.widthAnchor constraintEqualToConstant:72.0],
+                [use.heightAnchor constraintEqualToConstant:34.0],
+            ]];
+        } else {
+            UISwitch *toggle = [[UISwitch alloc] init];
+            toggle.translatesAutoresizingMaskIntoConstraints = NO;
+            toggle.on = NCLRResourcePackEnabled(file);
+            toggle.tag = i;
+            [toggle addTarget:self action:@selector(togglePack:) forControlEvents:UIControlEventValueChanged];
+            [card addSubview:toggle];
+            [NSLayoutConstraint activateConstraints:@[
+                [name.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+                [name.trailingAnchor constraintLessThanOrEqualToAnchor:toggle.leadingAnchor constant:-12.0],
+                [name.topAnchor constraintEqualToAnchor:card.topAnchor constant:12.0],
+                [detail.leadingAnchor constraintEqualToAnchor:name.leadingAnchor],
+                [detail.trailingAnchor constraintLessThanOrEqualToAnchor:toggle.leadingAnchor constant:-12.0],
+                [detail.topAnchor constraintEqualToAnchor:name.bottomAnchor constant:3.0],
+                [detail.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-12.0],
+                [toggle.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+                [toggle.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
+            ]];
+        }
         [self.stack addArrangedSubview:card];
     }
     UILabel *note = [self label:(self.noteText ?: [NSString stringWithFormat:@"目录：Documents/%@", self.directoryName])
