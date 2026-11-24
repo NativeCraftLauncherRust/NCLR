@@ -1,7 +1,9 @@
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
 #import <CommonCrypto/CommonDigest.h>
+#import <AuthenticationServices/AuthenticationServices.h>
 #import <stdlib.h>
+#include <string.h>
 
 extern int horizon_ios_run(const char *resources, const char *game_dir);
 @class NCLRResourcePreparer;
@@ -760,8 +762,11 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 
 typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *error);
 
-@interface NCLRAuth : NSObject
+@interface NCLRAuth : NSObject <ASWebAuthenticationSessionPresentationContextProvider>
 + (instancetype)shared;
+- (void)startWithBrowserClientId:(NSString *)clientId
+                       presenter:(UIViewController *)presenter
+                      completion:(NCLRAuthCompletion)completion;
 - (void)startWithClientId:(NSString *)clientId
                 presenter:(UIViewController *)presenter
                completion:(NCLRAuthCompletion)completion;
@@ -769,6 +774,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, copy) NSString *token;
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, assign) BOOL developerPremium;
+@property (nonatomic, strong) ASWebAuthenticationSession *session;
+@property (nonatomic, weak) UIViewController *presenter;
 @end
 
 @implementation NCLRAuth
@@ -854,6 +861,96 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
             }
             completion(json, status, nil);
         }] resume];
+}
+
+- (ASPresentationAnchor)presentationAnchorForWebAuthenticationSession:
+    (ASWebAuthenticationSession *)session {
+    return self.presenter.view.window ?: UIWindow.new;
+}
+
+- (void)startWithBrowserClientId:(NSString *)clientId
+                       presenter:(UIViewController *)presenter
+                      completion:(NCLRAuthCompletion)completion {
+    if (clientId.length == 0) {
+        completion(nil, nil, @"未配置 Azure Client ID");
+        return;
+    }
+    self.presenter = presenter;
+    unsigned char random[48];
+    arc4random_buf(random, sizeof(random));
+    NSData *randomData = [NSData dataWithBytes:random length:sizeof(random)];
+    NSString *verifier = [randomData base64EncodedStringWithOptions:0];
+    verifier = [verifier stringByReplacingOccurrencesOfString:@"+" withString:@"-"];
+    verifier = [verifier stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+    verifier = [verifier stringByReplacingOccurrencesOfString:@"=" withString:@""];
+
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(verifier.UTF8String, (CC_LONG)strlen(verifier.UTF8String), digest);
+    NSData *digestData = [NSData dataWithBytes:digest length:sizeof(digest)];
+    NSString *challenge = [digestData base64EncodedStringWithOptions:0];
+    challenge = [challenge stringByReplacingOccurrencesOfString:@"+" withString:@"-"];
+    challenge = [challenge stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+    challenge = [challenge stringByReplacingOccurrencesOfString:@"=" withString:@""];
+
+    NSURLComponents *components = [NSURLComponents componentsWithString:
+        @"https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize"];
+    components.queryItems = @[
+        [NSURLQueryItem queryItemWithName:@"client_id" value:clientId],
+        [NSURLQueryItem queryItemWithName:@"response_type" value:@"code"],
+        [NSURLQueryItem queryItemWithName:@"redirect_uri" value:@"nclr://auth"],
+        [NSURLQueryItem queryItemWithName:@"scope" value:@"offline_access XboxLive.signin"],
+        [NSURLQueryItem queryItemWithName:@"code_challenge" value:challenge],
+        [NSURLQueryItem queryItemWithName:@"code_challenge_method" value:@"S256"],
+        [NSURLQueryItem queryItemWithName:@"prompt" value:@"select_account"],
+    ];
+    __weak typeof(self) weakSelf = self;
+    ASWebAuthenticationSession *session = [[ASWebAuthenticationSession alloc]
+        initWithURL:components.URL
+        callbackURLScheme:@"nclr"
+        completionHandler:^(NSURL *callbackURL, NSError *error) {
+            if (error != nil || callbackURL == nil) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    completion(nil, nil, error.localizedDescription ?: @"登录已取消");
+                });
+                return;
+            }
+            NSURLComponents *result = [NSURLComponents componentsWithURL:callbackURL
+                                                 resolvingAgainstBaseURL:NO];
+            NSMutableDictionary *query = [NSMutableDictionary dictionary];
+            for (NSURLQueryItem *item in result.queryItems) {
+                if (item.name.length > 0 && item.value.length > 0) query[item.name] = item.value;
+            }
+            NSString *code = query[@"code"];
+            NSString *oauthError = query[@"error_description"] ?: query[@"error"];
+            if (code.length == 0) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    completion(nil, nil, oauthError ?: @"登录页没有返回授权码");
+                });
+                return;
+            }
+            NSString *body = [NSString stringWithFormat:
+                @"grant_type=authorization_code&client_id=%@&code=%@&redirect_uri=%@&code_verifier=%@&scope=%@",
+                clientId, code, @"nclr%3A%2F%2Fauth", verifier,
+                @"offline_access%20XboxLive.signin"];
+            [weakSelf postForm:@"https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+                        body:body
+                  completion:^(NSDictionary *json, NSString *tokenError) {
+                NSString *access = NCLRString(json[@"access_token"]);
+                if (tokenError || access.length == 0) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        completion(nil, nil, tokenError ?: NCLRString(json[@"error_description"]) ?: @"授权码换取令牌失败");
+                    });
+                    return;
+                }
+                [weakSelf exchangeMicrosoftToken:access completion:completion];
+            }];
+        }];
+    session.presentationContextProvider = self;
+    session.prefersEphemeralWebBrowserSession = NO;
+    self.session = session;
+    if (![session start]) {
+        completion(nil, nil, @"无法启动系统登录浏览器");
+    }
 }
 
 - (void)startWithClientId:(NSString *)clientId
@@ -1906,7 +2003,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         NCLRStore.shared.clientId = kNCLRDefaultClientID;
     }
     __weak typeof(self) weakSelf = self;
-    [NCLRAuth.shared startWithClientId:NCLRStore.shared.clientId
+    [NCLRAuth.shared startWithBrowserClientId:NCLRStore.shared.clientId
                              presenter:self
                             completion:^(NSString *token, NSString *name, NSString *error) {
         if (error) {
