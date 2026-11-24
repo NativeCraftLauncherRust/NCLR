@@ -1669,26 +1669,6 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [self.stack addArrangedSubview:note];
 }
 
-- (void)useShader:(UIButton *)sender {
-    if (sender.tag < 0 || sender.tag >= (NSInteger)self.packFiles.count) return;
-    NCLRSelectShader(self.packFiles[sender.tag]);
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"光影已选择"
-                                                                   message:@"重新进入游戏后生效。"
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
-}
-
-- (void)togglePack:(UISwitch *)sender {
-    if (sender.tag < 0 || sender.tag >= (NSInteger)self.packFiles.count) return;
-    NCLRSetResourcePack(self.packFiles[sender.tag], sender.on);
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:(sender.on ? @"资源包已启用" : @"资源包已关闭")
-                                                                   message:@"重新进入游戏后生效。"
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
-}
-
 - (void)importTapped {
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
         initWithDocumentTypes:@[@"public.data"] inMode:UIDocumentPickerModeImport];
@@ -1847,6 +1827,26 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
                             size:10.0 weight:UIFontWeightRegular
                            color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     [self.stack addArrangedSubview:note];
+}
+
+- (void)useShader:(UIButton *)sender {
+    if (sender.tag < 0 || sender.tag >= (NSInteger)self.packFiles.count) return;
+    NCLRSelectShader(self.packFiles[sender.tag]);
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"光影已选择"
+                                                                   message:@"重新进入游戏后生效。"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)togglePack:(UISwitch *)sender {
+    if (sender.tag < 0 || sender.tag >= (NSInteger)self.packFiles.count) return;
+    NCLRSetResourcePack(self.packFiles[sender.tag], sender.on);
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:(sender.on ? @"资源包已启用" : @"资源包已关闭")
+                                                                   message:@"重新进入游戏后生效。"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)importTapped {
