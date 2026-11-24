@@ -17,6 +17,7 @@ extern const char *horizon_ios_assemble(const char *bundle, const char *client_j
 static NSString *const kNCLRService = @"dev.zrxmaxlnx.nclr.launcher";
 static NSString *const kNCLRAccount = @"minecraft-access-token";
 static NSString *const kNCLRClientKey = @"NCLRMicrosoftClientID";
+static NSString *const kNCLRDefaultClientID = @"da723f82-1e03-48ef-b3ae-313b2e4c34ca";
 static NSString *const kNCLRAccountNameKey = @"NCLRAccountName";
 
 @class NCLRRootController;
@@ -575,7 +576,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 }
 
 - (void)load {
-    self.clientId = [[NSUserDefaults standardUserDefaults] stringForKey:kNCLRClientKey] ?: @"";
+    NSString *savedClientId = [[NSUserDefaults standardUserDefaults] stringForKey:kNCLRClientKey];
+    self.clientId = savedClientId.length > 0 ? savedClientId : kNCLRDefaultClientID;
     NSData *data = [NSData dataWithContentsOfFile:self.configPath];
     NSDictionary *json = nil;
     if (data.length > 0) {
@@ -1901,8 +1903,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         return;
     }
     if (NCLRStore.shared.clientId.length == 0) {
-        [self configClientId];
-        return;
+        NCLRStore.shared.clientId = kNCLRDefaultClientID;
     }
     __weak typeof(self) weakSelf = self;
     [NCLRAuth.shared startWithClientId:NCLRStore.shared.clientId
