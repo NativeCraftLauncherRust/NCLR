@@ -63,6 +63,14 @@ pub extern "C" fn horizon_ios_run(resources: *const c_char, game_dir: *const c_c
         Ok(path) => PathBuf::from(path),
         Err(_) => return 2,
     };
+    // Game::game_dir() is the process working directory. The iOS shell keeps
+    // resources in the bundle but all writable packs/mods live in game_dir;
+    // without this the game looks in the app bundle for shaderpacks/ and
+    // resourcepacks and never sees the launcher's copies.
+    if let Err(error) = std::env::set_current_dir(&game_dir) {
+        eprintln!("Horizon: cannot enter game directory: {error}");
+        return 4;
+    }
     let startup = horizon_client::entry::prepare_ios(resources, game_dir).unwrap_or_else(|error| {
         eprintln!("Horizon: {error}");
         std::process::exit(2);
