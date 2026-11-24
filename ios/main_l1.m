@@ -5,6 +5,11 @@
 
 extern int horizon_ios_run(const char *resources, const char *game_dir);
 @class NCLRResourcePreparer;
+@interface NCLRResourcePreparer : NSObject
++ (instancetype)shared;
+- (void)prepareWithProgress:(void (^)(NSString *line))progress
+                 completion:(void (^)(NSString *error))completion;
+@end
 extern const char *horizon_ios_assemble(const char *bundle, const char *client_jar,
                                         const char *index, const char *store, const char *out);
 
@@ -2948,12 +2953,6 @@ static NSString *NCLRSHA1Hex(NSData *data) {
 
 /// First-run resource preparation: official jar and assets in, hzr-device out.
 /// Runs on a background queue; progress strings go back to the main queue.
-@interface NCLRResourcePreparer : NSObject
-+ (instancetype)shared;
-- (void)prepareWithProgress:(void (^)(NSString *line))progress
-                 completion:(void (^)(NSString *error))completion;
-@end
-
 @implementation NCLRResourcePreparer {
     dispatch_queue_t _queue;
 }
