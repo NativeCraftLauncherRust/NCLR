@@ -1,8 +1,12 @@
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
+#import <CommonCrypto/CommonDigest.h>
 #import <stdlib.h>
 
 extern int horizon_ios_run(const char *resources, const char *game_dir);
+@class NCLRResourcePreparer;
+extern const char *horizon_ios_assemble(const char *bundle, const char *client_jar,
+                                        const char *index, const char *store, const char *out);
 
 
 static NSString *const kNCLRService = @"dev.zrxmaxlnx.nclr.launcher";
@@ -1390,15 +1394,18 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (void)launchTapped {
     [self writePerformanceOptions];
-    NSString *resources = [[[NSBundle mainBundle] resourcePath]
-        stringByAppendingPathComponent:@"horizon-client/26.3"];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:
-            [resources stringByAppendingPathComponent:@"horizon-resources.json"]]) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"资源缺失"
-                                                                       message:@"horizon-client/26.3 不存在或不完整。"
+    if (NCLRAuth.shared.token.length == 0) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"需要正版登录"
+                                                                       message:@"首次准备游戏资源前，请先在“账号”页登录 Microsoft 正版账号。"
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    NSString *resources = [NCLRDocuments() stringByAppendingPathComponent:@"horizon-client/26.3"];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:
+            [resources stringByAppendingPathComponent:@"horizon-resources.json"]]) {
+        [self prepareResources];
         return;
     }
     NSString *game = NCLRDocuments();
@@ -1425,6 +1432,28 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     }];
     [boostThread start];
     horizon_ios_run(resources.UTF8String, game.UTF8String);
+}
+
+- (void)prepareResources {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"首次启动准备"
+                                                                   message:@"正在从 Mojang 官方源下载 26.3 并组装…"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [self presentViewController:alert animated:YES completion:nil];
+    [[NCLRResourcePreparer shared] prepareWithProgress:^(NSString *line) {
+        alert.message = line;
+    } completion:^(NSString *error) {
+        [alert dismissViewControllerAnimated:YES completion:^{
+            if (error.length > 0) {
+                UIAlertController *fail = [UIAlertController alertControllerWithTitle:@"资源准备失败"
+                                                                               message:error
+                                                                        preferredStyle:UIAlertControllerStyleAlert];
+                [fail addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+                [self presentViewController:fail animated:YES completion:nil];
+            } else {
+                [self launchTapped];
+            }
+        }];
+    }];
 }
 @end
 
@@ -2908,6 +2937,136 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @end
 
 #pragma mark - Root
+
+static NSString *NCLRSHA1Hex(NSData *data) {
+    unsigned char digest[CC_SHA1_DIGEST_LENGTH];
+    CC_SHA1(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *hex = [NSMutableString stringWithCapacity:CC_SHA1_DIGEST_LENGTH * 2];
+    for (int i = 0; i < CC_SHA1_DIGEST_LENGTH; i++) [hex appendFormat:@"%02x", digest[i]];
+    return hex;
+}
+
+/// First-run resource preparation: official jar and assets in, hzr-device out.
+/// Runs on a background queue; progress strings go back to the main queue.
+@interface NCLRResourcePreparer : NSObject
++ (instancetype)shared;
+- (void)prepareWithProgress:(void (^)(NSString *line))progress
+                 completion:(void (^)(NSString *error))completion;
+@end
+
+@implementation NCLRResourcePreparer {
+    dispatch_queue_t _queue;
+}
++ (instancetype)shared {
+    static NCLRResourcePreparer *shared = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ shared = [[NCLRResourcePreparer alloc] init]; });
+    return shared;
+}
+- (instancetype)init {
+    self = [super init];
+    if (self) _queue = dispatch_queue_create("dev.zrxmaxlnx.nclr.prepare", DISPATCH_QUEUE_SERIAL);
+    return self;
+}
+- (NSData *)download:(NSString *)url error:(NSString **)error {
+    NSError *last = nil;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:url]
+                                             options:0 error:&last];
+        if (data.length > 0) return data;
+        [NSThread sleepForTimeInterval:1.0 + attempt];
+    }
+    if (error) *error = [NSString stringWithFormat:@"下载失败：%@（%@）", url, last.localizedDescription ?: @"无响应"];
+    return nil;
+}
+- (void)prepareWithProgress:(void (^)(NSString *))progress
+                 completion:(void (^)(NSString *))completion {
+    dispatch_async(_queue, ^{
+        void (^report)(NSString *) = ^(NSString *line) {
+            dispatch_async(dispatch_get_main_queue(), ^{ if (progress) progress(line); });
+        };
+        NSString *cache = [NCLRDocuments() stringByAppendingPathComponent:@".nclr-cache"];
+        NSString *jarPath = [cache stringByAppendingPathComponent:@"client.jar"];
+        NSString *indexPath = [cache stringByAppendingPathComponent:@"index.json"];
+        NSString *objects = [cache stringByAppendingPathComponent:@"objects"];
+        NSString *out = [NCLRDocuments() stringByAppendingPathComponent:@"horizon-client/26.3"];
+        NCLRCreateDirectory(cache);
+        NCLRCreateDirectory(objects);
+        NSString *error = nil;
+
+        report(@"读取 Mojang 版本清单…");
+        NSData *manifestData = [self download:@"https://piston-meta.mojang.com/mc/game/version_manifest_v2.json" error:&error];
+        if (manifestData == nil) { completion(error); return; }
+        NSDictionary *manifest = [NSJSONSerialization JSONObjectWithData:manifestData options:0 error:nil];
+        NSString *versionURL = nil;
+        for (NSDictionary *v in manifest[@"versions"]) {
+            if ([v[@"id"] isEqualToString:@"26.3"]) { versionURL = v[@"url"]; break; }
+        }
+        if (versionURL == nil) { completion(@"Mojang 清单里没有 26.3"); return; }
+
+        report(@"读取 26.3 版本信息…");
+        NSData *versionData = [self download:versionURL error:&error];
+        if (versionData == nil) { completion(error); return; }
+        NSDictionary *version = [NSJSONSerialization JSONObjectWithData:versionData options:0 error:nil];
+        NSDictionary *client = version[@"downloads"][@"client"];
+        NSDictionary *assets = version[@"assetIndex"];
+        if (client[@"url"] == nil || assets[@"url"] == nil) { completion(@"版本信息缺少 client/assetIndex"); return; }
+
+        report(@"下载 client.jar…");
+        NSData *jar = [self download:client[@"url"] error:&error];
+        if (jar == nil) { completion(error); return; }
+        if (![NCLRSHA1Hex(jar) isEqualToString:client[@"sha1"]]) { completion(@"client.jar SHA-1 校验失败"); return; }
+        [jar writeToFile:jarPath atomically:YES];
+
+        report(@"下载资源索引…");
+        NSData *indexData = [self download:assets[@"url"] error:&error];
+        if (indexData == nil) { completion(error); return; }
+        if (![NCLRSHA1Hex(indexData) isEqualToString:assets[@"sha1"]]) { completion(@"asset index SHA-1 校验失败"); return; }
+        [indexData writeToFile:indexPath atomically:YES];
+        NSDictionary *index = [NSJSONSerialization JSONObjectWithData:indexData options:0 error:nil];
+        NSDictionary *objectsMap = index[@"objects"];
+        NSArray *names = [objectsMap.allKeys sortedArrayUsingSelector:@selector(compare:)];
+        NSInteger done = 0;
+        for (NSString *name in names) {
+            NSDictionary *object = objectsMap[name];
+            NSString *hash = object[@"hash"];
+            if (hash.length < 2) continue;
+            NSString *folder = [objects stringByAppendingPathComponent:[hash substringToIndex:2]];
+            NCLRCreateDirectory(folder);
+            NSString *file = [folder stringByAppendingPathComponent:hash];
+            if ([[NSFileManager defaultManager] fileExistsAtPath:file]) { done++; continue; }
+            NSString *url = [NSString stringWithFormat:@"https://resources.download.minecraft.net/%@/%@",
+                             [hash substringToIndex:2], hash];
+            NSData *data = [self download:url error:&error];
+            if (data == nil) { completion(error); return; }
+            if (![NCLRSHA1Hex(data) isEqualToString:hash]) { completion([NSString stringWithFormat:@"资源校验失败：%@", name]); return; }
+            [data writeToFile:file atomically:YES];
+            done++;
+            if (done % 50 == 0) report([NSString stringWithFormat:@"下载资源 %ld/%lu…", (long)done, (unsigned long)names.count]);
+        }
+
+        NSString *bundle = [[NSBundle mainBundle] pathForResource:@"ship" ofType:@"hzr3"];
+        if (bundle.length == 0) { completion(@"IPA 内缺少 ship.hzr3"); return; }
+        report(@"组装游戏资源…");
+        [[NSFileManager defaultManager] removeItemAtPath:out error:nil];
+        NCLRCreateDirectory([out stringByDeletingLastPathComponent]);
+        const char *message = horizon_ios_assemble(bundle.UTF8String, jarPath.UTF8String,
+                                                   indexPath.UTF8String, objects.UTF8String,
+                                                   out.UTF8String);
+        if (message != NULL) {
+            completion([NSString stringWithUTF8String:message]);
+            return;
+        }
+        if (![[NSFileManager defaultManager] fileExistsAtPath:
+                [out stringByAppendingPathComponent:@"horizon-resources.json"]]) {
+            completion(@"组装完成但资源清单不存在");
+            return;
+        }
+        report(@"资源准备完成");
+        completion(nil);
+    });
+}
+@end
 
 @interface NCLRRootController : UIViewController <UITableViewDataSource, UITableViewDelegate>
 @property (nonatomic, strong) UIView *sidebar;
