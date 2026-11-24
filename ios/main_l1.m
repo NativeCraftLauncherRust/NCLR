@@ -791,9 +791,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     if (self) {
         _token = NCLRKeychainRead();
         _name = [[NSUserDefaults standardUserDefaults] stringForKey:kNCLRAccountNameKey];
-        // L1 developer build: treat the player as a premium owner until a real
-        // account is signed in. The game launch is not gated by this flag.
-        _developerPremium = YES;
+        _developerPremium = NO;
     }
     return self;
 }
@@ -1355,7 +1353,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     stats.spacing = 10.0;
     stats.distribution = UIStackViewDistributionFillEqually;
     NSArray *statTitles = @[@"版本", @"模组", @"账号"];
-    BOOL premium = NCLRAuth.shared.developerPremium || NCLRAuth.shared.token.length > 0;
+    BOOL premium = NCLRAuth.shared.token.length > 0;
     NSString *accountText = premium
         ? (NCLRAuth.shared.name ?: @"正版用户")
         : @"未登录";
@@ -1897,7 +1895,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [self.stack addArrangedSubview:[self headerWithTitle:@"账号" subtitle:@"Microsoft / Minecraft 正版账号"
                                              actionTitle:nil action:nil]];
     NCLRAuth *auth = NCLRAuth.shared;
-    BOOL premium = auth.developerPremium || auth.token.length > 0;
+    BOOL premium = auth.token.length > 0;
     UIView *account = [self card];
     NSString *avatarText = premium ? [(auth.name ?: @"正") substringToIndex:1] : @"N";
     UILabel *avatar = [self label:avatarText
@@ -1908,13 +1906,13 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     avatar.layer.cornerRadius = 23.0;
     avatar.layer.masksToBounds = YES;
     avatar.translatesAutoresizingMaskIntoConstraints = NO;
-    NSString *nameText = premium ? (auth.name ?: @"正版用户（开发者默认）") : @"未登录";
+    NSString *nameText = premium ? (auth.name ?: @"正版用户") : @"未登录";
     UILabel *name = [self label:nameText
                             size:20.0 weight:UIFontWeightSemibold
                            color:NCLRColor(1.0, 1.0, 1.0, 1.0)];
     NSString *detailText = auth.token.length > 0
         ? @"Minecraft Services token 已保存在 Keychain"
-        : @"L1 开发者测试版默认正版，可直接启动游戏";
+        : @"未登录。登录后才能准备资源并启动游戏。";
     UILabel *detail = [self label:detailText
                              size:11.0 weight:UIFontWeightRegular
                             color:NCLRColor(0.58, 0.58, 0.58, 1.0)];
@@ -1943,30 +1941,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     ]];
     [self.stack addArrangedSubview:account];
 
-    UIView *client = [self card];
-    UILabel *clientTitle = [self eyebrow:@"AZURE CLIENT ID"];
-    UILabel *clientValue = [self label:NCLRStore.shared.clientId.length > 0
-                                        ? NCLRStore.shared.clientId : @"未配置"
-                                 size:12.0 weight:UIFontWeightRegular
-                                color:NCLRColor(0.70, 0.70, 0.70, 1.0)];
-    UIButton *configure = [self button:@"配置" action:@selector(configClientId) primary:NO];
-    [client addSubview:clientTitle];
-    [client addSubview:clientValue];
-    [client addSubview:configure];
-    [NSLayoutConstraint activateConstraints:@[
-        [clientTitle.leadingAnchor constraintEqualToAnchor:client.leadingAnchor constant:16.0],
-        [clientTitle.topAnchor constraintEqualToAnchor:client.topAnchor constant:14.0],
-        [clientValue.leadingAnchor constraintEqualToAnchor:clientTitle.leadingAnchor],
-        [clientValue.topAnchor constraintEqualToAnchor:clientTitle.bottomAnchor constant:5.0],
-        [clientValue.trailingAnchor constraintLessThanOrEqualToAnchor:configure.leadingAnchor constant:-10.0],
-        [clientValue.bottomAnchor constraintEqualToAnchor:client.bottomAnchor constant:-14.0],
-        [configure.trailingAnchor constraintEqualToAnchor:client.trailingAnchor constant:-14.0],
-        [configure.centerYAnchor constraintEqualToAnchor:client.centerYAnchor],
-        [configure.widthAnchor constraintEqualToConstant:72.0],
-    ]];
-    [self.stack addArrangedSubview:client];
-
-    UILabel *legal = [self label:@"启动器只在你主动登录时联系 Microsoft / Minecraft Services。不会内置公共 Client ID，也不提供离线绕过。"
+    UILabel *legal = [self label:@"启动器只在你主动登录时联系 Microsoft / Minecraft Services。使用公开的 Azure Client ID，不提供离线绕过。"
                              size:10.0 weight:UIFontWeightRegular
                             color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     [self.stack addArrangedSubview:legal];
@@ -2209,7 +2184,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
     UIView *about = [self card];
     UILabel *aboutTitle = [self eyebrow:@"关于"];
-    UILabel *aboutText = [self label:@"NCLR Launcher L1 · 开发者测试版\n作者 ZRXMAXLNX、可心\nMinecraft 是 Mojang / Microsoft 的产品；本项目不是官方产品。"
+    UILabel *aboutText = [self label:@"NCLR Launcher · 正式版\n作者 ZRXMAXLNX、可心\nMinecraft 是 Mojang / Microsoft 的产品；本项目不是官方产品。"
                                   size:11.0 weight:UIFontWeightRegular
                                  color:NCLRColor(0.65, 0.65, 0.65, 1.0)];
     UIStackView *aboutStack = [[UIStackView alloc] initWithArrangedSubviews:@[aboutTitle, aboutText]];
@@ -3664,7 +3639,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
 
 - (void)refreshAccount {
     NCLRAuth *auth = NCLRAuth.shared;
-    BOOL premium = auth.developerPremium || auth.token.length > 0;
+    BOOL premium = auth.token.length > 0;
     self.accountLabel.text = premium ? (auth.name ?: @"正版用户") : @"未登录";
 }
 @end
