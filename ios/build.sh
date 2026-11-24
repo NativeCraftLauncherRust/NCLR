@@ -58,6 +58,7 @@ xcrun --sdk iphoneos clang \
     -framework QuartzCore \
     -framework Security \
     -framework AuthenticationServices \
+    -framework SafariServices \
     -framework IOKit \
     -framework AudioToolbox \
     -framework CoreAudio \

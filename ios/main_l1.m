@@ -2,6 +2,7 @@
 #import <Security/Security.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <AuthenticationServices/AuthenticationServices.h>
+#import <SafariServices/SafariServices.h>
 #import <stdlib.h>
 #include <string.h>
 
@@ -776,6 +777,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, assign) BOOL developerPremium;
 @property (nonatomic, strong) ASWebAuthenticationSession *session;
 @property (nonatomic, weak) UIViewController *presenter;
+@property (nonatomic, strong) SFSafariViewController *authSafari;
 @end
 
 @implementation NCLRAuth
@@ -993,21 +995,24 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                 handler:^(UIAlertAction *action) {
                     UIPasteboard.generalPasteboard.string = userCode;
                 }]];
-            [alert addAction:[UIAlertAction actionWithTitle:@"打开浏览器" style:UIAlertActionStyleDefault
+            [alert addAction:[UIAlertAction actionWithTitle:@"打开系统登录页" style:UIAlertActionStyleDefault
                 handler:^(UIAlertAction *action) {
+                    UIPasteboard.generalPasteboard.string = userCode;
                     NSURL *url = verification.length > 0 ? [NSURL URLWithString:verification] : nil;
-                    if (url) {
-                        [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
-                    }
+                    [alert dismissViewControllerAnimated:YES completion:^{
+                        if (url != nil) {
+                            SFSafariViewController *safari = [[SFSafariViewController alloc] initWithURL:url];
+                            weakSelf.authSafari = safari;
+                            [presenter presentViewController:safari animated:YES completion:nil];
+                        }
+                        [weakSelf pollWithClientId:clientId
+                                        deviceCode:deviceCode
+                                          interval:MAX(interval, 5)
+                                         presenter:presenter
+                                        completion:completion];
+                    }];
                 }]];
-            [alert addAction:[UIAlertAction actionWithTitle:@"开始等待" style:UIAlertActionStyleDefault
-                handler:^(UIAlertAction *action) {
-                    [weakSelf pollWithClientId:clientId
-                                    deviceCode:deviceCode
-                                      interval:MAX(interval, 5)
-                                     presenter:presenter
-                                    completion:completion];
-                }]];
+            [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
             [presenter presentViewController:alert animated:YES completion:nil];
         });
     }];
@@ -1111,6 +1116,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 }
 
 - (void)fetchProfileWithToken:(NSString *)token completion:(NCLRAuthCompletion)completion {
+    __weak typeof(self) weakSelf = self;
     NSMutableURLRequest *request = [NSMutableURLRequest
         requestWithURL:[NSURL URLWithString:@"https://api.minecraftservices.com/minecraft/profile"]];
     [request setValue:[NSString stringWithFormat:@"Bearer %@", token]
@@ -1129,7 +1135,11 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
             auth.name = name;
             NCLRKeychainWrite(token);
             [[NSUserDefaults standardUserDefaults] setObject:name forKey:kNCLRAccountNameKey];
-            dispatch_async(dispatch_get_main_queue(), ^{ completion(token, name, nil); });
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf.authSafari dismissViewControllerAnimated:YES completion:nil];
+                weakSelf.authSafari = nil;
+                completion(token, name, nil);
+            });
         }] resume];
 }
 @end
@@ -1978,7 +1988,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         NCLRStore.shared.clientId = kNCLRDefaultClientID;
     }
     __weak typeof(self) weakSelf = self;
-    [NCLRAuth.shared startWithBrowserClientId:NCLRStore.shared.clientId
+    [NCLRAuth.shared startWithClientId:NCLRStore.shared.clientId
                              presenter:self
                             completion:^(NSString *token, NSString *name, NSString *error) {
         if (error) {
