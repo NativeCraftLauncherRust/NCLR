@@ -3082,6 +3082,27 @@ static NSString *NCLRSHA1Hex(NSData *data) {
             completion([NSString stringWithUTF8String:message]);
             return;
         }
+        // hzr-device assembles models/data but not the optional 360 MB sound
+        // store; copy the official sounds into the finished tree as well.
+        report(@"复制原版音效…");
+        NSString *soundRoot = [out stringByAppendingPathComponent:@"assets/minecraft"];
+        for (NSString *name in names) {
+            NSString *dest = nil;
+            if ([name isEqualToString:@"minecraft/sounds.json"]) {
+                dest = [soundRoot stringByAppendingPathComponent:@"sounds.json"];
+            } else if ([name hasPrefix:@"minecraft/sounds/"]) {
+                dest = [soundRoot stringByAppendingPathComponent:
+                        [name substringFromIndex:@"minecraft/".length]];
+            } else {
+                continue;
+            }
+            NCLRCreateDirectory([dest stringByDeletingLastPathComponent]);
+            if ([[NSFileManager defaultManager] fileExistsAtPath:dest]) continue;
+            NSString *hash = objectsMap[name][@"hash"];
+            NSString *source = [[objects stringByAppendingPathComponent:[hash substringToIndex:2]]
+                                stringByAppendingPathComponent:hash];
+            [[NSFileManager defaultManager] copyItemAtPath:source toPath:dest error:nil];
+        }
         if (![[NSFileManager defaultManager] fileExistsAtPath:
                 [out stringByAppendingPathComponent:@"horizon-resources.json"]]) {
             completion(@"组装完成但资源清单不存在");
