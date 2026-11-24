@@ -1988,7 +1988,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         NCLRStore.shared.clientId = kNCLRDefaultClientID;
     }
     __weak typeof(self) weakSelf = self;
-    [NCLRAuth.shared startWithClientId:NCLRStore.shared.clientId
+    [NCLRAuth.shared startWithBrowserClientId:NCLRStore.shared.clientId
                              presenter:self
                             completion:^(NSString *token, NSString *name, NSString *error) {
         if (error) {
