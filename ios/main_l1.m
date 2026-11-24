@@ -762,7 +762,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 
 typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *error);
 
-@interface NCLRAuth : NSObject <ASWebAuthenticationSessionPresentationContextProvider>
+@interface NCLRAuth : NSObject <ASWebAuthenticationPresentationContextProviding>
 + (instancetype)shared;
 - (void)startWithBrowserClientId:(NSString *)clientId
                        presenter:(UIViewController *)presenter
