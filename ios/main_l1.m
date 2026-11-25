@@ -1201,6 +1201,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
    forHTTPHeaderField:@"Authorization"];
     [[NSURLSession.sharedSession dataTaskWithRequest:request
         completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            NCLRAuth *auth = NCLRAuth.shared;
             NSString *name = @"Minecraft 玩家";
             if (data.length > 0) {
                 NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
