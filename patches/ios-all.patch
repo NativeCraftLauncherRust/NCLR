@@ -1247,7 +1247,7 @@ index 22e0915..22feefb 100644
              && let Some(window) = &self.window
          {
 diff --git a/crates/horizon-client/src/game/interface/pad/mod.rs b/crates/horizon-client/src/game/interface/pad/mod.rs
-index 026382e..7407b0e 100644
+index 026382e..9289a31 100644
 --- a/crates/horizon-client/src/game/interface/pad/mod.rs
 +++ b/crates/horizon-client/src/game/interface/pad/mod.rs
 @@ -56,6 +56,10 @@ pub(super) struct Pads {
@@ -1306,9 +1306,9 @@ index 026382e..7407b0e 100644
 +                self.pad.touch_sneak = down;
 +                let screen_open = self.screen != Screen::Playing || self.title.is_some();
 +                let action = if down {
-+                    horizon_client::debug_keys::KeyAction::Press
++                    horizon_client_input::keymapping::KeyAction::Press
 +                } else {
-+                    horizon_client::debug_keys::KeyAction::Release
++                    horizon_client_input::keymapping::KeyAction::Release
 +                };
 +                self.toggles.key(SNEAK, action, screen_open, false);
 +                self.sync_toggle(SNEAK);
@@ -1325,7 +1325,7 @@ index 026382e..7407b0e 100644
                  if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
              {
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..766c835 100644
+index 16664ff..5269514 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
 @@ -55,6 +55,146 @@ impl Game<'_> {
@@ -1423,8 +1423,8 @@ index 16664ff..766c835 100644
 +            if let Some(key) = key_code(&name) {
 +                if matches!(key, KeyCode::ShiftLeft | KeyCode::ControlLeft) {
 +                    let slot = usize::from(key == KeyCode::ControlLeft);
-+                    let action = if down { horizon_client::debug_keys::KeyAction::Press }
-+                                 else { horizon_client::debug_keys::KeyAction::Release };
++                    let action = if down { horizon_client_input::keymapping::KeyAction::Press }
++                                 else { horizon_client_input::keymapping::KeyAction::Release };
 +                    let screen_open = self.screen != Screen::Playing || self.title.is_some();
 +                    self.toggles.key(slot, action, screen_open, false);
 +                    self.sync_toggle(slot);
