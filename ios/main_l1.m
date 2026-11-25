@@ -507,16 +507,18 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     NSDictionary *layout = json[@"layout"];
     if ([layout isKindOfClass:[NSDictionary class]]) {
         for (NSString *key in layout) {
-            NSDictionary *value = layout[key];
-            if ([value isKindOfClass:[NSDictionary class]]) {
-                self.positions[key] = value;
+            id value = layout[key];
+            if (![value isKindOfClass:NSDictionary.class]) continue;
+            NSNumber *x = value[@"x"], *y = value[@"y"], *size = value[@"size"];
+            if (![x isKindOfClass:NSNumber.class] || ![y isKindOfClass:NSNumber.class] ||
+                !isfinite(x.doubleValue) || !isfinite(y.doubleValue) ||
+                x.doubleValue < 0 || x.doubleValue > 1 || y.doubleValue < 0 || y.doubleValue > 1) continue;
+            if (![size isKindOfClass:NSNumber.class] || !isfinite(size.doubleValue)) {
+                size = self.positions[key][@"size"] ?: @0.12;
             }
+            self.positions[key] = @{@"x": x, @"y": y, @"size": @(MAX(0.045, MIN(0.45, size.doubleValue)))};
+
         }
-    }
-    NSInteger savedVersion = [json[@"layoutVersion"] integerValue];
-    if (savedVersion < 2) {
-        [self resetLayout];
-        [self save];
     }
     NSArray *hidden = json[@"hidden"];
     if ([hidden isKindOfClass:[NSArray class]]) {
@@ -2843,6 +2845,17 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 }
 @end
 
+@interface NCLRKeyCanvas : UIView
+@property (nonatomic, copy) void (^layoutKeys)(void);
+@end
+
+@implementation NCLRKeyCanvas
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    if (self.layoutKeys) self.layoutKeys();
+}
+@end
+
 @interface NCLRGridOverlay : UIView
 @end
 @implementation NCLRGridOverlay
@@ -3095,7 +3108,10 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [self.canvasStatus setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
                                                        forAxis:UILayoutConstraintAxisHorizontal];
     [self updateCanvasTools];
-    self.preview = [[UIView alloc] init];
+    NCLRKeyCanvas *keyCanvas = [[NCLRKeyCanvas alloc] init];
+    __weak typeof(self) weakLayout = self;
+    keyCanvas.layoutKeys = ^{ [weakLayout layoutPreviewKeys]; };
+    self.preview = keyCanvas;
     self.preview.translatesAutoresizingMaskIntoConstraints = NO;
     self.preview.backgroundColor = NCLRCanvas();
     self.preview.layer.cornerRadius = 12.0;
@@ -3310,11 +3326,10 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         button.titleLabel.font = [UIFont monospacedSystemFontOfSize:14.0 * slider.value
                                                               weight:UIFontWeightSemibold];
     }
-    [self.view setNeedsLayout];
+    [self.preview setNeedsLayout];
 }
 
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
+- (void)layoutPreviewKeys {
     if (self.preview.bounds.size.width <= 0.0 || self.preview.bounds.size.height <= 0.0) {
         return;
     }
@@ -3381,7 +3396,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.keyEditTitle.text = key.length > 0 ? (caption ?: @"移动摇杆") : @"选择画布上的按键";
     self.canvasStatus.text = caption ?: @"触控布局";
     [self updateCanvasTools];
-    [self.view setNeedsLayout];
+    [self.preview setNeedsLayout];
 }
 
 - (NSDictionary *)keyLayoutSnapshot {
@@ -3420,7 +3435,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     };
     self.keySizeValue.text = [NSString stringWithFormat:@"%.2f", sender.value];
     if (!sender.isTracking) [NCLRKeymap.shared save];
-    [self.view setNeedsLayout];
+    [self.preview setNeedsLayout];
 }
 
 - (void)keyVisibleChanged:(UISwitch *)sender {
@@ -3429,7 +3444,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [NCLRKeymap.shared setHidden:!sender.on forKey:self.selectedKey];
     [self pushUndo:before];
     [NCLRKeymap.shared save];
-    [self.view setNeedsLayout];
+    [self.preview setNeedsLayout];
 }
 
 - (void)updateSelection {
@@ -3462,16 +3477,22 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     if (key.length == 0) {
         return;
     }
+    CGRect area = [self previewContentRect];
+    if (CGRectIsEmpty(area)) return;
     if (sender.state == UIGestureRecognizerStateBegan) {
         [self selectKey:key];
-        self.dragStartCenter = button.center;
+        NSDictionary *savedPosition = NCLRKeymap.shared.positions[key];
+        CGFloat x = [savedPosition[@"x"] doubleValue];
+        CGFloat y = [savedPosition[@"y"] doubleValue];
+        self.dragStartCenter = savedPosition
+            ? CGPointMake(area.origin.x + x * area.size.width, area.origin.y + y * area.size.height)
+            : button.center;
         self.gestureStartPositions = [self keyLayoutSnapshot];
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     }
     CGPoint translation = [sender translationInView:self.preview];
     CGFloat cx = self.dragStartCenter.x + translation.x;
     CGFloat cy = self.dragStartCenter.y + translation.y;
-    CGRect area = [self previewContentRect];
     CGFloat x = MAX(0.025, MIN(0.975, (cx - area.origin.x) / area.size.width));
     CGFloat y = MAX(0.025, MIN(0.975, (cy - area.origin.y) / area.size.height));
     // Light magnetic snapping: edges and the centres of other keys. It only
@@ -3501,7 +3522,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         self.gestureStartPositions = nil;
         [NCLRKeymap.shared save];
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-        [self.view setNeedsLayout];
+        [self.preview setNeedsLayout];
     }
 }
 
@@ -3535,7 +3556,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [NCLRKeymap.shared save];
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     }
-    [self.view setNeedsLayout];
+    [self.preview setNeedsLayout];
 }
 
 - (void)pushUndo:(NSDictionary *)snapshot {
@@ -3589,7 +3610,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [self pushUndo:before];
         [NCLRKeymap.shared save];
         [self selectKey:self.selectedKey];
-        [self.view setNeedsLayout];
+        [self.preview setNeedsLayout];
     }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
@@ -3638,7 +3659,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     for (NSString *key in self.visibilitySwitches) {
         self.visibilitySwitches[key].on = ![NCLRKeymap.shared isHidden:key];
     }
-    [self.view setNeedsLayout];
+    [self.preview setNeedsLayout];
     [self.view layoutIfNeeded];
 }
 
@@ -3762,6 +3783,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NSString *symbol = self.canvasFullscreen ? @"arrow.down.right.and.arrow.up.left" : @"arrow.up.left.and.arrow.down.right";
     [self.canvasClose setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
     self.canvasClose.accessibilityLabel = self.canvasFullscreen ? @"退出全屏" : @"全屏编辑";
+    [self.preview setNeedsLayout];
     self.scroll.scrollEnabled = !self.canvasFullscreen;
     if (self.canvasFullscreen) [self.scroll setContentOffset:CGPointZero animated:NO];
     if (self.canvasFullscreen) {
@@ -3785,7 +3807,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         self.stackTrailing.constant = -24.0;
         self.previewHeight.constant = MAX(170.0, MIN(410.0, self.view.bounds.size.height * 0.58));
     }
-    [self.view setNeedsLayout];
+    [self.preview setNeedsLayout];
     if (UIAccessibilityIsReduceMotionEnabled()) {
         [self.view layoutIfNeeded];
     } else {
