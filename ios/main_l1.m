@@ -1214,7 +1214,6 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                     }
                 }
             }
-            NCLRAuth *auth = NCLRAuth.shared;
             auth.token = token;
             auth.name = name;
             NCLRKeychainWrite(token);
