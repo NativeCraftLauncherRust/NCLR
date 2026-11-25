@@ -2689,6 +2689,11 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @property (nonatomic, strong) NSLayoutConstraint *previewHeight;
 @property (nonatomic, strong) UIView *previewCard;
 @property (nonatomic, strong) UIButton *canvasClose;
+@property (nonatomic, strong) UIButton *undoTool;
+@property (nonatomic, strong) UIButton *redoTool;
+@property (nonatomic, strong) UIButton *gridTool;
+@property (nonatomic, strong) UIView *touchSettings;
+@property (nonatomic, strong) UILabel *canvasStatus;
 @property (nonatomic, assign) BOOL canvasFullscreen;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *undoStack;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *redoStack;
@@ -3043,25 +3048,14 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.styleControl.selectedSegmentIndex = NCLRKeymap.shared.buttonStyle;
     [self.styleControl addTarget:self action:@selector(styleChanged:)
                 forControlEvents:UIControlEventValueChanged];
-    UIButton *addKey = [self button:@"+ 添加触控键" action:@selector(addKeyTapped) primary:NO];
-    UIButton *gridButton = [self button:@"网格" action:@selector(toggleGrid) primary:NO];
-    UIButton *resetButton = [self button:@"重置布局" action:@selector(resetLayoutTapped) primary:NO];
-    UIButton *fullButton = [self button:@"全屏编辑" action:@selector(toggleCanvas) primary:NO];
-    UIButton *undoButton = [self button:@"撤销" action:@selector(undoTapped) primary:NO];
-    UIButton *redoButton = [self button:@"重做" action:@selector(redoTapped) primary:NO];
-    UIButton *exportButton = [self button:@"导出" action:@selector(exportKeymap) primary:NO];
-    UIButton *importButton = [self button:@"导入" action:@selector(importKeymap) primary:NO];
-    UIStackView *ioRow = [[UIStackView alloc] initWithArrangedSubviews:@[exportButton, importButton]];
-    ioRow.axis = UILayoutConstraintAxisHorizontal;
-    ioRow.spacing = 8.0;
-    ioRow.distribution = UIStackViewDistributionFillEqually;
-    UIStackView *tools = [[UIStackView alloc] initWithArrangedSubviews:
-        @[undoButton, redoButton, gridButton, resetButton, fullButton]];
-    tools.axis = UILayoutConstraintAxisHorizontal;
-    tools.spacing = 8.0;
-    tools.distribution = UIStackViewDistributionFillEqually;
-    UIStackView *menuStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.menuToggle, self.sizePresetControl, self.presetControl, self.styleControl, self.sizeRow, opacityRow, self.modeControl, dynamicRow, leftRow, sprintRow, sensitivityRow, deadzoneRow, sprintButtonRow, iconLabelsRow, addKey, tools, ioRow]];
+    UIStackView *settings = [[UIStackView alloc] initWithArrangedSubviews:
+        @[self.sizePresetControl, self.presetControl, self.styleControl, self.sizeRow, opacityRow,
+          self.modeControl, dynamicRow, leftRow, sprintRow, sensitivityRow, deadzoneRow, sprintButtonRow, iconLabelsRow]];
+    settings.axis = UILayoutConstraintAxisVertical;
+    settings.spacing = 8.0;
+    settings.hidden = YES;
+    self.touchSettings = settings;
+    UIStackView *menuStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.menuToggle, settings]];
     menuStack.axis = UILayoutConstraintAxisVertical;
     menuStack.spacing = 8.0;
     menuStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -3072,10 +3066,36 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [menuStack.topAnchor constraintEqualToAnchor:menu.topAnchor constant:10.0],
         [menuStack.bottomAnchor constraintEqualToAnchor:menu.bottomAnchor constant:-10.0],
     ]];
-    [self.stack addArrangedSubview:menu];
-
     UIView *previewCard = [self card];
-    UILabel *previewLabel = [self eyebrow:@"触控布局预览 · 拖动按钮调整位置"];
+    self.canvasStatus = [self label:@"触控布局" size:15 weight:UIFontWeightSemibold
+                              color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
+    self.canvasStatus.lineBreakMode = NSLineBreakByTruncatingTail;
+    self.undoTool = [self canvasTool:@"arrow.uturn.backward" label:@"撤销" action:@selector(undoTapped)];
+    self.redoTool = [self canvasTool:@"arrow.uturn.forward" label:@"重做" action:@selector(redoTapped)];
+    self.gridTool = [self canvasTool:@"grid" label:@"显示或隐藏网格" action:@selector(toggleGrid)];
+    self.canvasClose = [self canvasTool:@"arrow.up.left.and.arrow.down.right" label:@"全屏编辑" action:@selector(toggleCanvas)];
+    UIButton *more = [self canvasTool:@"ellipsis" label:@"更多布局操作" action:NULL];
+    __weak typeof(self) weakEditor = self;
+    more.menu = [UIMenu menuWithChildren:@[
+        [UIAction actionWithTitle:@"添加触控键" image:[UIImage systemImageNamed:@"plus"] identifier:nil
+                         handler:^(__kindof UIAction *action) { [weakEditor addKeyTapped]; }],
+        [UIAction actionWithTitle:@"导入布局" image:[UIImage systemImageNamed:@"square.and.arrow.down"] identifier:nil
+                         handler:^(__kindof UIAction *action) { [weakEditor importKeymap]; }],
+        [UIAction actionWithTitle:@"导出布局" image:[UIImage systemImageNamed:@"square.and.arrow.up"] identifier:nil
+                         handler:^(__kindof UIAction *action) { [weakEditor exportKeymap]; }],
+        [UIAction actionWithTitle:@"重置布局" image:[UIImage systemImageNamed:@"arrow.counterclockwise"] identifier:nil
+                         discoverabilityTitle:nil attributes:UIMenuElementAttributesDestructive state:UIMenuElementStateOff
+                         handler:^(__kindof UIAction *action) { [weakEditor resetLayoutTapped]; }],
+    ]];
+    more.showsMenuAsPrimaryAction = YES;
+    UIStackView *toolbar = [[UIStackView alloc] initWithArrangedSubviews:
+        @[self.canvasStatus, self.undoTool, self.redoTool, self.gridTool, self.canvasClose, more]];
+    toolbar.alignment = UIStackViewAlignmentCenter;
+    toolbar.spacing = 2;
+    toolbar.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.canvasStatus setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
+                                                       forAxis:UILayoutConstraintAxisHorizontal];
+    [self updateCanvasTools];
     self.preview = [[UIView alloc] init];
     self.preview.translatesAutoresizingMaskIntoConstraints = NO;
     self.preview.backgroundColor = NCLRCanvas();
@@ -3083,25 +3103,18 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.preview.layer.borderWidth = 1.0;
     self.preview.layer.borderColor = NCLRBorder().CGColor;
     self.preview.clipsToBounds = YES;
-    [previewCard addSubview:previewLabel];
+    [previewCard addSubview:toolbar];
     [previewCard addSubview:self.preview];
     self.previewCard = previewCard;
     self.previewHeight = [self.preview.heightAnchor constraintEqualToConstant:200.0];
-    self.canvasClose = [self button:@"退出全屏" action:@selector(toggleCanvas) primary:NO];
-    self.canvasClose.hidden = YES;
-    [self.view addSubview:self.canvasClose];
     [NSLayoutConstraint activateConstraints:@[
-        [self.canvasClose.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-16.0],
-        [self.canvasClose.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:12.0],
-        [self.canvasClose.widthAnchor constraintEqualToConstant:104.0],
-    ]];
-    [NSLayoutConstraint activateConstraints:@[
-        [previewLabel.leadingAnchor constraintEqualToAnchor:previewCard.leadingAnchor constant:16.0],
-        [previewLabel.topAnchor constraintEqualToAnchor:previewCard.topAnchor constant:12.0],
+        [toolbar.leadingAnchor constraintEqualToAnchor:previewCard.leadingAnchor constant:12],
+        [toolbar.trailingAnchor constraintEqualToAnchor:previewCard.trailingAnchor constant:-8],
+        [toolbar.topAnchor constraintEqualToAnchor:previewCard.topAnchor constant:4],
         [self.preview.centerXAnchor constraintEqualToAnchor:previewCard.centerXAnchor],
-        [self.preview.topAnchor constraintEqualToAnchor:previewLabel.bottomAnchor constant:8.0],
+        [self.preview.topAnchor constraintEqualToAnchor:toolbar.bottomAnchor constant:4.0],
         [self.preview.widthAnchor constraintLessThanOrEqualToAnchor:previewCard.widthAnchor constant:-24.0],
-        [self.preview.bottomAnchor constraintLessThanOrEqualToAnchor:previewCard.bottomAnchor constant:-12.0],
+        [self.preview.bottomAnchor constraintEqualToAnchor:previewCard.bottomAnchor constant:-10.0],
         self.previewHeight,
     ]];
     NSLayoutConstraint *previewAspect = [self.preview.widthAnchor constraintEqualToAnchor:self.preview.heightAnchor multiplier:16.0 / 9.0];
@@ -3112,6 +3125,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.grid.userInteractionEnabled = NO;
     self.grid.backgroundColor = UIColor.clearColor;
     [self.preview addSubview:self.grid];
+    [self updateCanvasTools];
 
     self.selection = [[UIView alloc] initWithFrame:CGRectZero];
     self.selection.userInteractionEnabled = NO;
@@ -3160,7 +3174,13 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
             caption.translatesAutoresizingMaskIntoConstraints = YES;
             [button addSubview:caption];
         } else {
-            [button setTitle:NCLRKeymap.shared.bindings[key] forState:UIControlStateNormal];
+            NSString *binding = NCLRKeymap.shared.bindings[key];
+            button.accessibilityLabel = binding;
+            NSString *caption = [binding isEqualToString:@"MouseLeft"] ? @"左键"
+                : [binding isEqualToString:@"MouseRight"] ? @"右键"
+                : [binding isEqualToString:@"MouseMiddle"] ? @"中键"
+                : [binding isEqualToString:@"Space"] ? @"空格" : binding;
+            [button setTitle:caption forState:UIControlStateNormal];
             [button setTitleColor:NCLRColor(0.04, 0.04, 0.04, 1.0) forState:UIControlStateNormal];
             button.titleLabel.font = [UIFont monospacedSystemFontOfSize:11.0 weight:UIFontWeightBold];
             button.backgroundColor = NCLRColor(0.95, 0.95, 0.95, 0.86);
@@ -3204,24 +3224,31 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     keySizeRow.axis = UILayoutConstraintAxisHorizontal;
     keySizeRow.spacing = 10.0;
     keySizeRow.alignment = UIStackViewAlignmentCenter;
-    UILabel *keyVisibleLabel = [self label:@"显示该按键" size:12.0 weight:UIFontWeightSemibold
+    UILabel *keyVisibleLabel = [self label:@"显示" size:12.0 weight:UIFontWeightSemibold
                                     color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
     self.keyVisibleSwitch = [[UISwitch alloc] init];
     self.keyVisibleSwitch.enabled = NO;
+    self.keyVisibleSwitch.accessibilityLabel = @"在游戏中显示此按键";
     [self.keyVisibleSwitch addTarget:self action:@selector(keyVisibleChanged:)
                      forControlEvents:UIControlEventValueChanged];
-    UIView *keyVisibleSpacer = [[UIView alloc] init];
     UIStackView *keyVisibleRow = [[UIStackView alloc] initWithArrangedSubviews:
-        @[keyVisibleLabel, keyVisibleSpacer, self.keyVisibleSwitch]];
+        @[keyVisibleLabel, self.keyVisibleSwitch]];
     keyVisibleRow.axis = UILayoutConstraintAxisHorizontal;
     keyVisibleRow.alignment = UIStackViewAlignmentCenter;
+    keyVisibleRow.spacing = 6;
     self.triggerControl = [[UISegmentedControl alloc] initWithItems:@[@"点按", @"切换"]];
     self.triggerControl.accessibilityLabel = @"按键触发方式";
     self.triggerControl.enabled = NO;
     self.triggerControl.selectedSegmentIndex = 0;
     [self.triggerControl addTarget:self action:@selector(triggerChanged:) forControlEvents:UIControlEventValueChanged];
-    UIStackView *keyStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.keyEditTitle, keySizeRow, keyVisibleRow, self.triggerControl]];
+    UIStackView *inspectorHeader = [[UIStackView alloc] initWithArrangedSubviews:
+        @[self.keyEditTitle, keyVisibleRow, self.triggerControl]];
+    inspectorHeader.alignment = UIStackViewAlignmentCenter;
+    inspectorHeader.spacing = 8;
+    self.keyEditTitle.numberOfLines = 1;
+    [self.keyEditTitle setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
+                                                      forAxis:UILayoutConstraintAxisHorizontal];
+    UIStackView *keyStack = [[UIStackView alloc] initWithArrangedSubviews:@[inspectorHeader, keySizeRow]];
     keyStack.axis = UILayoutConstraintAxisVertical;
     keyStack.spacing = 9.0;
     keyStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -3232,13 +3259,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [keyStack.topAnchor constraintEqualToAnchor:keyCard.topAnchor constant:14.0],
         [keyStack.bottomAnchor constraintEqualToAnchor:keyCard.bottomAnchor constant:-14.0],
     ]];
-    [self.stack addArrangedSubview:keyCard];
-
-    UILabel *path = [self label:[NSString stringWithFormat:@"保存到：%@", NCLRKeymap.shared.path]
-                            size:10.0 weight:UIFontWeightRegular
-                           color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
-    path.font = [UIFont monospacedSystemFontOfSize:10.0 weight:UIFontWeightRegular];
-    [self.stack addArrangedSubview:path];
+    [self.stack insertArrangedSubview:keyCard atIndex:[self.stack.arrangedSubviews indexOfObject:previewCard]];
+    [self.stack addArrangedSubview:menu];
 
     UIButton *save = [self button:@"保存" action:@selector(saveKeymap) primary:YES];
     UIButton *exit = [self button:@"退出" action:@selector(exitKeymap) primary:NO];
@@ -3249,10 +3271,30 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [self.stack addArrangedSubview:actions];
 }
 
+- (UIButton *)canvasTool:(NSString *)symbol label:(NSString *)label action:(SEL)action {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    button.tintColor = NCLRColor(0.94, 0.94, 0.94, 1.0);
+    button.accessibilityLabel = label;
+    [button setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
+    [NSLayoutConstraint activateConstraints:@[
+        [button.widthAnchor constraintEqualToConstant:44],
+        [button.heightAnchor constraintEqualToConstant:44],
+    ]];
+    if (action) [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    return button;
+}
+
+- (void)updateCanvasTools {
+    self.undoTool.enabled = self.undoStack.count > 0;
+    self.redoTool.enabled = self.redoStack.count > 0;
+    self.gridTool.tintColor = self.grid.hidden ? NCLRColor(0.94, 0.94, 0.94, 1.0) : NCLRAccent();
+    self.gridTool.accessibilityValue = self.grid.hidden ? @"已隐藏" : @"已显示";
+}
+
 - (void)toggleMenu {
-    self.sizeRow.hidden = !self.sizeRow.hidden;
-    self.menuToggle.titleLabel.text = self.sizeRow.hidden ? @"触控设置  ▾" : @"触控设置  ▴";
-    [self.menuToggle setTitle:(self.sizeRow.hidden ? @"触控设置  ▾" : @"触控设置  ▴")
+    self.touchSettings.hidden = !self.touchSettings.hidden;
+    [self.menuToggle setTitle:(self.touchSettings.hidden ? @"触控设置  ▾" : @"触控设置  ▴")
                      forState:UIControlStateNormal];
 }
 
@@ -3336,7 +3378,10 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.keySizeSlider.value = size;
     self.keySizeValue.text = [NSString stringWithFormat:@"%.2f", size];
     self.keyVisibleSwitch.on = key.length > 0 && ![NCLRKeymap.shared isHidden:key];
-    self.keyEditTitle.text = key.length > 0 ? key : @"选择画布上的按键";
+    NSString *caption = key.length ? [self.previewButtons[key] titleForState:UIControlStateNormal] : nil;
+    self.keyEditTitle.text = key.length > 0 ? (caption ?: @"移动摇杆") : @"选择画布上的按键";
+    self.canvasStatus.text = caption ?: @"触控布局";
+    [self updateCanvasTools];
     [self.view setNeedsLayout];
 }
 
@@ -3499,6 +3544,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [self.undoStack addObject:snapshot];
     if (self.undoStack.count > 30) [self.undoStack removeObjectAtIndex:0];
     [self.redoStack removeAllObjects];
+    [self updateCanvasTools];
 }
 
 - (void)undoTapped {
@@ -3529,6 +3575,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 
 - (void)toggleGrid {
     self.grid.hidden = !self.grid.hidden;
+    [self updateCanvasTools];
 }
 
 - (void)resetLayoutTapped {
@@ -3689,8 +3736,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [super viewDidAppear:animated];
     [UIView performWithoutAnimation:^{
         CGFloat height = self.view.bounds.size.height;
-        self.previewHeight.constant = self.canvasFullscreen ? MAX(300.0, height - 100.0)
-                                                            : MAX(300.0, MIN(640.0, height * 0.58));
+        self.previewHeight.constant = self.canvasFullscreen ? MAX(150.0, self.scroll.bounds.size.height - 78.0)
+                                                            : MAX(170.0, MIN(410.0, height * 0.58));
         [self.view layoutIfNeeded];
     }];
 }
@@ -3713,7 +3760,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     for (UIView *view in self.stack.arrangedSubviews) {
         view.hidden = self.canvasFullscreen && view != self.previewCard;
     }
-    self.canvasClose.hidden = !self.canvasFullscreen;
+    NSString *symbol = self.canvasFullscreen ? @"arrow.down.right.and.arrow.up.left" : @"arrow.up.left.and.arrow.down.right";
+    [self.canvasClose setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
+    self.canvasClose.accessibilityLabel = self.canvasFullscreen ? @"退出全屏" : @"全屏编辑";
     self.scroll.scrollEnabled = !self.canvasFullscreen;
     if (self.canvasFullscreen) [self.scroll setContentOffset:CGPointZero animated:NO];
     if (self.canvasFullscreen) {
@@ -3725,10 +3774,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         self.preview.layer.borderWidth = 0.0;
         self.stackLeading.constant = 0.0;
         self.stackTrailing.constant = 0.0;
-        self.previewHeight.constant = MAX(300.0, self.view.bounds.size.height -
-            self.view.safeAreaInsets.top - self.view.safeAreaInsets.bottom - 24.0);
+        self.previewHeight.constant = MAX(150.0, self.scroll.bounds.size.height - 78.0);
     } else {
-        self.previewCard.backgroundColor = NCLRColor(0.10, 0.10, 0.10, 1.0);
+        self.previewCard.backgroundColor = NCLRSurface();
         self.previewCard.layer.cornerRadius = 16.0;
         self.previewCard.layer.borderWidth = 1.0;
         self.preview.backgroundColor = NCLRCanvas();
@@ -3736,7 +3784,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         self.preview.layer.borderWidth = 1.0;
         self.stackLeading.constant = 24.0;
         self.stackTrailing.constant = -24.0;
-        self.previewHeight.constant = MAX(300.0, MIN(640.0, self.view.bounds.size.height * 0.58));
+        self.previewHeight.constant = MAX(170.0, MIN(410.0, self.view.bounds.size.height * 0.58));
     }
     [self.view setNeedsLayout];
     if (UIAccessibilityIsReduceMotionEnabled()) {
