@@ -252,6 +252,28 @@ index a9121f7..a25b61b 100644
  wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
  
  [features]
+diff --git a/crates/horizon-client-render/src/auth.rs b/crates/horizon-client-render/src/auth.rs
+index c3600e8..3b21cb8 100644
+--- a/crates/horizon-client-render/src/auth.rs
++++ b/crates/horizon-client-render/src/auth.rs
+@@ -532,6 +532,17 @@ const MINECRAFT_PROFILE: &str = "https://api.minecraftservices.com/minecraft/pro
+ /// Single-player and integrated servers often send no `textures` property, or
+ /// one without the equipped cape; the client asks the profile endpoint once.
+ pub fn own_textures(session: &AuthSession) -> Option<crate::skins::Textures> {
++    #[cfg(target_os = "ios")]
++    if let Ok(home) = std::env::var("HORIZON_HOME")
++        && let Ok(data) = std::fs::read(Path::new(&home).join(".nclr-appearance.json"))
++        && let Ok(profile) = serde_json::from_slice::<serde_json::Value>(&data)
++        && profile.get("id").and_then(|id| id.as_str()).and_then(parse_uuid) == Some(session.uuid)
++    {
++        let textures = crate::skins::services_profile_textures(&profile);
++        if textures.skin.is_some() || textures.cape.is_some() {
++            return Some(textures);
++        }
++    }
+     let response = agent()
+         .get(MINECRAFT_PROFILE)
+         .set("Authorization", &format!("Bearer {}", session.access_token))
 diff --git a/crates/horizon-client-render/src/gfx.rs b/crates/horizon-client-render/src/gfx.rs
 index f2d3b3a..4acedae 100644
 --- a/crates/horizon-client-render/src/gfx.rs
@@ -283,30 +305,31 @@ index f2d3b3a..4acedae 100644
          _ => "graphics",
      }
 diff --git a/crates/horizon-client-render/src/settings.rs b/crates/horizon-client-render/src/settings.rs
-index 550d63c..c03f913 100644
+index 550d63c..7c07782 100644
 --- a/crates/horizon-client-render/src/settings.rs
 +++ b/crates/horizon-client-render/src/settings.rs
-@@ -409,6 +409,15 @@ impl Settings {
+@@ -409,6 +409,16 @@ impl Settings {
                  ..Self::default()
              },
          };
 +        #[cfg(target_os = "ios")]
 +        {
-+            // iOS: apply before the loading renderer opens its swapchain, so the
-+            // surface is not created with FIFO vsync; the game is uncapped and
-+            // does not use Horizon's battery pacing.
-+            settings.max_fps = 260;
-+            settings.vsync = false;
++            // Cap iOS rendering to the display target and use paced presentation.
++            settings.max_fps = match std::env::var("HORIZON_IOS_FPS").as_deref() {
++                Ok("60") => 60,
++                _ => 120,
++            };
++            settings.vsync = true;
 +            settings.horizon.battery = false;
 +        }
          // Horizon's own key bindings live in horizon-extras.txt, not in options.txt.
          let emote = settings.extras.emote_key.clone();
          settings.keys.set("key.emote", &emote);
 diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-render/src/touch.rs
-index b38a955..d9d9ad0 100644
+index b38a955..78bea52 100644
 --- a/crates/horizon-client-render/src/touch.rs
 +++ b/crates/horizon-client-render/src/touch.rs
-@@ -61,6 +61,16 @@ enum Role {
+@@ -61,11 +61,22 @@ enum Role {
      Button(Button),
  }
  
@@ -323,7 +346,13 @@ index b38a955..d9d9ad0 100644
  /// The on-screen controls' input state. The game feeds it touches with
  /// [`Self::update`] and reads [`Self::poll_state`] once a tick.
  #[derive(Default)]
-@@ -100,6 +110,7 @@ pub struct TouchControls {
+ pub struct TouchControls {
+     pub settings: Settings,
++    toggled: std::collections::BTreeSet<usize>,
+     /// The game needs the crosshair whatever the scheme.
+     pub force_crosshair: bool,
+     /// The held item is aimed along the crosshair ([`projectile_crosshair`]).
+@@ -100,6 +111,7 @@ pub struct TouchControls {
      /// A button was pressed; the game plays the click and clears it.
      pub clicked: bool,
      pub chat_requested: bool,
@@ -331,7 +360,7 @@ index b38a955..d9d9ad0 100644
      pub settings_requested: bool,
      pub debug_requested: bool,
      pub perspective_requested: bool,
-@@ -174,7 +185,7 @@ impl TouchControls {
+@@ -174,7 +186,7 @@ impl TouchControls {
          Control::ALL.into_iter().any(|c| {
              Self::auxiliary_control(c)
                  && self.visible(c)
@@ -340,7 +369,7 @@ index b38a955..d9d9ad0 100644
          })
      }
  
-@@ -191,7 +202,7 @@ impl TouchControls {
+@@ -191,7 +203,7 @@ impl TouchControls {
                      && !self.moving()
                      && layout::contains(area, point);
              }
@@ -349,7 +378,52 @@ index b38a955..d9d9ad0 100644
          })
      }
  
-@@ -454,6 +465,10 @@ impl TouchControls {
+@@ -324,10 +336,10 @@ impl TouchControls {
+     pub fn shield_held(&self) -> bool {
+         self.settings.shield_button
+             && self.shield_available
+-            && self
++            && (self.toggled.contains(&(Control::Shield as usize)) || self
+                 .fingers
+                 .values()
+-                .any(|(r, _)| matches!(r, Role::Shield))
++                .any(|(r, _)| matches!(r, Role::Shield)))
+     }
+ 
+     /// Where the touch marker goes in the tap schemes: under a look finger, or
+@@ -420,8 +432,30 @@ impl TouchControls {
+         }
+     }
+ 
++    pub fn cancel(&mut self, id: u64) {
++        self.fingers.remove(&id);
++        self.pending = PadState::default();
++        self.pending_tap = None;
++        self.tap_aim = None;
++        self.holding = false;
++        self.holding_use = false;
++    }
++
+     fn land(&mut self, id: u64, point: [f32; 2]) {
+-        let role = match self.control_at(point) {
++        let control = self.control_at(point);
++        let mut toggle = false;
++        if let Some(c) = control
++            && c != Control::Move
++            && self.settings.toggle_buttons.contains(&(c as usize))
++        {
++            if self.toggled.remove(&(c as usize)) {
++                self.fingers.insert(id, (Role::Ignore, point));
++                return;
++            }
++            self.toggled.insert(c as usize);
++            toggle = true;
++        }
++        let role = match control {
+             Some(Control::Move) if !self.moving() => Role::Move(if self.dynamic_joystick() {
+                 point
+             } else {
+@@ -454,8 +488,13 @@ impl TouchControls {
                  self.perspective_requested = true;
                  Role::Ignore
              }
@@ -358,9 +432,30 @@ index b38a955..d9d9ad0 100644
 +                Role::Ignore
 +            }
              Some(Control::Sneak)
-                 if self.settings.mode == Mode::Dpad
+-                if self.settings.mode == Mode::Dpad
++                if !toggle
++                    && self.settings.mode == Mode::Dpad
                      && !self.vertical_movement
-@@ -509,6 +524,7 @@ impl TouchControls {
+                     && !self.swimming
+                     && !self.mounted =>
+@@ -486,7 +525,7 @@ impl TouchControls {
+                 committed: false,
+             },
+         };
+-        self.fingers.insert(id, (role, point));
++        self.fingers.insert(id, (if toggle { Role::Ignore } else { role }, point));
+         // Latch the press so a tap shorter than a tick still reaches the game.
+         match role {
+             Role::Button(Button::LeftTrigger) => self.pending.triggers[0] = 1.0,
+@@ -499,6 +538,7 @@ impl TouchControls {
+     /// Lets go of everything: fingers, latched presses, requests.
+     pub fn clear(&mut self) {
+         self.fingers.clear();
++        self.toggled.clear();
+         self.last_sneak_tap = None;
+         self.sprint_latched = false;
+         self.pending = PadState::default();
+@@ -509,6 +549,7 @@ impl TouchControls {
          self.holding_use = false;
          self.holding = false;
          self.chat_requested = false;
@@ -368,7 +463,7 @@ index b38a955..d9d9ad0 100644
          self.settings_requested = false;
          self.debug_requested = false;
          self.perspective_requested = false;
-@@ -517,6 +533,11 @@ impl TouchControls {
+@@ -517,6 +558,11 @@ impl TouchControls {
      /// A short world tap since the last call, and whether it uses the item.
      /// A tap never holds attack or use into the next tick: the game acts once
      /// at [`Self::aim`].
@@ -380,7 +475,25 @@ index b38a955..d9d9ad0 100644
      pub fn take_tap(&mut self) -> Option<bool> {
          self.pending_tap.take()
      }
-@@ -595,21 +616,37 @@ impl TouchControls {
+@@ -588,6 +634,17 @@ impl TouchControls {
+     /// The controller state the fingers hold right now.
+     pub fn state(&self) -> PadState {
+         let mut state = PadState::default();
++        for control in Control::ALL {
++            if !self.toggled.contains(&(control as usize)) || !self.visible(control) {
++                continue;
++            }
++            match Self::button(control) {
++                Some(Button::LeftTrigger) => state.triggers[0] = 1.0,
++                Some(Button::RightTrigger) => state.triggers[1] = 1.0,
++                Some(button) => state.set(button, true),
++                None => {}
++            }
++        }
+         if self.settings.sprint_toggle && self.settings.sprint_button && self.sprint_latched {
+             state.set(Button::LeftStick, true);
+         }
+@@ -595,21 +652,37 @@ impl TouchControls {
              match role {
                  Role::Move(anchor) => {
                      let radius = self.placement(Control::Move).size / 2.0;
@@ -613,7 +726,7 @@ index 9e8d8e4..5bef143 100644
  fn mining_radius(radius: f32, progress: f32) -> f32 {
      if progress.is_finite() {
 diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
-index e57f2d8..480c7ee 100644
+index e57f2d8..e3e3d9f 100644
 --- a/crates/horizon-client-render/src/touch/layout.rs
 +++ b/crates/horizon-client-render/src/touch/layout.rs
 @@ -58,13 +58,14 @@ pub enum Control {
@@ -672,7 +785,7 @@ index e57f2d8..480c7ee 100644
          }
      }
  }
-@@ -170,6 +197,12 @@ pub struct Settings {
+@@ -170,6 +197,15 @@ pub struct Settings {
      pub layouts: [[Placement; CONTROLS]; 3],
      /// Camera turn speed for look drags; scales both axes.
      pub sensitivity: f32,
@@ -682,10 +795,13 @@ index e57f2d8..480c7ee 100644
 +    pub button_style: u8,
 +    /// Use short symbol labels instead of key names.
 +    pub icon_labels: bool,
++    /// Touch buttons that keep their pressed state after lifting.
++    #[serde(default)]
++    pub toggle_buttons: Vec<usize>,
      /// Extra scale on the yaw (left and right) turn.
      pub sensitivity_horizontal: f32,
      /// Extra scale on the pitch (up and down) turn.
-@@ -214,6 +247,7 @@ impl Default for Settings {
+@@ -214,6 +250,7 @@ impl Default for Settings {
              Placement::new(0.58, 0.055, 0.075), // Perspective
              Placement::new(0.80, 0.96, 0.075),  // Offhand
              Placement::new(0.92, 0.36, 0.12),   // Shield
@@ -693,17 +809,18 @@ index e57f2d8..480c7ee 100644
          ];
          let mut layouts = [row; 3];
          // The D-pad sits where the joystick does; sneak becomes its centre.
-@@ -231,6 +265,9 @@ impl Default for Settings {
+@@ -231,6 +268,10 @@ impl Default for Settings {
              button_visibility: [FOLLOW_SCHEME; CONTROLS],
              layouts,
              sensitivity: 1.0,
 +            joystick_deadzone: 0.16,
 +            button_style: 0,
 +            icon_labels: false,
++            toggle_buttons: Vec::new(),
              sensitivity_horizontal: 1.0,
              sensitivity_vertical: 1.0,
              sprint_toggle: false,
-@@ -264,6 +301,98 @@ impl Settings {
+@@ -264,6 +305,106 @@ impl Settings {
          std::fs::rename(temp, path)
      }
  
@@ -762,6 +879,14 @@ index e57f2d8..480c7ee 100644
 +        if let Some(icons) = json.get("iconLabels").and_then(|v| v.as_bool()) {
 +            self.icon_labels = icons;
 +        }
++        if let Some(modes) = json.get("triggerModes").and_then(|v| v.as_object()) {
++            self.sprint_toggle = false;
++            self.toggle_buttons = modes.iter().filter_map(|(id, mode)| {
++                let control = Control::from_launcher_id(id)?;
++                (control != Control::Move && mode.as_str() == Some("toggle"))
++                    .then_some(control as usize)
++            }).collect();
++        }
 +        let Some(layout) = json.get("layout").and_then(|v| v.as_object()) else {
 +            return;
 +        };
@@ -802,7 +927,7 @@ index e57f2d8..480c7ee 100644
      pub fn sanitize(&mut self) {
          // Only the D-pad has a split variant (see `Mode::SCHEMES`).
          if self.mode != Mode::Dpad {
-@@ -284,7 +413,9 @@ impl Settings {
+@@ -284,7 +425,9 @@ impl Settings {
          ] {
              *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
          }
@@ -839,7 +964,7 @@ index 7b7a557..8b097d7 100644
  # DirectX 12 driver (`graphicsApi`, graphics.rs).
  wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 diff --git a/crates/horizon-client/src/entry.rs b/crates/horizon-client/src/entry.rs
-index 78cfdee..44bd551 100644
+index 78cfdee..6efe239 100644
 --- a/crates/horizon-client/src/entry.rs
 +++ b/crates/horizon-client/src/entry.rs
 @@ -3,6 +3,7 @@
@@ -1039,10 +1164,10 @@ index 026382e..c04f78b 100644
              self.pad.in_use = true;
              self.pad.keyboard_took_over = false;
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..0abc477 100644
+index 16664ff..880b3bc 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
-@@ -55,6 +55,113 @@ impl Game<'_> {
+@@ -55,6 +55,107 @@ impl Game<'_> {
          let zoom = self.zoom_turn_scale();
          self.turn_player(x * zoom, y * zoom);
      }
@@ -1070,18 +1195,12 @@ index 16664ff..0abc477 100644
 +            (touch.location.x as f32 / width as f32).clamp(0.0, 1.0),
 +            (touch.location.y as f32 / height as f32).clamp(0.0, 1.0),
 +        ];
-+        let started = touch.phase == winit::event::TouchPhase::Started;
-+        if started {
-+            log::info!(
-+                "Horizon: iOS touch point {:?} surface {width}x{height} control {:?}",
-+                point,
-+                self.touch.control_at(point)
-+            );
++        if touch.phase == winit::event::TouchPhase::Cancelled {
++            self.touch.cancel(touch.id as u64);
++            return;
 +        }
-+        let ended = matches!(
-+            touch.phase,
-+            winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled
-+        );
++        let started = touch.phase == winit::event::TouchPhase::Started;
++        let ended = touch.phase == winit::event::TouchPhase::Ended;
 +        // Tapping the hotbar picks its slot. Ask the HUD for its real GUI
 +        // geometry: the bar is 182x22 GUI pixels, centred at the bottom, so a
 +        // normalized strip is off by the GUI scale and the side margins.
@@ -1344,24 +1463,39 @@ index 2511aa2..05af76b 100644
              App::Loading(loading) => loading.window_event(event_loop, id, event),
              App::Ready(game) => game.window_event(event_loop, id, event),
 diff --git a/crates/horizon-client/src/game/runtime/loading_window.rs b/crates/horizon-client/src/game/runtime/loading_window.rs
-index 041b72b..7cff1bf 100644
+index 041b72b..04f9cf6 100644
 --- a/crates/horizon-client/src/game/runtime/loading_window.rs
 +++ b/crates/horizon-client/src/game/runtime/loading_window.rs
-@@ -297,6 +297,15 @@ pub(super) fn start_game<'a>(
+@@ -297,6 +297,16 @@ pub(super) fn start_game<'a>(
          Some(settings) => settings,
          None => Settings::load(&Game::options_path()),
      };
 +    #[cfg(target_os = "ios")]
 +    {
-+        // iOS has no window to minimize and the app asks for display-rate
-+        // rendering: 260 is Horizon's "unlimited" and battery pacing would
-+        // otherwise clamp the world to 60 FPS.
-+        settings.max_fps = 260;
-+        settings.vsync = false;
++        // Cap iOS rendering to the display target and use paced presentation.
++        settings.max_fps = match std::env::var("HORIZON_IOS_FPS").as_deref() {
++                Ok("60") => 60,
++                _ => 120,
++            };
++        settings.vsync = true;
 +        settings.horizon.battery = false;
 +    }
      if let Some(d) = options.distance_override {
          settings.render_distance = d;
+     }
+@@ -327,8 +337,11 @@ pub(super) fn start_game<'a>(
+     if game.options.benchmark.is_some() {
+         // The same conditions on every machine: no VSync, no frame cap, no
+         // pause or idle limit without focus. In memory only, never saved.
+-        game.settings.vsync = false;
+-        game.settings.max_fps = 260;
++        game.settings.vsync = true;
++        game.settings.max_fps = match std::env::var("HORIZON_IOS_FPS").as_deref() {
++                Ok("60") => 60,
++                _ => 120,
++            };
+         game.settings.inactivity_fps_limit = "minimized".into();
+         game.options.no_pause = true;
      }
 diff --git a/crates/horizon-client/src/game/runtime/resource_load.rs b/crates/horizon-client/src/game/runtime/resource_load.rs
 index f644b7b..3ed3d33 100644
@@ -1440,25 +1574,14 @@ index ee73abf..3704fed 100644
      pub(super) fn facts(&self) -> &BlockFacts {
          &self.core.facts
 diff --git a/crates/horizon-client/src/game/runtime/window_handler.rs b/crates/horizon-client/src/game/runtime/window_handler.rs
-index 6a86a75..051d735 100644
+index 6a86a75..5d34144 100644
 --- a/crates/horizon-client/src/game/runtime/window_handler.rs
 +++ b/crates/horizon-client/src/game/runtime/window_handler.rs
-@@ -2,6 +2,10 @@
- //! and the idle step (`about_to_wait`).
- use super::*;
- 
-+/// A heartbeat for the iOS port's logs: a frozen frame leaves the last
-+/// `idle ...` line without its `drawn ...` partner.
-+static FRAME_HEARTBEAT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-+
- impl Game<'_> {
-     /// A run that a person's stray key, click or mouse move would spoil: a screenshot sequence, a
-     /// `HORIZON_TICK_SCRIPT` scenario or a `record-replay`. While one runs, the keyboard, mouse
-@@ -315,6 +319,23 @@ impl Game<'_> {
+@@ -315,6 +315,26 @@ impl Game<'_> {
          if self.pending_save.is_some() {
              return;
          }
-+        if self.screen == Screen::Playing {
++        if self.screen == Screen::Playing && self.focused {
 +            let touch = self.touch.poll_state();
 +            // A finger that lifts after mining must stop the attack even if the
 +            // pad's trigger release is lost.
@@ -1473,26 +1596,17 @@ index 6a86a75..051d735 100644
 +            // touch pad before the menu's mouse/keyboard input, or the last
 +            // button stays held and the next screen looks like pad mode.
 +            self.touch.clear();
++            if std::mem::take(&mut self.touch_attack_down) {
++                self.stop_mining();
++            }
 +            self.pad.inject_state(Default::default());
 +        }
          horizon_client::spans::time("pads", || self.poll_pads(event_loop));
          self.settle_after_run(event_loop);
          self.pause_if_inactive();
-@@ -325,10 +346,25 @@ impl Game<'_> {
-             event_loop.exit();
+@@ -326,9 +346,13 @@ impl Game<'_> {
              return;
          }
-+        let heartbeat = FRAME_HEARTBEAT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-+        if heartbeat % 120 == 0 {
-+            log::info!(
-+                "Horizon: iOS idle {heartbeat} screen {:?} touch {:?} max_fps={} vsync={} battery={}",
-+                self.screen,
-+                self.touch.state().left,
-+                self.settings.max_fps,
-+                self.settings.vsync,
-+                self.settings.horizon.battery
-+            );
-+        }
          if let Some(w) = &self.window {
 -            if self.options.offscreen {
 +            if self.options.offscreen || cfg!(target_os = "ios") {
@@ -1505,14 +1619,11 @@ index 6a86a75..051d735 100644
                  let id = w.id();
                  self.handle_window_event(
                      event_loop,
-@@ -351,11 +387,22 @@ impl Game<'_> {
+@@ -351,11 +375,21 @@ impl Game<'_> {
          }
          // Consume the last frame's result: a hidden compositor may stop sending
          // redraws altogether, leaving a successful result stale indefinitely.
 -        event_loop.set_control_flow(event_loop::redraw_flow(
-+        if heartbeat % 120 == 0 {
-+            log::info!("Horizon: iOS drawn {heartbeat} ok={}", self.frame_drawn);
-+        }
 +        let flow = event_loop::redraw_flow(
              &mut self.frame_drawn,
              self.options.offscreen,
@@ -1523,14 +1634,16 @@ index 6a86a75..051d735 100644
 +            // The frame is drawn directly in `AboutToWait`. Poll instead of
 +            // waiting 16 ms: iOS presents at the display's refresh rate, and
 +            // the old 60 Hz wait capped 120 Hz ProMotion devices too.
-+            event_loop.set_control_flow(ControlFlow::Poll);
++            event_loop.set_control_flow(if self.focused { ControlFlow::Poll } else {
++                ControlFlow::WaitUntil(Instant::now() + std::time::Duration::from_millis(33))
++            });
 +        } else {
 +            event_loop.set_control_flow(flow);
 +        }
      }
  }
  
-@@ -417,6 +464,7 @@ impl ApplicationHandler for Game<'_> {
+@@ -417,6 +451,7 @@ impl ApplicationHandler for Game<'_> {
          self.resize_state = Some(self.resize_state_of(window.inner_size()));
          self.window = Some(window);
          self.ime_allowed = false;
@@ -1538,7 +1651,7 @@ index 6a86a75..051d735 100644
          self.ime_area = None;
          self.apply_settings();
          self.previous = Instant::now();
-@@ -437,14 +485,13 @@ impl ApplicationHandler for Game<'_> {
+@@ -437,14 +472,13 @@ impl ApplicationHandler for Game<'_> {
          };
          self.handle_window_event(event_loop, id, event, input_trace::InputOrigin::User);
          if let Some((event, modifiers)) = key {

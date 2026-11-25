@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <SceneKit/SceneKit.h>
 #import <objc/runtime.h>
 #import <Security/Security.h>
 #import <CommonCrypto/CommonDigest.h>
@@ -285,31 +286,6 @@ static NSString *NCLRModIdentifier(NSString *path) {
 }
 
 
-static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth);
-
-@interface NCLRFramePump : NSObject
-@end
-
-@implementation NCLRFramePump {
-    NSInteger _ticks;
-}
-
-- (void)fire:(CADisplayLink *)link {
-    _ticks++;
-    if (_ticks % 30 != 0) return;
-    NSMutableString *log = [NSMutableString string];
-    NSArray *windows = nil;
-    @try { windows = [UIApplication.sharedApplication.windows copy]; } @catch (NSException *e) { (void)e; }
-    for (UIWindow *window in windows) NCLRBoostLayerTree(window.layer, log, 0);
-    [log appendFormat:@"displayLink preferred=%ld duration=%.6f timestamp=%.3f screenMax=%ld lowPower=%d\n",
-        (long)link.preferredFramesPerSecond, link.duration, link.timestamp,
-        (long)UIScreen.mainScreen.maximumFramesPerSecond,
-        (int)NSProcessInfo.processInfo.isLowPowerModeEnabled];
-    NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"nclr-layer.txt"];
-    [log writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-}
-@end
-
 static NSString *NCLRModSwitchesPath(void) {
     return [NCLRDocuments() stringByAppendingPathComponent:@"horizon-mods.txt"];
 }
@@ -361,6 +337,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 @interface NCLRKeymap : NSObject
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *bindings;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *positions;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *triggerModes;
 @property (nonatomic, assign) CGFloat buttonSize;
 @property (nonatomic, assign) CGFloat opacity;
 @property (nonatomic, copy) NSString *touchMode;
@@ -487,6 +464,9 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     NSNumber *sensitivity = json[@"sensitivity"];
     if ([sensitivity isKindOfClass:[NSNumber class]]) {
         self.sensitivity = MAX(0.3, MIN(2.5, sensitivity.doubleValue));
+    }
+    if ([json[@"triggerModes"] isKindOfClass:NSDictionary.class]) {
+        self.triggerModes = [json[@"triggerModes"] mutableCopy];
     }
     NSNumber *deadzone = json[@"joystickDeadzone"];
     if ([deadzone isKindOfClass:[NSNumber class]]) {
@@ -637,6 +617,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"hidden" : self.hiddenKeys.allObjects ?: @[],
         @"bindings" : self.bindings ?: @{},
         @"layout" : self.positions ?: @{},
+        @"triggerModes" : self.triggerModes ?: @{},
     };
     NSData *data = [NSJSONSerialization dataWithJSONObject:json
                                                    options:NSJSONWritingPrettyPrinted
@@ -887,6 +868,57 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 
 #pragma mark - Auth
 
+static NSString *NCLRTextureCache(NSString *uuid, NSString *filename) {
+    if (uuid.length != 32 ||
+        [uuid rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:
+            @"0123456789abcdefABCDEF"] invertedSet]].location != NSNotFound) return nil;
+    NSString *directory = NSTemporaryDirectory();
+    return [directory stringByAppendingPathComponent:[NSString stringWithFormat:@"nclr-%@-%@", uuid, filename]];
+}
+
+static NSDictionary *NCLRReadAppearance(NSString *uuid) {
+    if (uuid.length == 0) return nil;
+    NSData *data = [NSData dataWithContentsOfFile:[NCLRDocuments() stringByAppendingPathComponent:@".nclr-appearance.json"]];
+    id profile = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    return [profile isKindOfClass:NSDictionary.class] && [profile[@"id"] isEqualToString:uuid] ? profile : nil;
+}
+
+static void NCLRSaveAppearance(NSDictionary *profile) {
+    NSDictionary *appearance = @{
+        @"id": profile[@"id"], @"skins": profile[@"skins"] ?: @[], @"capes": profile[@"capes"] ?: @[]
+    };
+    NSData *data = [NSJSONSerialization dataWithJSONObject:appearance options:0 error:nil];
+    [data writeToFile:[NCLRDocuments() stringByAppendingPathComponent:@".nclr-appearance.json"] atomically:YES];
+}
+
+static NSDictionary *NCLRActiveTexture(NSDictionary *profile, NSString *key) {
+    id values = profile[key];
+    if (![values isKindOfClass:NSArray.class]) return nil;
+    for (id entry in values) {
+        if ([entry isKindOfClass:NSDictionary.class] && [entry[@"state"] isEqual:@"ACTIVE"]) return entry;
+    }
+    return nil;
+}
+
+static void NCLRFetchTexture(NSDictionary *entry, void (^completion)(UIImage *)) {
+    NSString *source = NCLRString(entry[@"url"]);
+    NSURLComponents *parts = source ? [NSURLComponents componentsWithString:source] : nil;
+    if (![parts.host.lowercaseString isEqualToString:@"textures.minecraft.net"] ||
+        ![parts.path hasPrefix:@"/texture/"] || parts.user || parts.password || parts.port) {
+        completion(nil);
+        return;
+    }
+    parts.scheme = @"https";
+    NSURLRequest *request = [NSURLRequest requestWithURL:parts.URL
+        cachePolicy:NSURLRequestReturnCacheDataElseLoad timeoutInterval:12];
+    [[NSURLSession.sharedSession dataTaskWithRequest:request
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        UIImage *texture = !error && [(NSHTTPURLResponse *)response statusCode] == 200 && data.length < 1024 * 1024
+            ? [UIImage imageWithData:data] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(texture); });
+    }] resume];
+}
+
 typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *error);
 
 @interface NCLRAuth : NSObject <ASWebAuthenticationPresentationContextProviding>
@@ -899,6 +931,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                completion:(NCLRAuthCompletion)completion;
 - (void)logout;
 - (void)fetchProfileWithToken:(NSString *)token completion:(NCLRAuthCompletion)completion;
+- (void)refreshAppearance:(void (^)(NSDictionary *profile))completion;
 @property (nonatomic, copy) NSString *token;
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, assign) BOOL developerPremium;
@@ -939,6 +972,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:kNCLRAccountUUIDKey];
     NCLRKeychainWrite(nil);
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:kNCLRAccountNameKey];
+    [NSFileManager.defaultManager removeItemAtPath:
+        [NCLRDocuments() stringByAppendingPathComponent:@".nclr-appearance.json"] error:nil];
     unsetenv("HORIZON_SESSION_FILE");
     [NSFileManager.defaultManager removeItemAtPath:
         [NCLRDocuments() stringByAppendingPathComponent:@".nclr-session.json"] error:nil];
@@ -1254,6 +1289,27 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     }];
 }
 
+- (void)refreshAppearance:(void (^)(NSDictionary *))completion {
+    NSString *uuid = self.uuid;
+    NSString *token = self.token;
+    if (!uuid.length || !token.length || NCLRTokenExpired(token)) return;
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:
+        [NSURL URLWithString:@"https://api.minecraftservices.com/minecraft/profile"]];
+    request.timeoutInterval = 10.0;
+    [request setValue:[@"Bearer " stringByAppendingString:token] forHTTPHeaderField:@"Authorization"];
+    [[NSURLSession.sharedSession dataTaskWithRequest:request
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        id profile = !error && [(NSHTTPURLResponse *)response statusCode] == 200 && data
+            ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (![self.uuid isEqualToString:uuid] || ![self.token isEqualToString:token]) return;
+            if (![profile isKindOfClass:NSDictionary.class] || ![profile[@"id"] isEqualToString:uuid]) return;
+            NCLRSaveAppearance(profile);
+            completion(profile);
+        });
+    }] resume];
+}
+
 - (void)fetchProfileWithToken:(NSString *)token completion:(NCLRAuthCompletion)completion {
     __weak typeof(self) weakSelf = self;
     NSMutableURLRequest *request = [NSMutableURLRequest
@@ -1274,6 +1330,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                     completion(nil, nil, error.localizedDescription ?: @"无法读取 Minecraft 正版玩家资料");
                     return;
                 }
+                NCLRSaveAppearance(profile);
                 auth.token = token;
                 auth.name = name;
                 auth.uuid = uuid;
@@ -1459,6 +1516,133 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
 #pragma mark - Pages
 
+// A small, unlit voxel scene. Each face samples the account's original texture.
+@interface NCLRPlayerStage : SCNView
+- (void)showSkin:(UIImage *)skin cape:(UIImage *)cape slim:(BOOL)slim;
+@end
+
+static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, NSInteger v,
+                                                     NSInteger w, NSInteger h, NSInteger d,
+                                                     CGFloat atlasHeight, UIColor *fallback) {
+    CGRect faces[] = {
+        CGRectMake(u + d, v + d, w, h), CGRectMake(u + d + w, v + d, d, h),
+        CGRectMake(u + 2*d + w, v + d, w, h), CGRectMake(u, v + d, d, h),
+        CGRectMake(u + d, v, w, d), CGRectMake(u + d + w, v, w, d),
+    };
+    NSMutableArray *materials = [NSMutableArray arrayWithCapacity:6];
+    for (NSUInteger i = 0; i < 6; i++) {
+        SCNMaterial *material = [SCNMaterial material];
+        material.lightingModelName = SCNLightingModelConstant;
+        material.diffuse.magnificationFilter = SCNFilterModeNearest;
+        material.diffuse.minificationFilter = SCNFilterModeNearest;
+        material.diffuse.contents = fallback;
+        CGImageRef image = atlas.CGImage;
+        if (image) {
+            CGFloat sx = CGImageGetWidth(image) / 64.0;
+            CGFloat sy = CGImageGetHeight(image) / atlasHeight;
+            CGRect face = faces[i];
+            CGRect pixels = CGRectMake(face.origin.x * sx, face.origin.y * sy, face.size.width * sx, face.size.height * sy);
+            CGImageRef crop = CGImageCreateWithImageInRect(image, pixels);
+            if (crop) {
+                material.diffuse.contents = [UIImage imageWithCGImage:crop];
+                CGImageRelease(crop);
+            }
+        }
+        [materials addObject:material];
+    }
+    return materials;
+}
+
+@implementation NCLRPlayerStage {
+    SCNNode *_model;
+    CGFloat _yaw;
+}
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame options:nil];
+    if (!self) return nil;
+    self.scene = [SCNScene scene];
+    self.backgroundColor = UIColor.clearColor;
+    self.opaque = NO;
+    self.antialiasingMode = SCNAntialiasingModeMultisampling2X;
+    self.preferredFramesPerSecond = 30;
+    self.accessibilityLabel = @"玩家模型，可拖动旋转";
+    self.isAccessibilityElement = YES;
+    SCNNode *camera = [SCNNode node];
+    camera.camera = [SCNCamera camera];
+    camera.camera.usesOrthographicProjection = YES;
+    camera.camera.orthographicScale = 21;
+    camera.position = SCNVector3Make(0, 6, 50);
+    camera.eulerAngles = SCNVector3Make(-0.12, 0, 0);
+    [self.scene.rootNode addChildNode:camera];
+    self.pointOfView = camera;
+    _yaw = -0.55;
+    [self addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(rotatePlayer:)]];
+    [self showSkin:nil cape:nil slim:NO];
+    return self;
+}
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    self.playing = self.window != nil && !UIAccessibilityIsReduceMotionEnabled();
+}
+
+- (void)rotatePlayer:(UIPanGestureRecognizer *)gesture {
+    _yaw += [gesture translationInView:self].x * 0.018;
+    _model.eulerAngles = SCNVector3Make(0, _yaw, 0);
+    [gesture setTranslation:CGPointZero inView:self];
+}
+
+- (SCNNode *)boxWithAtlas:(UIImage *)atlas uv:(CGPoint)uv size:(SCNVector3)size
+                 position:(SCNVector3)position atlasHeight:(CGFloat)atlasHeight color:(UIColor *)color {
+    SCNBox *box = [SCNBox boxWithWidth:size.x height:size.y length:size.z chamferRadius:0];
+    box.materials = NCLRPlayerMaterials(atlas, uv.x, uv.y, size.x, size.y, size.z, atlasHeight, color);
+    SCNNode *part = [SCNNode nodeWithGeometry:box];
+    part.position = position;
+    [_model addChildNode:part];
+    return part;
+}
+
+- (void)showSkin:(UIImage *)skin cape:(UIImage *)cape slim:(BOOL)slim {
+    [_model removeFromParentNode];
+    _model = [SCNNode node];
+    [self.scene.rootNode addChildNode:_model];
+    _model.eulerAngles = SCNVector3Make(0, _yaw, 0);
+    BOOL legacy = skin && CGImageGetWidth(skin.CGImage) == 2 * CGImageGetHeight(skin.CGImage);
+    CGFloat height = legacy ? 32 : 64;
+    CGFloat arm = slim ? 3 : 4;
+    UIColor *face = [UIColor colorWithRed:0.80 green:0.58 blue:0.44 alpha:1];
+    UIColor *shirt = NCLRAccent();
+    UIColor *trousers = [UIColor colorWithRed:0.19 green:0.28 blue:0.40 alpha:1];
+    [self boxWithAtlas:skin uv:CGPointMake(0,0) size:SCNVector3Make(8,8,8)
+              position:SCNVector3Make(0,12,0) atlasHeight:height color:face];
+    [self boxWithAtlas:skin uv:CGPointMake(16,16) size:SCNVector3Make(8,12,4)
+              position:SCNVector3Make(0,2,0) atlasHeight:height color:shirt];
+    [self boxWithAtlas:skin uv:CGPointMake(40,16) size:SCNVector3Make(arm,12,4)
+              position:SCNVector3Make(-4-arm/2,2,0) atlasHeight:height color:shirt];
+    [self boxWithAtlas:skin uv:legacy ? CGPointMake(40,16) : CGPointMake(32,48) size:SCNVector3Make(arm,12,4)
+              position:SCNVector3Make(4+arm/2,2,0) atlasHeight:height color:shirt];
+    [self boxWithAtlas:skin uv:CGPointMake(0,16) size:SCNVector3Make(4,12,4)
+              position:SCNVector3Make(-2,-10,0) atlasHeight:height color:trousers];
+    [self boxWithAtlas:skin uv:legacy ? CGPointMake(0,16) : CGPointMake(16,48) size:SCNVector3Make(4,12,4)
+              position:SCNVector3Make(2,-10,0) atlasHeight:height color:trousers];
+    if (skin) {
+        SCNNode *hat = [self boxWithAtlas:skin uv:CGPointMake(32,0) size:SCNVector3Make(8,8,8)
+              position:SCNVector3Make(0,12,0) atlasHeight:height color:UIColor.clearColor];
+        hat.scale = SCNVector3Make(1.10,1.10,1.10);
+    }
+    if (cape) {
+        SCNNode *cloth = [self boxWithAtlas:cape uv:CGPointZero size:SCNVector3Make(10,16,1)
+              position:SCNVector3Make(0,-0.4,-3.0) atlasHeight:32 color:NCLRAccent()];
+        cloth.eulerAngles = SCNVector3Make(0.14,0,0);
+    }
+    if (!UIAccessibilityIsReduceMotionEnabled()) {
+        SCNAction *up = [SCNAction moveByX:0 y:0.45 z:0 duration:1.6];
+        up.timingMode = SCNActionTimingModeEaseInEaseOut;
+        [_model runAction:[SCNAction repeatActionForever:[SCNAction sequence:@[up, up.reversedAction]]]];
+    }
+}
+@end
+
 @interface NCLRHomeController : NCLRPageController
 @property (nonatomic, strong) UILabel *prepareStatusLabel;
 @property (nonatomic, strong) UIButton *launchButton;
@@ -1468,19 +1652,39 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @end
 
 @implementation NCLRHomeController
+- (void)loadStage:(NCLRPlayerStage *)stage appearance:(NSDictionary *)profile {
+    NSDictionary *skin = NCLRActiveTexture(profile, @"skins");
+    NSDictionary *cape = NCLRActiveTexture(profile, @"capes");
+    BOOL slim = [NCLRString(skin[@"variant"]).lowercaseString isEqualToString:@"slim"];
+    __block UIImage *skinImage = nil;
+    __block UIImage *capeImage = nil;
+    dispatch_group_t textures = dispatch_group_create();
+    dispatch_group_enter(textures);
+    NCLRFetchTexture(skin, ^(UIImage *image) { skinImage = image; dispatch_group_leave(textures); });
+    dispatch_group_enter(textures);
+    NCLRFetchTexture(cape, ^(UIImage *image) { capeImage = image; dispatch_group_leave(textures); });
+    dispatch_group_notify(textures, dispatch_get_main_queue(), ^{
+        if (![NCLRAuth.shared.uuid isEqualToString:profile[@"id"]]) return;
+        NSString *uuid = profile[@"id"];
+        NSString *skinPath = NCLRTextureCache(uuid, @"skin.png");
+        NSString *capePath = NCLRTextureCache(uuid, @"cape.png");
+        if (skinPath && skinImage) [UIImagePNGRepresentation(skinImage) writeToFile:skinPath atomically:YES];
+        if (capePath && capeImage) [UIImagePNGRepresentation(capeImage) writeToFile:capePath atomically:YES];
+        if (capePath && !cape) [NSFileManager.defaultManager removeItemAtPath:capePath error:nil];
+        [stage showSkin:skinImage cape:capeImage slim:slim];
+    });
+}
+
 - (void)viewDidLoad {
     [super viewDidLoad];
     [self setupPage];
     NCLRStore *store = NCLRStore.shared;
     NCLRVersion *selected = store.selected;
-    [self.stack addArrangedSubview:[self headerWithTitle:@"主页"
-                                                subtitle:@"Minecraft: Java Edition · NCLR"
-                                             actionTitle:nil action:nil]];
 
     UIView *hero = [self card];
     hero.backgroundColor = NCLRColor(0.055, 0.055, 0.055, 1.0);
-    hero.layer.borderColor = NCLRColor(1.0, 1.0, 1.0, 0.20).CGColor;
-    UILabel *heroEyebrow = [self eyebrow:@"当前游戏"];
+    hero.layer.borderColor = NCLRBorder().CGColor;
+    UILabel *heroEyebrow = [self eyebrow:@"NCLR · 游戏大厅"];
     heroEyebrow.textColor = NCLRAccent();
     NSString *heroTitleText = selected.name ?: @"Minecraft 26.3";
     UILabel *heroTitle = [self label:heroTitleText
@@ -1511,13 +1715,61 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     heroStack.axis = UILayoutConstraintAxisVertical;
     heroStack.spacing = 8.0;
     heroStack.translatesAutoresizingMaskIntoConstraints = NO;
+    UIView *stagePanel = [UIView new];
+    stagePanel.translatesAutoresizingMaskIntoConstraints = NO;
+    stagePanel.backgroundColor = NCLRCanvas();
+    stagePanel.layer.cornerRadius = 16;
+    stagePanel.clipsToBounds = YES;
+    UIImageSymbolConfiguration *symbolStyle = [UIImageSymbolConfiguration configurationWithPointSize:108
+                                                                                          weight:UIImageSymbolWeightUltraLight];
+    UIImageView *orbit = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"circle.dotted"
+                                                                   withConfiguration:symbolStyle]];
+    orbit.translatesAutoresizingMaskIntoConstraints = NO;
+    orbit.tintColor = [NCLRAccent() colorWithAlphaComponent:0.26];
+    orbit.contentMode = UIViewContentModeScaleAspectFit;
+    [stagePanel addSubview:orbit];
+    NCLRPlayerStage *stage = [[NCLRPlayerStage alloc] initWithFrame:CGRectZero];
+    stage.translatesAutoresizingMaskIntoConstraints = NO;
+    [stagePanel addSubview:stage];
+    NCLRAuth *auth = NCLRAuth.shared;
+    UILabel *player = [self label:auth.name ?: @"访客" size:13 weight:UIFontWeightSemibold
+                             color:NCLRColor(0.94,0.94,0.94,1)];
+    player.textAlignment = NSTextAlignmentCenter;
+    [stagePanel addSubview:player];
+    [hero addSubview:stagePanel];
     [hero addSubview:heroStack];
     [NSLayoutConstraint activateConstraints:@[
-        [heroStack.leadingAnchor constraintEqualToAnchor:hero.leadingAnchor constant:20.0],
-        [heroStack.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor constant:-20.0],
-        [heroStack.topAnchor constraintEqualToAnchor:hero.topAnchor constant:18.0],
-        [heroStack.bottomAnchor constraintEqualToAnchor:hero.bottomAnchor constant:-18.0],
+        [heroStack.leadingAnchor constraintEqualToAnchor:hero.leadingAnchor constant:20],
+        [heroStack.centerYAnchor constraintEqualToAnchor:hero.centerYAnchor],
+        [heroStack.topAnchor constraintGreaterThanOrEqualToAnchor:hero.topAnchor constant:18],
+        [heroStack.bottomAnchor constraintLessThanOrEqualToAnchor:hero.bottomAnchor constant:-18],
+        [stagePanel.leadingAnchor constraintEqualToAnchor:heroStack.trailingAnchor constant:14],
+        [stagePanel.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor constant:-12],
+        [stagePanel.topAnchor constraintEqualToAnchor:hero.topAnchor constant:12],
+        [stagePanel.bottomAnchor constraintEqualToAnchor:hero.bottomAnchor constant:-12],
+        [stagePanel.widthAnchor constraintEqualToAnchor:hero.widthAnchor multiplier:0.41],
+        [stagePanel.heightAnchor constraintGreaterThanOrEqualToConstant:204],
+        [orbit.centerXAnchor constraintEqualToAnchor:stagePanel.centerXAnchor],
+        [orbit.centerYAnchor constraintEqualToAnchor:stagePanel.centerYAnchor constant:-6],
+        [orbit.widthAnchor constraintEqualToAnchor:stagePanel.widthAnchor multiplier:0.76],
+        [orbit.heightAnchor constraintEqualToAnchor:orbit.widthAnchor],
+        [stage.leadingAnchor constraintEqualToAnchor:stagePanel.leadingAnchor],
+        [stage.trailingAnchor constraintEqualToAnchor:stagePanel.trailingAnchor],
+        [stage.topAnchor constraintEqualToAnchor:stagePanel.topAnchor],
+        [stage.bottomAnchor constraintEqualToAnchor:player.topAnchor],
+        [player.leadingAnchor constraintEqualToAnchor:stagePanel.leadingAnchor constant:8],
+        [player.trailingAnchor constraintEqualToAnchor:stagePanel.trailingAnchor constant:-8],
+        [player.bottomAnchor constraintEqualToAnchor:stagePanel.bottomAnchor constant:-10],
     ]];
+    NSDictionary *cached = NCLRReadAppearance(auth.uuid);
+    if (cached) [self loadStage:stage appearance:cached];
+    __weak typeof(self) weakSelf = self;
+    __weak NCLRPlayerStage *weakStage = stage;
+    [auth refreshAppearance:^(NSDictionary *appearance) {
+        if (![appearance isEqualToDictionary:cached] && weakStage) {
+            [weakSelf loadStage:weakStage appearance:appearance];
+        }
+    }];
     [self.stack addArrangedSubview:hero];
 
     UIStackView *stats = [[UIStackView alloc] init];
@@ -1554,7 +1806,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     }
     [self.stack addArrangedSubview:stats];
 
-    [self.stack addArrangedSubview:[self eyebrow:@"LIBRARY"]];
+    [self.stack addArrangedSubview:[self eyebrow:@"版本库"]];
     for (NCLRVersion *version in store.versions) {
         UIView *card = [self card];
         UIView *row = [self rowWithTitle:version.name
@@ -1639,9 +1891,9 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                                                                      error:nil]
         componentsSeparatedByString:@"\n"] mutableCopy] ?: [NSMutableArray array];
     NSDictionary<NSString *, NSString *> *wanted = @{
-        @"maxFps" : @"260",
+        @"maxFps" : @"120",
         @"batteryMode" : @"false",
-        @"enableVsync" : @"false",
+        @"enableVsync" : @"true",
     };
     for (NSString *key in wanted) {
         NSString *prefix = [key stringByAppendingString:@":"];
@@ -1661,41 +1913,6 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     }
     [[lines componentsJoinedByString:@"\n"] writeToFile:path atomically:YES
                                                 encoding:NSUTF8StringEncoding error:nil];
-}
-
-static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) {
-    if (layer == nil || depth > 12) return;
-    if ([layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) {
-        id oldSync = nil;
-        @try { oldSync = [layer valueForKey:@"displaySyncEnabled"]; } @catch (NSException *e) { (void)e; }
-        @try { [layer setValue:@NO forKey:@"displaySyncEnabled"]; } @catch (NSException *e) { (void)e; }
-        @try { [layer setValue:@NO forKey:@"presentsWithTransaction"]; } @catch (NSException *e) { (void)e; }
-        @try { [layer setValue:@120 forKey:@"maximumFramesPerSecond"]; } @catch (NSException *e) { (void)e; }
-        [log appendFormat:@"layer=%@ oldSync=%@ screenMax=%ld lowPower=%d\n",
-            NSStringFromClass(layer.class), oldSync,
-            (long)UIScreen.mainScreen.maximumFramesPerSecond,
-            (int)NSProcessInfo.processInfo.isLowPowerModeEnabled];
-    }
-    NSArray *sublayers = nil;
-    @try { sublayers = [layer.sublayers copy]; } @catch (NSException *e) { (void)e; }
-    for (CALayer *sub in sublayers) NCLRBoostLayerTree(sub, log, depth + 1);
-}
-
-- (void)boostMetalLayers:(UIView *)view {
-    if (view == nil) return;
-    if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) {
-        id oldSync = nil;
-        @try { oldSync = [view.layer valueForKey:@"displaySyncEnabled"]; } @catch (NSException *e) { (void)e; }
-        @try { [view.layer setValue:@NO forKey:@"displaySyncEnabled"]; } @catch (NSException *e) { (void)e; }
-        @try { [view.layer setValue:@NO forKey:@"presentsWithTransaction"]; } @catch (NSException *e) { (void)e; }
-        NSString *line = [NSString stringWithFormat:@"view=%@ layer=%@ oldSync=%@ screenMax=%ld\n",
-                          NSStringFromClass(view.class), NSStringFromClass(view.layer.class),
-                          oldSync, (long)UIScreen.mainScreen.maximumFramesPerSecond];
-        NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"nclr-layer.txt"];
-        FILE *f = fopen(path.UTF8String, "a");
-        if (f) { fputs(line.UTF8String, f); fclose(f); }
-    }
-    for (UIView *sub in view.subviews) [self boostMetalLayers:sub];
 }
 
 - (void)launchTapped {
@@ -1749,6 +1966,24 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     }
     setenv("HORIZON_HOME", game.UTF8String, 1);
     setenv("HORIZON_SESSION_FILE", sessionPath.UTF8String, 1);
+    unsetenv("HORIZON_OFFLINE_SKIN");
+    unsetenv("HORIZON_OFFLINE_CAPE");
+    unsetenv("HORIZON_OFFLINE_SKIN_MODEL");
+    NSDictionary *appearance = NCLRReadAppearance(auth.uuid);
+    NSString *skinPath = NCLRTextureCache(auth.uuid, @"skin.png");
+    NSString *capePath = NCLRTextureCache(auth.uuid, @"cape.png");
+    NSDictionary *skin = NCLRActiveTexture(appearance, @"skins");
+    if (skin && skinPath && [files fileExistsAtPath:skinPath]) {
+        setenv("HORIZON_OFFLINE_SKIN", skinPath.UTF8String, 1);
+        BOOL slim = [NCLRString(skin[@"variant"]).lowercaseString isEqualToString:@"slim"];
+        setenv("HORIZON_OFFLINE_SKIN_MODEL", slim ? "slim" : "classic", 1);
+    }
+    if (NCLRActiveTexture(appearance, @"capes") && capePath && [files fileExistsAtPath:capePath]) {
+        setenv("HORIZON_OFFLINE_CAPE", capePath.UTF8String, 1);
+    }
+    NSInteger screenLimit = self.view.window.screen.maximumFramesPerSecond;
+    BOOL highRefresh = screenLimit >= 120 && !NSProcessInfo.processInfo.isLowPowerModeEnabled;
+    setenv("HORIZON_IOS_FPS", highRefresh ? "120" : "60", 1);
     unsetenv("HORIZON_NO_AUDIO");
     AVAudioSession *audio = AVAudioSession.sharedInstance;
     [audio setCategory:AVAudioSessionCategoryPlayback error:nil];
@@ -1761,16 +1996,6 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     launcherWindow.userInteractionEnabled = NO;
     [launcherWindow resignKeyWindow];
     launcherWindow.hidden = YES;
-    NSThread *boostThread = [[NSThread alloc] initWithBlock:^{
-        @autoreleasepool {
-            NCLRFramePump *pump = [[NCLRFramePump alloc] init];
-            CADisplayLink *link = [CADisplayLink displayLinkWithTarget:pump selector:@selector(fire:)];
-            link.preferredFramesPerSecond = 120;
-            [link addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
-            [[NSRunLoop currentRunLoop] run];
-        }
-    }];
-    [boostThread start];
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
     unsetenv("HORIZON_SESSION_FILE");
     [files removeItemAtPath:sessionPath error:nil];
@@ -2452,6 +2677,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @property (nonatomic, strong) NSDictionary *gestureStartPositions;
 @property (nonatomic, strong) UILabel *keyEditTitle;
 @property (nonatomic, strong) UISlider *keySizeSlider;
+@property (nonatomic, strong) UISegmentedControl *triggerControl;
 @property (nonatomic, strong) UILabel *keySizeValue;
 @property (nonatomic, strong) UISwitch *keyVisibleSwitch;
 @end
@@ -2971,8 +3197,13 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         @[keyVisibleLabel, keyVisibleSpacer, self.keyVisibleSwitch]];
     keyVisibleRow.axis = UILayoutConstraintAxisHorizontal;
     keyVisibleRow.alignment = UIStackViewAlignmentCenter;
+    self.triggerControl = [[UISegmentedControl alloc] initWithItems:@[@"点按", @"切换"]];
+    self.triggerControl.accessibilityLabel = @"按键触发方式";
+    self.triggerControl.enabled = NO;
+    self.triggerControl.selectedSegmentIndex = 0;
+    [self.triggerControl addTarget:self action:@selector(triggerChanged:) forControlEvents:UIControlEventValueChanged];
     UIStackView *keyStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.keyEditTitle, keySizeRow, keyVisibleRow]];
+        @[self.keyEditTitle, keySizeRow, keyVisibleRow, self.triggerControl]];
     keyStack.axis = UILayoutConstraintAxisVertical;
     keyStack.spacing = 9.0;
     keyStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -3076,6 +3307,9 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (void)selectKey:(NSString *)key {
     self.selectedKey = key;
+    self.triggerControl.enabled = key.length > 0 && ![key isEqualToString:@"move"];
+    self.triggerControl.selectedSegmentIndex = key.length > 0 &&
+        [NCLRKeymap.shared.triggerModes[key] isEqualToString:@"toggle"] ? 1 : 0;
     self.keySizeSlider.enabled = key.length > 0;
     self.keyVisibleSwitch.enabled = key.length > 0;
     NSDictionary *position = key.length ? NCLRKeymap.shared.positions[key] : nil;
@@ -3090,7 +3324,18 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (NSDictionary *)keyLayoutSnapshot {
     NCLRKeymap *keymap = NCLRKeymap.shared;
-    return @{@"positions": [keymap.positions copy], @"hidden": [keymap.hiddenKeys copy]};
+    return @{@"positions": [keymap.positions copy], @"hidden": [keymap.hiddenKeys copy],
+             @"triggerModes": [keymap.triggerModes copy] ?: @{}};
+}
+
+- (void)triggerChanged:(UISegmentedControl *)sender {
+    if (!sender.enabled || self.selectedKey.length == 0) return;
+    NCLRKeymap *keymap = NCLRKeymap.shared;
+    NSDictionary *before = [self keyLayoutSnapshot];
+    if (!keymap.triggerModes) keymap.triggerModes = [NSMutableDictionary dictionary];
+    keymap.triggerModes[self.selectedKey] = sender.selectedSegmentIndex == 1 ? @"toggle" : @"tap";
+    [self pushUndo:before];
+    [keymap save];
 }
 
 - (void)keySizeEditingStarted {
@@ -3245,6 +3490,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [self.redoStack addObject:[self keyLayoutSnapshot]];
     NCLRKeymap.shared.positions = [previous[@"positions"] mutableCopy];
     NCLRKeymap.shared.hiddenKeys = [previous[@"hidden"] mutableCopy];
+    NCLRKeymap.shared.triggerModes = [previous[@"triggerModes"] mutableCopy];
     [NCLRKeymap.shared save];
     [self selectKey:self.selectedKey];
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
@@ -3257,6 +3503,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [self.undoStack addObject:[self keyLayoutSnapshot]];
     NCLRKeymap.shared.positions = [next[@"positions"] mutableCopy];
     NCLRKeymap.shared.hiddenKeys = [next[@"hidden"] mutableCopy];
+    NCLRKeymap.shared.triggerModes = [next[@"triggerModes"] mutableCopy];
     [NCLRKeymap.shared save];
     [self selectKey:self.selectedKey];
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];

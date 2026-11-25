@@ -63,6 +63,7 @@ xcrun --sdk iphoneos clang \
     -framework AudioToolbox \
     -framework CoreAudio \
     -framework AVFoundation \
+    -framework SceneKit \
     -framework GameController \
     "$MAIN_SOURCE" \
     "$STATIC_LIB" \
