@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <Security/Security.h>
 #import <CommonCrypto/CommonDigest.h>
@@ -140,6 +141,40 @@ static UIColor *NCLRColor(CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
         }
     }
     return [UIColor colorWithRed:r green:g blue:b alpha:a];
+}
+
+static UIColor *NCLRSurface(void) {
+    return NCLRDarkMode ? [UIColor colorWithRed:0.09 green:0.12 blue:0.15 alpha:1]
+                        : [UIColor colorWithRed:0.99 green:1 blue:1 alpha:1];
+}
+
+static UIColor *NCLRCanvas(void) {
+    return NCLRDarkMode ? [UIColor colorWithRed:0.045 green:0.065 blue:0.085 alpha:1]
+                        : [UIColor colorWithRed:0.89 green:0.94 blue:0.94 alpha:1];
+}
+
+static UIColor *NCLRBorder(void) {
+    return NCLRDarkMode ? [UIColor colorWithRed:0.20 green:0.26 blue:0.30 alpha:1]
+                        : [UIColor colorWithRed:0.73 green:0.80 blue:0.82 alpha:1];
+}
+
+static UIColor *NCLRAccent(void) {
+    return NCLRDarkMode ? [UIColor colorWithRed:0.30 green:0.85 blue:0.68 alpha:1]
+                        : [UIColor colorWithRed:0.05 green:0.39 blue:0.31 alpha:1];
+}
+
+static BOOL NCLRTokenExpired(NSString *token) {
+    NSArray<NSString *> *parts = [token componentsSeparatedByString:@"."];
+    if (parts.count != 3) return NO;
+    NSString *payload = [[parts[1] stringByReplacingOccurrencesOfString:@"-" withString:@"+"]
+                                      stringByReplacingOccurrencesOfString:@"_" withString:@"/"];
+    NSUInteger padded = ((payload.length + 3) / 4) * 4;
+    payload = [payload stringByPaddingToLength:padded withString:@"=" startingAtIndex:0];
+    NSData *data = [[NSData alloc] initWithBase64EncodedString:payload options:0];
+    id claims = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    id expiry = [claims isKindOfClass:NSDictionary.class] ? claims[@"exp"] : nil;
+    return [expiry isKindOfClass:NSNumber.class] &&
+        [expiry doubleValue] <= NSDate.date.timeIntervalSince1970 + 60;
 }
 
 static NSString *NCLRString(id value) {
@@ -863,6 +898,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                 presenter:(UIViewController *)presenter
                completion:(NCLRAuthCompletion)completion;
 - (void)logout;
+- (void)fetchProfileWithToken:(NSString *)token completion:(NCLRAuthCompletion)completion;
 @property (nonatomic, copy) NSString *token;
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, assign) BOOL developerPremium;
@@ -1232,7 +1268,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
             NSString *uuid = [profile isKindOfClass:NSDictionary.class] ? NCLRString(profile[@"id"]) : nil;
             dispatch_async(dispatch_get_main_queue(), ^{
                 NCLRAuth *auth = weakSelf;
-                if (error || status != 200 || name.length == 0 || uuid.length == 0) {
+                if (error || status != 200 || !NCLRAvatarURLForName(name) || uuid.length != 32) {
                     [auth.authSafari dismissViewControllerAnimated:YES completion:nil];
                     auth.authSafari = nil;
                     completion(nil, nil, error.localizedDescription ?: @"无法读取 Minecraft 正版玩家资料");
@@ -1336,12 +1372,11 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 - (UIView *)card {
     UIView *card = [[UIView alloc] init];
     card.translatesAutoresizingMaskIntoConstraints = NO;
-    card.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.018];
+    card.backgroundColor = NCLRSurface();
     card.layer.cornerRadius = 18.0;
     card.clipsToBounds = YES;
     card.layer.borderWidth = 1.0;
-    card.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.075].CGColor;
-    NCLRAddBlur(card, NCLRDarkMode);
+    card.layer.borderColor = NCLRBorder().CGColor;
     return card;
 }
 
@@ -1353,13 +1388,14 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     button.translatesAutoresizingMaskIntoConstraints = NO;
     [button.heightAnchor constraintGreaterThanOrEqualToConstant:42.0].active = YES;
     if (primary) {
-        [button setTitleColor:NCLRColor(0.04, 0.04, 0.04, 1.0) forState:UIControlStateNormal];
-        button.backgroundColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
+        [button setTitleColor:NCLRDarkMode ? UIColor.blackColor : UIColor.whiteColor forState:UIControlStateNormal];
+        button.backgroundColor = NCLRAccent();
+        [button setTitleColor:NCLRDarkMode ? UIColor.blackColor : UIColor.whiteColor forState:UIControlStateDisabled];
     } else {
         [button setTitleColor:NCLRColor(0.94, 0.94, 0.94, 1.0) forState:UIControlStateNormal];
-        button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.075];
+        button.backgroundColor = NCLRCanvas();
         button.layer.borderWidth = 1.0;
-        button.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.12].CGColor;
+        button.layer.borderColor = NCLRBorder().CGColor;
     }
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     return button;
@@ -1425,6 +1461,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
 @interface NCLRHomeController : NCLRPageController
 @property (nonatomic, strong) UILabel *prepareStatusLabel;
+@property (nonatomic, strong) UIButton *launchButton;
+@property (nonatomic, strong) UIButton *cancelLaunchDownload;
+@property (nonatomic, strong) UIProgressView *launchProgress;
+@property (nonatomic) BOOL checkingAccount;
 @end
 
 @implementation NCLRHomeController
@@ -1440,7 +1480,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UIView *hero = [self card];
     hero.backgroundColor = NCLRColor(0.055, 0.055, 0.055, 1.0);
     hero.layer.borderColor = NCLRColor(1.0, 1.0, 1.0, 0.20).CGColor;
-    UILabel *heroEyebrow = [self eyebrow:@"SELECTED PROFILE"];
+    UILabel *heroEyebrow = [self eyebrow:@"当前游戏"];
+    heroEyebrow.textColor = NCLRAccent();
     NSString *heroTitleText = selected.name ?: @"Minecraft 26.3";
     UILabel *heroTitle = [self label:heroTitleText
                                 size:28.0 weight:UIFontWeightBold
@@ -1455,11 +1496,18 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     UIButton *launch = [self button:@"启动游戏" action:@selector(launchTapped) primary:YES];
     launch.titleLabel.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightBold];
     [launch.heightAnchor constraintEqualToConstant:50.0].active = YES;
-    UILabel *hint = [self label:@"启动器与游戏端分离；版本、模组和账号由 NCLR 管理。"
-                           size:10.0 weight:UIFontWeightRegular
-                          color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
+    self.launchButton = launch;
+    self.launchProgress = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    self.launchProgress.progressTintColor = NCLRAccent();
+    self.launchProgress.trackTintColor = NCLRBorder();
+    self.cancelLaunchDownload = [self button:@"取消下载" action:@selector(cancelLaunchPreparation) primary:NO];
+    UILabel *hint = [self label:NCLRResourcePreparer.shared.lastLine ?: @""
+                           size:12.0 weight:UIFontWeightMedium
+                          color:NCLRColor(0.65, 0.65, 0.65, 1.0)];
+    self.prepareStatusLabel = hint;
+    hint.hidden = hint.text.length == 0;
     UIStackView *heroStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[heroEyebrow, heroTitle, heroDetail, launch, hint]];
+        @[heroEyebrow, heroTitle, heroDetail, launch, self.launchProgress, hint, self.cancelLaunchDownload]];
     heroStack.axis = UILayoutConstraintAxisVertical;
     heroStack.spacing = 8.0;
     heroStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1533,27 +1581,55 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [self.stack addArrangedSubview:card];
     }
 
-    UIView *activity = [self card];
-    UILabel *activityTitle = [self eyebrow:@"状态"];
-    UILabel *activityText = [self label:NCLRResourcePreparer.shared.lastLine ?: @"启动器已就绪"
-                                    size:12.0 weight:UIFontWeightRegular
-                                   color:NCLRColor(0.70, 0.70, 0.70, 1.0)];
-    UIStackView *activityStack = [[UIStackView alloc] initWithArrangedSubviews:@[activityTitle, activityText]];
-    activityStack.axis = UILayoutConstraintAxisVertical;
-    activityStack.spacing = 6.0;
-    activityStack.translatesAutoresizingMaskIntoConstraints = NO;
-    [activity addSubview:activityStack];
-    [NSLayoutConstraint activateConstraints:@[
-        [activityStack.leadingAnchor constraintEqualToAnchor:activity.leadingAnchor constant:16.0],
-        [activityStack.trailingAnchor constraintEqualToAnchor:activity.trailingAnchor constant:-16.0],
-        [activityStack.topAnchor constraintEqualToAnchor:activity.topAnchor constant:14.0],
-        [activityStack.bottomAnchor constraintEqualToAnchor:activity.bottomAnchor constant:-14.0],
-    ]];
-    [self.stack addArrangedSubview:activity];
-    self.prepareStatusLabel = activityText;
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
     [center addObserver:self selector:@selector(prepareProgress:) name:NCLRPrepareProgressNotification object:nil];
     [center addObserver:self selector:@selector(prepareFinished:) name:NCLRPrepareFinishedNotification object:nil];
+    [self updateLaunchControlsAnimated:NO];
+}
+
+- (void)updateLaunchControlsAnimated:(BOOL)animated {
+    NCLRResourcePreparer *preparer = NCLRResourcePreparer.shared;
+    BOOL preparing = preparer.preparing;
+    NSString *title = self.checkingAccount ? @"正在验证账号…" : @"启动游戏";
+    if (preparing) {
+        title = preparer.cancelRequested ? @"正在取消…"
+            : preparer.cancellable ? @"正在下载游戏资源…" : @"正在组装游戏资源…";
+    }
+    [self.launchButton setTitle:title forState:UIControlStateNormal];
+    self.launchButton.enabled = !preparing && !self.checkingAccount;
+    BOOL showProgress = preparing && !preparer.cancelRequested;
+    BOOL showCancel = showProgress && preparer.cancellable;
+    BOOL changed = (self.launchProgress.hidden == showProgress ||
+                    self.cancelLaunchDownload.hidden == showCancel ||
+                    self.prepareStatusLabel.hidden == (self.prepareStatusLabel.text.length > 0));
+    void (^layout)(void) = ^{
+        self.launchProgress.hidden = !showProgress;
+        self.cancelLaunchDownload.hidden = !showCancel;
+        self.prepareStatusLabel.hidden = self.prepareStatusLabel.text.length == 0;
+        [self.view layoutIfNeeded];
+    };
+    if (changed && animated && !UIAccessibilityIsReduceMotionEnabled()) {
+        [UIView animateWithDuration:0.20 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:layout completion:nil];
+    } else if (changed) {
+        layout();
+    }
+    [self.launchProgress setProgress:preparer.progressValue
+                           animated:animated && !UIAccessibilityIsReduceMotionEnabled()];
+}
+
+- (void)cancelLaunchPreparation {
+    [NCLRResourcePreparer.shared cancel];
+    self.prepareStatusLabel.text = @"正在取消，已下载的资源会保留";
+    [self updateLaunchControlsAnimated:YES];
+}
+
+- (void)showLaunchError:(NSString *)message {
+    self.prepareStatusLabel.text = message;
+    [self updateLaunchControlsAnimated:YES];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"无法启动游戏" message:message
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)writePerformanceOptions {
@@ -1623,48 +1699,64 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 }
 
 - (void)launchTapped {
-    [self writePerformanceOptions];
-    if (NCLRResourcePreparer.shared.preparing) return;
-    if (NCLRAuth.shared.token.length == 0) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"需要正版登录"
-                                                                       message:@"首次准备游戏资源前，请先在“账号”页登录 Microsoft 正版账号。"
-                                                                preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-        [self presentViewController:alert animated:YES completion:nil];
+    if (NCLRResourcePreparer.shared.preparing || self.checkingAccount) return;
+    NCLRAuth *auth = NCLRAuth.shared;
+    if (auth.token.length == 0 || NCLRTokenExpired(auth.token)) {
+        if (auth.token.length > 0) {
+            [auth logout];
+            [[NSNotificationCenter defaultCenter] postNotificationName:NCLRAvatarUpdatedNotification object:auth];
+        }
+        [self showLaunchError:@"请在账号页登录 Microsoft 正版账号后启动游戏。"];
         return;
     }
+    if (auth.uuid.length == 0 || !NCLRAvatarURLForName(auth.name)) {
+        self.checkingAccount = YES;
+        [self updateLaunchControlsAnimated:YES];
+        [auth fetchProfileWithToken:auth.token completion:^(NSString *token, NSString *name, NSString *error) {
+            self.checkingAccount = NO;
+            if (!self.viewIfLoaded.window) return;
+            if (error) {
+                [self showLaunchError:@"无法确认玩家资料。请检查网络，或退出账号后重新登录。"];
+                return;
+            }
+            [self launchTapped];
+        }];
+        return;
+    }
+
     NSString *resources = [NCLRDocuments() stringByAppendingPathComponent:@"horizon-client/26.3"];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:
-            [resources stringByAppendingPathComponent:@"horizon-resources.json"]]) {
-        [self prepareResources];
-        return;
-    }
-    NSString *game = NCLRDocuments();
-    NCLRCreateDirectory(game);
-    setenv("HORIZON_HOME", game.UTF8String, 1);
-    unsetenv("HORIZON_SESSION_FILE");
-    NCLRAuth *sessionAuth = NCLRAuth.shared;
-    if (sessionAuth.token.length > 0 && sessionAuth.uuid.length > 0) {
-        NSString *sessionPath = [game stringByAppendingPathComponent:@".nclr-session.json"];
-        NSDictionary *session = @{
-            @"name" : sessionAuth.name ?: @"Player",
-            @"uuid" : sessionAuth.uuid,
-            @"access_token" : sessionAuth.token,
-            @"user_type" : @"msa",
-        };
-        NSData *sessionData = [NSJSONSerialization dataWithJSONObject:session options:0 error:nil];
-        if ([sessionData writeToFile:sessionPath atomically:YES]) {
-            [NSFileManager.defaultManager setAttributes:@{NSFilePosixPermissions : @0600}
-                                           ofItemAtPath:sessionPath error:nil];
-            setenv("HORIZON_SESSION_FILE", sessionPath.UTF8String, 1);
+    NSFileManager *files = NSFileManager.defaultManager;
+    NSArray<NSString *> *required = @[@"horizon-resources.json", @"assets/minecraft/sounds.json", @"assets/minecraft/sounds"];
+    for (NSString *relative in required) {
+        if (![files fileExistsAtPath:[resources stringByAppendingPathComponent:relative]]) {
+            [self prepareResources];
+            return;
         }
     }
-    setenv("HORIZON_NO_AUDIO", "1", 1);
+
+    [self writePerformanceOptions];
+    NSString *game = NCLRDocuments();
+    NCLRCreateDirectory(game);
+    NSString *sessionPath = [game stringByAppendingPathComponent:@".nclr-session.json"];
+    NSData *sessionData = [NSJSONSerialization dataWithJSONObject:@{
+        @"name": auth.name, @"uuid": auth.uuid, @"access_token": auth.token, @"user_type": @"msa"
+    } options:0 error:nil];
+    if (![sessionData writeToFile:sessionPath options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:nil] ||
+        ![files setAttributes:@{NSFilePosixPermissions: @0600} ofItemAtPath:sessionPath error:nil]) {
+        [files removeItemAtPath:sessionPath error:nil];
+        [self showLaunchError:@"无法建立正版游戏会话，请检查设备可用空间。"];
+        return;
+    }
+    setenv("HORIZON_HOME", game.UTF8String, 1);
+    setenv("HORIZON_SESSION_FILE", sessionPath.UTF8String, 1);
+    unsetenv("HORIZON_NO_AUDIO");
+    AVAudioSession *audio = AVAudioSession.sharedInstance;
+    [audio setCategory:AVAudioSessionCategoryPlayback error:nil];
+    [audio setActive:YES error:nil];
     setenv("HORIZON_NO_DISCORD", "1", 1);
     // This call starts winit only now. The patched winit attaches to the
     // already-running UIApplication and drives its loop without a second
     // UIApplicationMain.
-    id sceneDelegate = self.view.window.windowScene.delegate;
     UIWindow *launcherWindow = self.view.window;
     launcherWindow.userInteractionEnabled = NO;
     [launcherWindow resignKeyWindow];
@@ -1679,24 +1771,23 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         }
     }];
     [boostThread start];
-    horizon_ios_run(resources.UTF8String, game.UTF8String);
+    int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
+    unsetenv("HORIZON_SESSION_FILE");
+    [files removeItemAtPath:sessionPath error:nil];
+    [audio setActive:NO error:nil];
+    launcherWindow.userInteractionEnabled = YES;
+    [launcherWindow makeKeyAndVisible];
+    if (result != 0) [self showLaunchError:@"引擎未接受启动请求，请重新登录或重新启动应用。"];
 }
 
 - (void)prepareProgress:(NSNotification *)note {
-    NSString *line = note.userInfo[@"line"] ?: @"准备游戏资源";
-    if ([line containsString:@"组装"] || [line containsString:@"音效"]) {
-        self.prepareStatusLabel.text = [NSString stringWithFormat:@"正在准备资源 · %@", line];
-    } else {
-        self.prepareStatusLabel.text = [NSString stringWithFormat:@"资源下载中 · %@", line];
-    }
-    self.prepareStatusLabel.textColor = NCLRColor(0.35, 0.78, 0.52, 1.0);
+    self.prepareStatusLabel.text = note.userInfo[@"line"];
+    [self updateLaunchControlsAnimated:YES];
 }
 
 - (void)prepareFinished:(NSNotification *)note {
-    NSString *status = note.userInfo[@"status"];
-    self.prepareStatusLabel.text = status;
-    self.prepareStatusLabel.textColor = [status isEqualToString:@"资源准备完成"]
-        ? NCLRColor(0.35, 0.78, 0.52, 1.0) : NCLRColor(0.70, 0.70, 0.70, 1.0);
+    self.prepareStatusLabel.text = note.userInfo[@"status"];
+    [self updateLaunchControlsAnimated:YES];
 }
 
 - (void)dealloc {
@@ -1705,8 +1796,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (void)prepareResources {
     if (NCLRResourcePreparer.shared.preparing) return;
-    self.prepareStatusLabel.text = @"资源下载中…";
-    self.prepareStatusLabel.textColor = NCLRColor(0.35, 0.78, 0.52, 1.0);
+    self.prepareStatusLabel.text = @"正在检查游戏资源…";
     [[NCLRResourcePreparer shared] prepareWithProgress:nil completion:^(NSString *error) {
         if (!self.viewIfLoaded.window || [error isEqualToString:@"下载已取消"]) return;
         if (error.length > 0) {
@@ -1719,6 +1809,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
             [self launchTapped];
         }
     }];
+    [self updateLaunchControlsAnimated:YES];
 }
 @end
 
@@ -2508,7 +2599,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @implementation NCLRGridOverlay
 - (void)drawRect:(CGRect)rect {
     CGContextRef ctx = UIGraphicsGetCurrentContext();
-    CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:1.0 alpha:0.10].CGColor);
+    CGContextSetStrokeColorWithColor(ctx, [NCLRBorder() colorWithAlphaComponent:0.55].CGColor);
     CGContextSetLineWidth(ctx, 0.5);
     for (NSInteger i = 1; i < 10; i++) {
         CGFloat x = CGRectGetWidth(rect) * i / 10.0;
@@ -2517,7 +2608,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         CGContextMoveToPoint(ctx, 0, y); CGContextAddLineToPoint(ctx, CGRectGetWidth(rect), y);
     }
     CGContextStrokePath(ctx);
-    CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:1.0 alpha:0.28].CGColor);
+    CGContextSetStrokeColorWithColor(ctx, NCLRBorder().CGColor);
     CGContextMoveToPoint(ctx, CGRectGetMidX(rect), 0);
     CGContextAddLineToPoint(ctx, CGRectGetMidX(rect), CGRectGetHeight(rect));
     CGContextMoveToPoint(ctx, 0, CGRectGetMidY(rect));
@@ -2743,10 +2834,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     UILabel *previewLabel = [self eyebrow:@"触控布局预览 · 拖动按钮调整位置"];
     self.preview = [[UIView alloc] init];
     self.preview.translatesAutoresizingMaskIntoConstraints = NO;
-    self.preview.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 1.0);
+    self.preview.backgroundColor = NCLRCanvas();
     self.preview.layer.cornerRadius = 12.0;
     self.preview.layer.borderWidth = 1.0;
-    self.preview.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
+    self.preview.layer.borderColor = NCLRBorder().CGColor;
     self.preview.clipsToBounds = YES;
     [previewCard addSubview:previewLabel];
     [previewCard addSubview:self.preview];
@@ -2782,13 +2873,13 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.selection.userInteractionEnabled = NO;
     self.selection.backgroundColor = UIColor.clearColor;
     self.selection.layer.borderWidth = 2.0;
-    self.selection.layer.borderColor = NCLRColor(1.0, 1.0, 1.0, 0.95).CGColor;
+    self.selection.layer.borderColor = NCLRAccent().CGColor;
     self.selection.layer.cornerRadius = 10.0;
     self.selection.hidden = YES;
     [self.preview addSubview:self.selection];
 
     self.resizeHandle = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 24, 24)];
-    self.resizeHandle.backgroundColor = UIColor.whiteColor;
+    self.resizeHandle.backgroundColor = NCLRAccent();
     self.resizeHandle.layer.cornerRadius = 12.0;
     self.resizeHandle.layer.borderWidth = 2.0;
     self.resizeHandle.layer.borderColor = NCLRColor(0.05, 0.05, 0.05, 0.9).CGColor;
@@ -2814,7 +2905,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
             UIView *knob = [[UIView alloc] initWithFrame:CGRectZero];
             knob.tag = 991;
             knob.userInteractionEnabled = NO;
-            knob.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.30];
+            knob.backgroundColor = NCLRAccent();
             knob.layer.cornerRadius = 8.0;
             [button addSubview:knob];
             UILabel *caption = [self label:@"移动" size:9.0 weight:UIFontWeightSemibold
@@ -2958,11 +3049,19 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         button.titleLabel.font = [UIFont monospacedSystemFontOfSize:MAX(9.0, 11.0 * NCLRKeymap.shared.buttonSize)
                                                               weight:UIFontWeightBold];
         BOOL move = [key isEqualToString:@"move"];
-        button.alpha = [NCLRKeymap.shared isHidden:key] ? 0.22 : 1.0;
+        BOOL hidden = [NCLRKeymap.shared isHidden:key];
+        BOOL selected = [key isEqualToString:self.selectedKey];
+        button.alpha = 1.0;
+        UIColor *keyInk = hidden || move ? NCLRColor(0.95, 0.95, 0.95, 1.0)
+            : NCLRDarkMode ? UIColor.blackColor : UIColor.whiteColor;
+        button.backgroundColor = hidden || move ? NCLRSurface() : NCLRAccent();
+        [button setTitleColor:keyInk forState:UIControlStateNormal];
+        button.titleLabel.adjustsFontSizeToFitWidth = YES;
+        button.titleLabel.minimumScaleFactor = 0.65;
+        button.accessibilityValue = hidden ? @"游戏中隐藏" : @"游戏中显示";
         button.layer.cornerRadius = move ? size / 2.0 : 8.0;
-        button.layer.borderWidth = move ? 2.0 : ([key isEqualToString:self.selectedKey] ? 2.0 : 0.0);
-        button.layer.borderColor = (move ? [UIColor colorWithWhite:1.0 alpha:0.35]
-                                         : [UIColor colorWithWhite:0.05 alpha:0.8]).CGColor;
+        button.layer.borderWidth = selected || move ? 2.0 : hidden ? 1.0 : 0.0;
+        button.layer.borderColor = (selected ? NCLRAccent() : NCLRBorder()).CGColor;
         UIView *knob = [button viewWithTag:991];
         UILabel *caption = (UILabel *)[button viewWithTag:992];
         if (move) {
@@ -3351,11 +3450,12 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     }
     self.canvasClose.hidden = !self.canvasFullscreen;
     self.scroll.scrollEnabled = !self.canvasFullscreen;
+    if (self.canvasFullscreen) [self.scroll setContentOffset:CGPointZero animated:NO];
     if (self.canvasFullscreen) {
-        self.previewCard.backgroundColor = UIColor.blackColor;
+        self.previewCard.backgroundColor = NCLRSurface();
         self.previewCard.layer.cornerRadius = 0.0;
         self.previewCard.layer.borderWidth = 0.0;
-        self.preview.backgroundColor = UIColor.blackColor;
+        self.preview.backgroundColor = NCLRCanvas();
         self.preview.layer.cornerRadius = 0.0;
         self.preview.layer.borderWidth = 0.0;
         self.stackLeading.constant = 0.0;
@@ -3366,7 +3466,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         self.previewCard.backgroundColor = NCLRColor(0.10, 0.10, 0.10, 1.0);
         self.previewCard.layer.cornerRadius = 16.0;
         self.previewCard.layer.borderWidth = 1.0;
-        self.preview.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 1.0);
+        self.preview.backgroundColor = NCLRCanvas();
         self.preview.layer.cornerRadius = 12.0;
         self.preview.layer.borderWidth = 1.0;
         self.stackLeading.constant = 24.0;
@@ -3374,7 +3474,13 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         self.previewHeight.constant = MAX(300.0, MIN(640.0, self.view.bounds.size.height * 0.58));
     }
     [self.view setNeedsLayout];
-    [self.view layoutIfNeeded];
+    if (UIAccessibilityIsReduceMotionEnabled()) {
+        [self.view layoutIfNeeded];
+    } else {
+        [UIView animateWithDuration:0.25 delay:0
+                            options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut
+                         animations:^{ [self.view layoutIfNeeded]; } completion:nil];
+    }
 }
 - (void)saveKeymap {
     NCLRKeymap.shared.buttonSize = self.sizeSlider.value;
@@ -3750,6 +3856,11 @@ static NSString *NCLRSHA1Hex(NSData *data) {
             finish(@"组装完成但资源清单不存在");
             return;
         }
+        if (![files fileExistsAtPath:[soundRoot stringByAppendingPathComponent:@"sounds.json"]] ||
+            ![files fileExistsAtPath:[soundRoot stringByAppendingPathComponent:@"sounds"]]) {
+            finish(@"原版音效资源缺失，无法完成安装");
+            return;
+        }
         NSError *publishError = nil;
         if ([files fileExistsAtPath:destination] &&
             ![files removeItemAtPath:destination error:&publishError]) {
@@ -3791,12 +3902,12 @@ static NSString *NCLRSHA1Hex(NSData *data) {
 @implementation NCLRRootController
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 1.0);
+    self.view.backgroundColor = NCLRCanvas();
     CAGradientLayer *gradient = [CAGradientLayer layer];
     gradient.colors = @[
-        (__bridge id)NCLRColor(0.07, 0.07, 0.07, 1.0).CGColor,
-        (__bridge id)NCLRColor(0.02, 0.02, 0.02, 1.0).CGColor,
-        (__bridge id)NCLRColor(0.10, 0.10, 0.10, 1.0).CGColor,
+        (__bridge id)NCLRCanvas().CGColor,
+        (__bridge id)NCLRSurface().CGColor,
+        (__bridge id)NCLRCanvas().CGColor,
     ];
     gradient.startPoint = CGPointMake(0.1, 0.0);
     gradient.endPoint = CGPointMake(0.9, 1.0);
@@ -3804,10 +3915,9 @@ static NSString *NCLRSHA1Hex(NSData *data) {
 
     self.sidebar = [[UIView alloc] init];
     self.sidebar.translatesAutoresizingMaskIntoConstraints = NO;
-    self.sidebar.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 0.42);
-    NCLRAddBlur(self.sidebar, NCLRDarkMode);
+    self.sidebar.backgroundColor = NCLRSurface();
     self.sidebar.layer.borderWidth = 1.0;
-    self.sidebar.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.06].CGColor;
+    self.sidebar.layer.borderColor = NCLRBorder().CGColor;
     [self.view addSubview:self.sidebar];
 
     self.content = [[UIView alloc] init];
@@ -3994,7 +4104,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
 
     UIView *account = [[UIView alloc] init];
     account.translatesAutoresizingMaskIntoConstraints = NO;
-    account.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.045];
+    account.backgroundColor = NCLRCanvas();
     account.layer.cornerRadius = 12.0;
     UILabel *avatar = [self label:@"N" size:15.0 weight:UIFontWeightBold
                             color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
@@ -4233,10 +4343,16 @@ static NSString *NCLRSHA1Hex(NSData *data) {
         [controller.view.bottomAnchor constraintEqualToAnchor:self.content.bottomAnchor],
     ]];
     [controller didMoveToParentViewController:self];
-    controller.view.alpha = 0.0;
-    [UIView animateWithDuration:0.22 delay:0.0 options:UIViewAnimationOptionCurveEaseOut
-                     animations:^{ controller.view.alpha = 1.0; }
-                     completion:nil];
+    if (!UIAccessibilityIsReduceMotionEnabled()) {
+        controller.view.alpha = 0.0;
+        controller.view.transform = CGAffineTransformMakeTranslation(0, 10.0);
+        [UIView animateWithDuration:0.24 delay:0.0
+                            options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction
+                         animations:^{
+            controller.view.alpha = 1.0;
+            controller.view.transform = CGAffineTransformIdentity;
+        } completion:nil];
+    }
     [self refreshAccount];
 }
 

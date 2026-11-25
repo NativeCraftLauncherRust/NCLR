@@ -71,10 +71,13 @@ pub extern "C" fn horizon_ios_run(resources: *const c_char, game_dir: *const c_c
         eprintln!("Horizon: cannot enter game directory: {error}");
         return 4;
     }
-    let startup = horizon_client::entry::prepare_ios(resources, game_dir).unwrap_or_else(|error| {
-        eprintln!("Horizon: {error}");
-        std::process::exit(2);
-    });
+    let startup = match horizon_client::entry::prepare_ios(resources, game_dir) {
+        Ok(startup) => startup,
+        Err(error) => {
+            eprintln!("Horizon: {error}");
+            return 2;
+        }
+    };
     if let Err(error) = horizon_engine_slots::install_seal(mod_points::__private::seal) {
         eprintln!("Horizon: engine seal unavailable: {error}");
         return 3;

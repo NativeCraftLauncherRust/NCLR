@@ -869,7 +869,7 @@ index 78cfdee..44bd551 100644
      Startup {
          launch,
          options,
-@@ -47,6 +52,31 @@ pub fn prepare() -> Startup {
+@@ -47,6 +52,30 @@ pub fn prepare() -> Startup {
      }
  }
  
@@ -884,7 +884,6 @@ index 78cfdee..44bd551 100644
 +        .arg(resources)
 +        .arg("--game-dir")
 +        .arg(game_dir)
-+        .arg("--developer-single-player")
 +        .arg("--no-pause");
 +    let launch =
 +        LaunchArguments::for_command(&command).map_err(|error| error.to_string())?;

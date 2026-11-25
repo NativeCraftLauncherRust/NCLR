@@ -39,12 +39,13 @@ jobs:
           HORIZON_DIR: ${{ runner.temp }}/horizon
         run: |
           set -euxo pipefail
+          BUILD_NUMBER="$(TZ=Asia/Shanghai date +%Y%m%d%H%M)" \
           HORIZON_DIR="$HORIZON_DIR" PROFILE=fast \
             APP_NAME=NCLR \
             MAIN_SOURCE="$PWD/ios/main_l1.m" \
             INFO_PLIST="$PWD/ios/Info-launcher.plist" \
             BUNDLE_ID=dev.zrxmaxlnx.nclr \
-            IPA_NAME=NCLR-L1.1-unsigned.ipa \
+            IPA_NAME=NCLR-L7.4-unsigned.ipa \
             ICON_DIR="$PWD/ios/icons" \
             RESOURCE_DIR="" SHIP_BUNDLE="$PWD/ios/ship.hzr3" \
             WASM_STD_DIR="$PWD/ios/wasm-std" \

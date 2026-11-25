@@ -12,7 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 horizon-core = { path = "../horizon-core" }
-horizon-client = { path = "../horizon-client", default-features = false }
+horizon-client = { path = "../horizon-client", default-features = false, features = ["audio"] }
 horizon-client-lib = { path = "../horizon-client-lib", default-features = false }
 horizon-mod-package = { path = "../horizon-mod-package", default-features = false }
 horizon-mod-wasm = { path = "../horizon-mod-wasm", default-features = false }
