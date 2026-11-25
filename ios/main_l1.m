@@ -5,12 +5,29 @@
 #import <SafariServices/SafariServices.h>
 #import <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 extern int horizon_ios_run(const char *resources, const char *game_dir);
 @class NCLRResourcePreparer;
 static NSString *const NCLRPrepareProgressNotification = @"NCLRPrepareProgress";
 static NSString *const NCLRPrepareFinishedNotification = @"NCLRPrepareFinished";
 static NSString *const NCLRAvatarUpdatedNotification = @"NCLRAvatarUpdated";
+
+static UIVisualEffectView *NCLRAddBlur(UIView *view, BOOL dark) {
+    UIBlurEffectStyle style = dark ? UIBlurEffectStyleSystemUltraThinMaterialDark
+                                   : UIBlurEffectStyleSystemUltraThinMaterialLight;
+    UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:style]];
+    blur.translatesAutoresizingMaskIntoConstraints = NO;
+    blur.userInteractionEnabled = NO;
+    [view insertSubview:blur atIndex:0];
+    [NSLayoutConstraint activateConstraints:@[
+        [blur.leadingAnchor constraintEqualToAnchor:view.leadingAnchor],
+        [blur.trailingAnchor constraintEqualToAnchor:view.trailingAnchor],
+        [blur.topAnchor constraintEqualToAnchor:view.topAnchor],
+        [blur.bottomAnchor constraintEqualToAnchor:view.bottomAnchor],
+    ]];
+    return blur;
+}
 
 static void NCLRLoadRemoteAvatar(NSString *url, UIImageView *imageView, UILabel *fallback) {
     if (url.length == 0) {
@@ -1278,10 +1295,12 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 - (UIView *)card {
     UIView *card = [[UIView alloc] init];
     card.translatesAutoresizingMaskIntoConstraints = NO;
-    card.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.052];
+    card.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.018];
     card.layer.cornerRadius = 18.0;
+    card.clipsToBounds = YES;
     card.layer.borderWidth = 1.0;
     card.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.075].CGColor;
+    NCLRAddBlur(card, NCLRDarkMode);
     return card;
 }
 
@@ -2240,6 +2259,9 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @property (nonatomic, strong) UIView *previewCard;
 @property (nonatomic, strong) UIButton *canvasClose;
 @property (nonatomic, assign) BOOL canvasFullscreen;
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *undoStack;
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *redoStack;
+@property (nonatomic, strong) NSDictionary *gestureStartPositions;
 @end
 
 @interface NCLRSettingsController : NCLRPageController
@@ -2345,7 +2367,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     window.overrideUserInterfaceStyle = NCLRDarkMode ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
     Class rootClass = NSClassFromString(@"NCLRRootController");
     if (rootClass != Nil) {
-        window.rootViewController = [[rootClass alloc] init];
+        NSInteger page = [[window.rootViewController valueForKey:@"page"] integerValue];
+        id root = [[rootClass alloc] init];
+        [root setValue:@(page) forKey:@"initialPage"];
+        window.rootViewController = root;
     }
 }
 
@@ -2410,6 +2435,8 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.keyButtons = [NSMutableArray array];
     self.visibilitySwitches = [NSMutableDictionary dictionary];
     self.previewButtons = [NSMutableDictionary dictionary];
+    self.undoStack = [NSMutableArray array];
+    self.redoStack = [NSMutableArray array];
     [self setupPage];
     [self.stack addArrangedSubview:[self headerWithTitle:@"触控界面"
                                                 subtitle:@"游戏内触控按钮 · 布局、位置与大小"
@@ -2584,13 +2611,16 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     UIButton *gridButton = [self button:@"网格" action:@selector(toggleGrid) primary:NO];
     UIButton *resetButton = [self button:@"重置布局" action:@selector(resetLayoutTapped) primary:NO];
     UIButton *fullButton = [self button:@"全屏编辑" action:@selector(toggleCanvas) primary:NO];
+    UIButton *undoButton = [self button:@"撤销" action:@selector(undoTapped) primary:NO];
+    UIButton *redoButton = [self button:@"重做" action:@selector(redoTapped) primary:NO];
     UIButton *exportButton = [self button:@"导出" action:@selector(exportKeymap) primary:NO];
     UIButton *importButton = [self button:@"导入" action:@selector(importKeymap) primary:NO];
     UIStackView *ioRow = [[UIStackView alloc] initWithArrangedSubviews:@[exportButton, importButton]];
     ioRow.axis = UILayoutConstraintAxisHorizontal;
     ioRow.spacing = 8.0;
     ioRow.distribution = UIStackViewDistributionFillEqually;
-    UIStackView *tools = [[UIStackView alloc] initWithArrangedSubviews:@[gridButton, resetButton, fullButton]];
+    UIStackView *tools = [[UIStackView alloc] initWithArrangedSubviews:
+        @[undoButton, redoButton, gridButton, resetButton, fullButton]];
     tools.axis = UILayoutConstraintAxisHorizontal;
     tools.spacing = 8.0;
     tools.distribution = UIStackViewDistributionFillEqually;
@@ -2865,6 +2895,8 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     if (sender.state == UIGestureRecognizerStateBegan) {
         [self selectKey:key];
         self.dragStartCenter = button.center;
+        self.gestureStartPositions = [NCLRKeymap.shared.positions copy];
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     }
     CGPoint translation = [sender translationInView:self.preview];
     CGFloat cx = self.dragStartCenter.x + translation.x;
@@ -2872,6 +2904,19 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     CGRect area = [self previewContentRect];
     CGFloat x = MAX(0.025, MIN(0.975, (cx - area.origin.x) / area.size.width));
     CGFloat y = MAX(0.025, MIN(0.975, (cy - area.origin.y) / area.size.height));
+    // Light magnetic snapping: edges and the centres of other keys. It only
+    // engages within 1.8% so free placement near a guide still works.
+    if (x < 0.043) x = 0.025;
+    if (x > 0.957) x = 0.975;
+    if (y < 0.043) y = 0.025;
+    if (y > 0.957) y = 0.975;
+    for (NSString *other in NCLRKeymap.shared.positions) {
+        if ([other isEqualToString:key]) continue;
+        NSDictionary *p = NCLRKeymap.shared.positions[other];
+        CGFloat ox = [p[@"x"] doubleValue], oy = [p[@"y"] doubleValue];
+        if (fabs(x - ox) < 0.018) x = ox;
+        if (fabs(y - oy) < 0.018) y = oy;
+    }
     NSDictionary *old = NCLRKeymap.shared.positions[key];
     NCLRKeymap.shared.positions[key] = @{
         @"x" : @(x),
@@ -2882,11 +2927,17 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
                                 area.origin.y + y * area.size.height);
     if (sender.state == UIGestureRecognizerStateEnded ||
         sender.state == UIGestureRecognizerStateCancelled) {
+        [self pushUndo:self.gestureStartPositions];
+        self.gestureStartPositions = nil;
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
         [self.view setNeedsLayout];
     }
 }
 
 - (void)resizeKey:(UIPanGestureRecognizer *)sender {
+    if (sender.state == UIGestureRecognizerStateBegan) {
+        self.gestureStartPositions = [NCLRKeymap.shared.positions copy];
+    }
     if (self.selectedKey.length == 0) {
         return;
     }
@@ -2906,7 +2957,42 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         @"y" : old[@"y"] ?: @0.5,
         @"size" : @(normalized),
     };
+    if (sender.state == UIGestureRecognizerStateEnded ||
+        sender.state == UIGestureRecognizerStateCancelled) {
+        [self pushUndo:self.gestureStartPositions];
+        self.gestureStartPositions = nil;
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    }
     [self.view setNeedsLayout];
+}
+
+- (void)pushUndo:(NSDictionary *)positions {
+    if (positions == nil) return;
+    [self.undoStack addObject:positions];
+    if (self.undoStack.count > 30) [self.undoStack removeObjectAtIndex:0];
+    [self.redoStack removeAllObjects];
+}
+
+- (void)undoTapped {
+    if (self.undoStack.count == 0) return;
+    NSDictionary *previous = self.undoStack.lastObject;
+    [self.undoStack removeLastObject];
+    [self.redoStack addObject:[NCLRKeymap.shared.positions copy]];
+    NCLRKeymap.shared.positions = [previous mutableCopy];
+    [NCLRKeymap.shared save];
+    [self.view setNeedsLayout];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+}
+
+- (void)redoTapped {
+    if (self.redoStack.count == 0) return;
+    NSDictionary *next = self.redoStack.lastObject;
+    [self.redoStack removeLastObject];
+    [self.undoStack addObject:[NCLRKeymap.shared.positions copy]];
+    NCLRKeymap.shared.positions = [next mutableCopy];
+    [NCLRKeymap.shared save];
+    [self.view setNeedsLayout];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
 }
 
 - (void)toggleGrid {
@@ -3355,6 +3441,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
 @property (nonatomic, strong) UILabel *accountAvatarLabel;
 @property (nonatomic, strong) UIImageView *accountAvatarImage;
 @property (nonatomic, assign) NSInteger page;
+@property (nonatomic, assign) NSInteger initialPage;
 @property (nonatomic, assign) BOOL compactLayout;
 @property (nonatomic, strong) UIScrollView *navScroll;
 @property (nonatomic, strong) UIStackView *navStack;
@@ -3380,7 +3467,8 @@ static NSString *NCLRSHA1Hex(NSData *data) {
 
     self.sidebar = [[UIView alloc] init];
     self.sidebar.translatesAutoresizingMaskIntoConstraints = NO;
-    self.sidebar.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 0.88);
+    self.sidebar.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 0.42);
+    NCLRAddBlur(self.sidebar, NCLRDarkMode);
     self.sidebar.layer.borderWidth = 1.0;
     self.sidebar.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.06].CGColor;
     [self.view addSubview:self.sidebar];
@@ -3393,7 +3481,8 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     // horizontal navigation bar instead of the 228 pt sidebar.
     self.compactBar = [[UIView alloc] init];
     self.compactBar.translatesAutoresizingMaskIntoConstraints = NO;
-    self.compactBar.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 0.96);
+    self.compactBar.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 0.45);
+    NCLRAddBlur(self.compactBar, NCLRDarkMode);
     self.compactBar.layer.borderWidth = 1.0;
     self.compactBar.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.06].CGColor;
     [self.view addSubview:self.compactBar];
@@ -3638,7 +3727,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
                                              selector:@selector(refreshAccount)
                                                  name:NCLRAvatarUpdatedNotification
                                                object:nil];
-    [self showPage:0];
+    [self showPage:self.initialPage];
 }
 
 - (UILabel *)label:(NSString *)text size:(CGFloat)size weight:(UIFontWeight)weight color:(UIColor *)color {
@@ -3807,6 +3896,10 @@ static NSString *NCLRSHA1Hex(NSData *data) {
         [controller.view.bottomAnchor constraintEqualToAnchor:self.content.bottomAnchor],
     ]];
     [controller didMoveToParentViewController:self];
+    controller.view.alpha = 0.0;
+    [UIView animateWithDuration:0.22 delay:0.0 options:UIViewAnimationOptionCurveEaseOut
+                     animations:^{ controller.view.alpha = 1.0; }
+                     completion:nil];
     [self refreshAccount];
 }
 
