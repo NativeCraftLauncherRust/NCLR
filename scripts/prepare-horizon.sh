@@ -10,12 +10,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HORIZON_DIR="${HORIZON_DIR:-$ROOT/../horizon}"
 PIN="69ab572dbd1bf2f2924a424f791014e09d9d0b50"
 
-if [ ! -d "$HORIZON_DIR/.git" ]; then
-    git clone --depth 1 https://github.com/horizon-rust/horizon.git "$HORIZON_DIR"
+ARCHIVE="$ROOT/vendor/horizon-69ab572.tar.gz"
+if [ ! -d "$HORIZON_DIR/crates/horizon-core" ]; then
+    rm -rf "$HORIZON_DIR"
+    mkdir -p "$HORIZON_DIR"
+    tar -xzf "$ARCHIVE" -C "$HORIZON_DIR"
 fi
-
-git -C "$HORIZON_DIR" fetch --depth 1 origin "$PIN"
-git -C "$HORIZON_DIR" checkout --force "$PIN"
 
 # The port crate plus the four crates it depends on.
 rm -rf "$HORIZON_DIR/crates/horizon-ios"
@@ -63,9 +63,9 @@ elif 'winit = { path = "third_party/winit" }' not in text:
 workspace.write_text(text)
 PY
 
-if git -C "$HORIZON_DIR" apply --check "$ROOT/patches/ios-all.patch"; then
-    git -C "$HORIZON_DIR" apply "$ROOT/patches/ios-all.patch"
-elif git -C "$HORIZON_DIR" apply --reverse --check "$ROOT/patches/ios-all.patch"; then
+if (cd "$HORIZON_DIR" && git apply --check "$ROOT/patches/ios-all.patch"); then
+    (cd "$HORIZON_DIR" && git apply "$ROOT/patches/ios-all.patch")
+elif (cd "$HORIZON_DIR" && git apply --reverse --check "$ROOT/patches/ios-all.patch"); then
     echo "iOS patch already applied"
 else
     echo "iOS patch does not apply to $PIN" >&2
