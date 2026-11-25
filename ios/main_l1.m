@@ -286,6 +286,17 @@ static NSString *NCLRModIdentifier(NSString *path) {
 }
 
 
+@interface NCLRDisplayCadence : NSObject
+- (void)displayTick:(CADisplayLink *)link;
+@end
+
+@implementation NCLRDisplayCadence
+- (void)displayTick:(CADisplayLink *)link {
+    // Keep the iOS display cadence request active. Metal presents via VSync.
+    (void)link;
+}
+@end
+
 static NSString *NCLRModSwitchesPath(void) {
     return [NCLRDocuments() stringByAppendingPathComponent:@"horizon-mods.txt"];
 }
@@ -1952,6 +1963,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     }
 
     [self writePerformanceOptions];
+    [NCLRKeymap.shared save];
     NSString *game = NCLRDocuments();
     NCLRCreateDirectory(game);
     NSString *sessionPath = [game stringByAppendingPathComponent:@".nclr-session.json"];
@@ -1996,7 +2008,13 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     launcherWindow.userInteractionEnabled = NO;
     [launcherWindow resignKeyWindow];
     launcherWindow.hidden = YES;
+    NCLRDisplayCadence *cadence = [NCLRDisplayCadence new];
+    CADisplayLink *display = [CADisplayLink displayLinkWithTarget:cadence selector:@selector(displayTick:)];
+    display.preferredFrameRateRange = highRefresh ? CAFrameRateRangeMake(80, 120, 120)
+                                                 : CAFrameRateRangeMake(30, 60, 60);
+    [display addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
+    [display invalidate];
     unsetenv("HORIZON_SESSION_FILE");
     [files removeItemAtPath:sessionPath error:nil];
     [audio setActive:NO error:nil];

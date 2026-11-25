@@ -326,7 +326,7 @@ index 550d63c..7c07782 100644
          let emote = settings.extras.emote_key.clone();
          settings.keys.set("key.emote", &emote);
 diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-render/src/touch.rs
-index b38a955..78bea52 100644
+index b38a955..e09d600 100644
 --- a/crates/horizon-client-render/src/touch.rs
 +++ b/crates/horizon-client-render/src/touch.rs
 @@ -61,11 +61,22 @@ enum Role {
@@ -423,7 +423,7 @@ index b38a955..78bea52 100644
              Some(Control::Move) if !self.moving() => Role::Move(if self.dynamic_joystick() {
                  point
              } else {
-@@ -454,8 +488,13 @@ impl TouchControls {
+@@ -454,8 +488,14 @@ impl TouchControls {
                  self.perspective_requested = true;
                  Role::Ignore
              }
@@ -434,11 +434,12 @@ index b38a955..78bea52 100644
              Some(Control::Sneak)
 -                if self.settings.mode == Mode::Dpad
 +                if !toggle
++                    && !self.settings.launcher_trigger_modes
 +                    && self.settings.mode == Mode::Dpad
                      && !self.vertical_movement
                      && !self.swimming
                      && !self.mounted =>
-@@ -486,7 +525,7 @@ impl TouchControls {
+@@ -486,7 +526,7 @@ impl TouchControls {
                  committed: false,
              },
          };
@@ -447,7 +448,7 @@ index b38a955..78bea52 100644
          // Latch the press so a tap shorter than a tick still reaches the game.
          match role {
              Role::Button(Button::LeftTrigger) => self.pending.triggers[0] = 1.0,
-@@ -499,6 +538,7 @@ impl TouchControls {
+@@ -499,6 +539,7 @@ impl TouchControls {
      /// Lets go of everything: fingers, latched presses, requests.
      pub fn clear(&mut self) {
          self.fingers.clear();
@@ -455,7 +456,7 @@ index b38a955..78bea52 100644
          self.last_sneak_tap = None;
          self.sprint_latched = false;
          self.pending = PadState::default();
-@@ -509,6 +549,7 @@ impl TouchControls {
+@@ -509,6 +550,7 @@ impl TouchControls {
          self.holding_use = false;
          self.holding = false;
          self.chat_requested = false;
@@ -463,7 +464,7 @@ index b38a955..78bea52 100644
          self.settings_requested = false;
          self.debug_requested = false;
          self.perspective_requested = false;
-@@ -517,6 +558,11 @@ impl TouchControls {
+@@ -517,6 +559,11 @@ impl TouchControls {
      /// A short world tap since the last call, and whether it uses the item.
      /// A tap never holds attack or use into the next tick: the game acts once
      /// at [`Self::aim`].
@@ -475,7 +476,7 @@ index b38a955..78bea52 100644
      pub fn take_tap(&mut self) -> Option<bool> {
          self.pending_tap.take()
      }
-@@ -588,6 +634,17 @@ impl TouchControls {
+@@ -588,6 +635,17 @@ impl TouchControls {
      /// The controller state the fingers hold right now.
      pub fn state(&self) -> PadState {
          let mut state = PadState::default();
@@ -493,7 +494,7 @@ index b38a955..78bea52 100644
          if self.settings.sprint_toggle && self.settings.sprint_button && self.sprint_latched {
              state.set(Button::LeftStick, true);
          }
-@@ -595,21 +652,37 @@ impl TouchControls {
+@@ -595,21 +653,37 @@ impl TouchControls {
              match role {
                  Role::Move(anchor) => {
                      let radius = self.placement(Control::Move).size / 2.0;
@@ -726,7 +727,7 @@ index 9e8d8e4..5bef143 100644
  fn mining_radius(radius: f32, progress: f32) -> f32 {
      if progress.is_finite() {
 diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
-index e57f2d8..e3e3d9f 100644
+index e57f2d8..333f894 100644
 --- a/crates/horizon-client-render/src/touch/layout.rs
 +++ b/crates/horizon-client-render/src/touch/layout.rs
 @@ -58,13 +58,14 @@ pub enum Control {
@@ -785,7 +786,7 @@ index e57f2d8..e3e3d9f 100644
          }
      }
  }
-@@ -170,6 +197,15 @@ pub struct Settings {
+@@ -170,6 +197,17 @@ pub struct Settings {
      pub layouts: [[Placement; CONTROLS]; 3],
      /// Camera turn speed for look drags; scales both axes.
      pub sensitivity: f32,
@@ -798,10 +799,12 @@ index e57f2d8..e3e3d9f 100644
 +    /// Touch buttons that keep their pressed state after lifting.
 +    #[serde(default)]
 +    pub toggle_buttons: Vec<usize>,
++    #[serde(default)]
++    pub launcher_trigger_modes: bool,
      /// Extra scale on the yaw (left and right) turn.
      pub sensitivity_horizontal: f32,
      /// Extra scale on the pitch (up and down) turn.
-@@ -214,6 +250,7 @@ impl Default for Settings {
+@@ -214,6 +252,7 @@ impl Default for Settings {
              Placement::new(0.58, 0.055, 0.075), // Perspective
              Placement::new(0.80, 0.96, 0.075),  // Offhand
              Placement::new(0.92, 0.36, 0.12),   // Shield
@@ -809,7 +812,7 @@ index e57f2d8..e3e3d9f 100644
          ];
          let mut layouts = [row; 3];
          // The D-pad sits where the joystick does; sneak becomes its centre.
-@@ -231,6 +268,10 @@ impl Default for Settings {
+@@ -231,6 +270,11 @@ impl Default for Settings {
              button_visibility: [FOLLOW_SCHEME; CONTROLS],
              layouts,
              sensitivity: 1.0,
@@ -817,10 +820,11 @@ index e57f2d8..e3e3d9f 100644
 +            button_style: 0,
 +            icon_labels: false,
 +            toggle_buttons: Vec::new(),
++            launcher_trigger_modes: false,
              sensitivity_horizontal: 1.0,
              sensitivity_vertical: 1.0,
              sprint_toggle: false,
-@@ -264,6 +305,106 @@ impl Settings {
+@@ -264,6 +308,107 @@ impl Settings {
          std::fs::rename(temp, path)
      }
  
@@ -880,6 +884,7 @@ index e57f2d8..e3e3d9f 100644
 +            self.icon_labels = icons;
 +        }
 +        if let Some(modes) = json.get("triggerModes").and_then(|v| v.as_object()) {
++            self.launcher_trigger_modes = true;
 +            self.sprint_toggle = false;
 +            self.toggle_buttons = modes.iter().filter_map(|(id, mode)| {
 +                let control = Control::from_launcher_id(id)?;
@@ -927,7 +932,7 @@ index e57f2d8..e3e3d9f 100644
      pub fn sanitize(&mut self) {
          // Only the D-pad has a split variant (see `Mode::SCHEMES`).
          if self.mode != Mode::Dpad {
-@@ -284,7 +425,9 @@ impl Settings {
+@@ -284,7 +429,9 @@ impl Settings {
          ] {
              *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
          }
@@ -1117,19 +1122,21 @@ index 22e0915..22feefb 100644
              && let Some(window) = &self.window
          {
 diff --git a/crates/horizon-client/src/game/interface/pad/mod.rs b/crates/horizon-client/src/game/interface/pad/mod.rs
-index 026382e..c04f78b 100644
+index 026382e..7407b0e 100644
 --- a/crates/horizon-client/src/game/interface/pad/mod.rs
 +++ b/crates/horizon-client/src/game/interface/pad/mod.rs
-@@ -56,6 +56,8 @@ pub(super) struct Pads {
+@@ -56,6 +56,10 @@ pub(super) struct Pads {
      devices: hardware::Devices,
      /// The virtual pad of `horizon-ctl pad`.
      injected: PadState,
 +    /// The virtual pad came from the on-screen touch controls, not a pad.
 +    touch_input: bool,
++    /// The sneak press came from the touch settings, which already latch it if requested.
++    touch_sneak: bool,
      /// The virtual pad was in use at the last poll.
      virtual_input: bool,
      /// Buttons a `pad ... tap` releases at the next poll.
-@@ -282,6 +284,11 @@ impl Pads {
+@@ -282,6 +286,11 @@ impl Pads {
          edges
      }
  
@@ -1141,7 +1148,7 @@ index 026382e..c04f78b 100644
      /// A replay's pad button, in place of `pad`'s line.
      pub(super) fn inject_button(&mut self, button: Button, down: bool) {
          self.injected.set(button, down);
-@@ -432,6 +439,12 @@ impl Game<'_> {
+@@ -432,6 +441,12 @@ impl Game<'_> {
          self.ui.options.pad_glyphs = Glyphs::of(&self.settings.controller, self.pad.style);
          self.ui.options.pad_driving = self.pad.in_use && self.pad_focus_mode();
          let mut state = hardware.merge(&self.pad.injected);
@@ -1154,7 +1161,7 @@ index 026382e..c04f78b 100644
          let activity = self.pad.activity.observe(&state, &self.settings.controller);
          for (i, (stick, deadzone)) in [
              (&mut state.left, self.settings.controller.move_deadzone),
-@@ -453,7 +466,7 @@ impl Game<'_> {
+@@ -453,7 +468,7 @@ impl Game<'_> {
          }
          let threshold = self.settings.controller.trigger_threshold;
          let edges = self.pad.edges.update(&state, threshold);
@@ -1163,6 +1170,35 @@ index 026382e..c04f78b 100644
              self.last_input = Instant::now();
              self.pad.in_use = true;
              self.pad.keyboard_took_over = false;
+@@ -667,6 +682,28 @@ impl Game<'_> {
+                 }
+                 Ok(())
+             }
++            Route::Sneak
++                if (down && self.pad.touch_input && self.pad.injected.held(Button::RightStick))
++                    || (!down && self.pad.touch_sneak) =>
++            {
++                self.pad.touch_sneak = down;
++                let screen_open = self.screen != Screen::Playing || self.title.is_some();
++                let action = if down {
++                    horizon_client::debug_keys::KeyAction::Press
++                } else {
++                    horizon_client::debug_keys::KeyAction::Release
++                };
++                self.toggles.key(SNEAK, action, screen_open, false);
++                self.sync_toggle(SNEAK);
++                if down && self.keys.held(Action::Sneak) {
++                    self.keys.press(KeyCode::ShiftLeft, Source::Pad);
++                    self.keys.release(&KeyCode::ShiftLeft, Source::Keyboard);
++                }
++                if down {
++                    self.key_pressed(KeyCode::ShiftLeft, KeyCode::ShiftLeft)?;
++                }
++                Ok(())
++            }
+             Route::Sneak
+                 if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
+             {
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
 index 16664ff..880b3bc 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
