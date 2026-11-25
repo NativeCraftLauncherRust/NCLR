@@ -22,6 +22,8 @@ jobs:
         env:
           HORIZON_DIR: ${{ runner.temp }}/horizon
         run: bash scripts/prepare-horizon.sh
+      - name: Check launcher against the iOS SDK
+        run: xcrun --sdk iphoneos clang -arch arm64 -mios-version-min=15.0 -fobjc-arc -fsyntax-only ios/main_l1.m
       - name: Build iOS static library
         env:
           HORIZON_DIR: ${{ runner.temp }}/horizon

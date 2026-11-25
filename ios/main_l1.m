@@ -3096,7 +3096,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [UIAction actionWithTitle:@"导出布局" image:[UIImage systemImageNamed:@"square.and.arrow.up"] identifier:nil
                          handler:^(__kindof UIAction *action) { [weakEditor exportKeymap]; }],
         [UIAction actionWithTitle:@"重置布局" image:[UIImage systemImageNamed:@"arrow.counterclockwise"] identifier:nil
-                         discoverabilityTitle:nil attributes:UIMenuElementAttributesDestructive state:UIMenuElementStateOff
                          handler:^(__kindof UIAction *action) { [weakEditor resetLayoutTapped]; }],
     ]];
     more.showsMenuAsPrimaryAction = YES;
