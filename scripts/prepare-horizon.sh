@@ -10,11 +10,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HORIZON_DIR="${HORIZON_DIR:-$ROOT/../horizon}"
 PIN="69ab572dbd1bf2f2924a424f791014e09d9d0b50"
 
-ARCHIVE="$ROOT/vendor/horizon-69ab572.tar.gz"
+ARCHIVE_PARTS="$ROOT/vendor/horizon-69ab572.tar.gz"
 if [ ! -d "$HORIZON_DIR/crates/horizon-core" ]; then
     rm -rf "$HORIZON_DIR"
     mkdir -p "$HORIZON_DIR"
-    tar -xzf "$ARCHIVE" -C "$HORIZON_DIR"
+    cat "$ARCHIVE_PARTS".?? | tar -xzf - -C "$HORIZON_DIR"
 fi
 
 # The port crate plus the four crates it depends on.
