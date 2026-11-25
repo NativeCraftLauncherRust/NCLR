@@ -8,10 +8,35 @@
 
 extern int horizon_ios_run(const char *resources, const char *game_dir);
 @class NCLRResourcePreparer;
+static NSString *const NCLRPrepareProgressNotification = @"NCLRPrepareProgress";
+static NSString *const NCLRPrepareFinishedNotification = @"NCLRPrepareFinished";
+static NSString *const NCLRAvatarUpdatedNotification = @"NCLRAvatarUpdated";
+
+static void NCLRLoadRemoteAvatar(NSString *url, UIImageView *imageView, UILabel *fallback) {
+    if (url.length == 0) {
+        imageView.hidden = YES;
+        fallback.hidden = NO;
+        return;
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:url]];
+        UIImage *image = data.length > 0 ? [UIImage imageWithData:data] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (image != nil) {
+                imageView.image = image;
+                imageView.hidden = NO;
+                fallback.hidden = YES;
+            }
+        });
+    });
+}
 @interface NCLRResourcePreparer : NSObject
 + (instancetype)shared;
 - (void)prepareWithProgress:(void (^)(NSString *line))progress
                  completion:(void (^)(NSString *error))completion;
+@property (nonatomic, copy) NSString *lastLine;
+@property (nonatomic, assign) float progressValue;
+@property (nonatomic, assign) BOOL preparing;
 @end
 extern const char *horizon_ios_assemble(const char *bundle, const char *client_jar,
                                         const char *index, const char *store, const char *out);
@@ -775,6 +800,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, copy) NSString *token;
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, assign) BOOL developerPremium;
+@property (nonatomic, copy) NSString *avatarURL;
 @property (nonatomic, strong) ASWebAuthenticationSession *session;
 @property (nonatomic, weak) UIViewController *presenter;
 @property (nonatomic, strong) SFSafariViewController *authSafari;
@@ -1061,6 +1087,32 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     }];
 }
 
+- (void)fetchXboxAvatarWithUHS:(NSString *)uhs token:(NSString *)xstsToken {
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:
+        @"https://profile.xboxlive.com/users/me/profile/settings?settings=GameDisplayPicRaw"]];
+    [request setValue:[NSString stringWithFormat:@"XBL3.0 x=%@;%@", uhs, xstsToken]
+   forHTTPHeaderField:@"Authorization"];
+    [request setValue:@"3" forHTTPHeaderField:@"x-xbl-contract-version"];
+    [[NSURLSession.sharedSession dataTaskWithRequest:request
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            if (data.length == 0) return;
+            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            NSArray *users = json[@"profileUsers"];
+            NSArray *settings = users.count > 0 ? users.firstObject[@"settings"] : nil;
+            for (NSDictionary *setting in settings) {
+                if ([setting[@"id"] isEqualToString:@"GameDisplayPicRaw"]) {
+                    NSString *url = NCLRString(setting[@"value"]);
+                    if (url.length > 0) {
+                        self.avatarURL = url;
+                        [[NSNotificationCenter defaultCenter] postNotificationName:NCLRAvatarUpdatedNotification
+                                                                            object:self];
+                    }
+                    break;
+                }
+            }
+        }] resume];
+}
+
 - (void)exchangeMicrosoftToken:(NSString *)microsoftToken completion:(NCLRAuthCompletion)completion {
     NSDictionary *xblBody = @{
         @"Properties" : @{
@@ -1097,6 +1149,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                 dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, nil, message); });
                 return;
             }
+            [weakSelf fetchXboxAvatarWithUHS:uhs token:xstsToken];
             NSDictionary *mcBody = @{
                 @"identityToken" : [NSString stringWithFormat:@"XBL3.0 x=%@;%@", uhs, xstsToken],
             };
@@ -1547,29 +1600,24 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 }
 
 - (void)prepareResources {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"首次启动准备"
-                                                                   message:@"正在从 Mojang 官方源下载 26.3 并组装…"
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [self presentViewController:alert animated:YES completion:nil];
-    [[NCLRResourcePreparer shared] prepareWithProgress:^(NSString *line) {
-        alert.message = line;
-    } completion:^(NSString *error) {
-        [alert dismissViewControllerAnimated:YES completion:^{
-            if (error.length > 0) {
-                UIAlertController *fail = [UIAlertController alertControllerWithTitle:@"资源准备失败"
-                                                                               message:error
-                                                                        preferredStyle:UIAlertControllerStyleAlert];
-                [fail addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-                [self presentViewController:fail animated:YES completion:nil];
-            } else {
-                [self launchTapped];
-            }
-        }];
+    [[NCLRResourcePreparer shared] prepareWithProgress:nil completion:^(NSString *error) {
+        if (error.length > 0) {
+            UIAlertController *fail = [UIAlertController alertControllerWithTitle:@"资源准备失败"
+                                                                           message:error
+                                                                    preferredStyle:UIAlertControllerStyleAlert];
+            [fail addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:fail animated:YES completion:nil];
+        } else {
+            [self launchTapped];
+        }
     }];
 }
 @end
 
 @interface NCLRVersionsController : NCLRPageController
+@property (nonatomic, strong) UIView *prepareCard;
+@property (nonatomic, strong) UIProgressView *prepareBar;
+@property (nonatomic, strong) UILabel *prepareLabel;
 @end
 
 @implementation NCLRVersionsController
@@ -1604,10 +1652,65 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         ]];
         [self.stack addArrangedSubview:card];
     }
+    UIView *prepare = [self card];
+    prepare.hidden = YES;
+    UILabel *prepareLabel = [self label:@"准备游戏资源"
+                                  size:11.0 weight:UIFontWeightSemibold
+                                 color:NCLRColor(0.92, 0.92, 0.92, 1.0)];
+    UIProgressView *prepareBar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    prepareBar.translatesAutoresizingMaskIntoConstraints = NO;
+    prepareBar.progressTintColor = NCLRColor(0.25, 0.75, 0.48, 1.0);
+    prepareBar.trackTintColor = [UIColor colorWithWhite:1.0 alpha:0.10];
+    [prepare addSubview:prepareLabel];
+    [prepare addSubview:prepareBar];
+    [NSLayoutConstraint activateConstraints:@[
+        [prepareLabel.leadingAnchor constraintEqualToAnchor:prepare.leadingAnchor constant:16.0],
+        [prepareLabel.trailingAnchor constraintEqualToAnchor:prepare.trailingAnchor constant:-16.0],
+        [prepareLabel.topAnchor constraintEqualToAnchor:prepare.topAnchor constant:13.0],
+        [prepareBar.leadingAnchor constraintEqualToAnchor:prepare.leadingAnchor constant:16.0],
+        [prepareBar.trailingAnchor constraintEqualToAnchor:prepare.trailingAnchor constant:-16.0],
+        [prepareBar.topAnchor constraintEqualToAnchor:prepareLabel.bottomAnchor constant:9.0],
+        [prepareBar.bottomAnchor constraintEqualToAnchor:prepare.bottomAnchor constant:-14.0],
+    ]];
+    self.prepareCard = prepare;
+    self.prepareLabel = prepareLabel;
+    self.prepareBar = prepareBar;
+    [self.stack addArrangedSubview:prepare];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(prepareProgress:)
+                                                 name:NCLRPrepareProgressNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(prepareFinished:)
+                                                 name:NCLRPrepareFinishedNotification
+                                               object:nil];
+    if (NCLRResourcePreparer.shared.preparing) {
+        prepare.hidden = NO;
+        prepareLabel.text = NCLRResourcePreparer.shared.lastLine ?: @"准备游戏资源";
+        prepareBar.progress = NCLRResourcePreparer.shared.progressValue;
+    }
+
     UILabel *note = [self label:@"版本配置会保存在本机。实际下载、校验和游戏启动由游戏端完成；启动器不绑定引擎生命周期。"
                             size:10.0 weight:UIFontWeightRegular
                            color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     [self.stack addArrangedSubview:note];
+}
+
+- (void)prepareProgress:(NSNotification *)note {
+    self.prepareCard.hidden = NO;
+    self.prepareLabel.text = note.userInfo[@"line"] ?: @"准备游戏资源";
+    self.prepareBar.progress = NCLRResourcePreparer.shared.progressValue;
+}
+
+- (void)prepareFinished:(NSNotification *)note {
+    self.prepareBar.progress = 1.0;
+    self.prepareLabel.text = @"资源准备完成";
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ self.prepareCard.hidden = YES; });
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)addVersion {
@@ -1916,6 +2019,19 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     avatar.layer.cornerRadius = 23.0;
     avatar.layer.masksToBounds = YES;
     avatar.translatesAutoresizingMaskIntoConstraints = NO;
+    UIImageView *avatarImage = [[UIImageView alloc] init];
+    avatarImage.translatesAutoresizingMaskIntoConstraints = NO;
+    avatarImage.contentMode = UIViewContentModeScaleAspectFill;
+    avatarImage.layer.cornerRadius = 23.0;
+    avatarImage.layer.masksToBounds = YES;
+    avatarImage.hidden = YES;
+    [account addSubview:avatarImage];
+    NCLRLoadRemoteAvatar(auth.avatarURL, avatarImage, avatar);
+    [[NSNotificationCenter defaultCenter] addObserverForName:NCLRAvatarUpdatedNotification
+                                                      object:nil queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification *note) {
+        NCLRLoadRemoteAvatar(NCLRAuth.shared.avatarURL, avatarImage, avatar);
+    }];
     NSString *nameText = premium ? (auth.name ?: @"正版用户") : @"未登录";
     UILabel *name = [self label:nameText
                             size:20.0 weight:UIFontWeightSemibold
@@ -1930,6 +2046,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     UIButton *login = [self button:loginText
                             action:@selector(loginTapped) primary:auth.token.length == 0];
     [account addSubview:avatar];
+    [account addSubview:avatarImage];
     [account addSubview:name];
     [account addSubview:detail];
     [account addSubview:login];
@@ -1938,6 +2055,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         [avatar.topAnchor constraintEqualToAnchor:account.topAnchor constant:16.0],
         [avatar.widthAnchor constraintEqualToConstant:46.0],
         [avatar.heightAnchor constraintEqualToConstant:46.0],
+        [avatarImage.leadingAnchor constraintEqualToAnchor:avatar.leadingAnchor],
+        [avatarImage.topAnchor constraintEqualToAnchor:avatar.topAnchor],
+        [avatarImage.widthAnchor constraintEqualToAnchor:avatar.widthAnchor],
+        [avatarImage.heightAnchor constraintEqualToAnchor:avatar.heightAnchor],
         [name.leadingAnchor constraintEqualToAnchor:avatar.trailingAnchor constant:12.0],
         [name.topAnchor constraintEqualToAnchor:avatar.topAnchor constant:1.0],
         [name.trailingAnchor constraintEqualToAnchor:account.trailingAnchor constant:-16.0],
@@ -3064,7 +3185,29 @@ static NSString *NCLRSHA1Hex(NSData *data) {
 - (void)prepareWithProgress:(void (^)(NSString *))progress
                  completion:(void (^)(NSString *))completion {
     dispatch_async(_queue, ^{
+        self.preparing = YES;
         void (^report)(NSString *) = ^(NSString *line) {
+            self.lastLine = line;
+            NSInteger downloaded = 0, total = 0;
+            NSRange slash = [line rangeOfString:@"/"];
+            if ([line containsString:@"下载资源"] && slash.location != NSNotFound) {
+                NSString *left = [line substringToIndex:slash.location];
+                NSString *right = [line substringFromIndex:slash.location + 1];
+                NSCharacterSet *digits = NSCharacterSet.decimalDigitCharacterSet;
+                NSRange leftRange = [left rangeOfCharacterFromSet:digits options:NSBackwardsSearch];
+                NSRange rightRange = [right rangeOfCharacterFromSet:digits];
+                if (leftRange.location != NSNotFound && rightRange.location != NSNotFound) {
+                    downloaded = [[left substringFromIndex:leftRange.location] integerValue];
+                    total = [[right substringFromIndex:rightRange.location] integerValue];
+                }
+            }
+            if (total > 0) self.progressValue = MIN(0.9, 0.05 + 0.85 * (float)downloaded / (float)total);
+            else if ([line containsString:@"组装"]) self.progressValue = 0.93;
+            else if ([line containsString:@"音效"]) self.progressValue = 0.96;
+            else self.progressValue = MAX(self.progressValue, 0.03);
+            [[NSNotificationCenter defaultCenter] postNotificationName:NCLRPrepareProgressNotification
+                                                                object:self
+                                                              userInfo:@{@"line": line ?: @""}];
             dispatch_async(dispatch_get_main_queue(), ^{ if (progress) progress(line); });
         };
         NSString *cache = [NCLRDocuments() stringByAppendingPathComponent:@".nclr-cache"];
@@ -3192,6 +3335,9 @@ static NSString *NCLRSHA1Hex(NSData *data) {
             return;
         }
         report(@"资源准备完成");
+        self.preparing = NO;
+        self.progressValue = 1.0;
+        [[NSNotificationCenter defaultCenter] postNotificationName:NCLRPrepareFinishedNotification object:self];
         completion(nil);
     });
 }
@@ -3206,6 +3352,8 @@ static NSString *NCLRSHA1Hex(NSData *data) {
 @property (nonatomic, strong) NSArray *regularConstraints;
 @property (nonatomic, strong) NSArray *compactConstraints;
 @property (nonatomic, strong) UILabel *accountLabel;
+@property (nonatomic, strong) UILabel *accountAvatarLabel;
+@property (nonatomic, strong) UIImageView *accountAvatarImage;
 @property (nonatomic, assign) NSInteger page;
 @property (nonatomic, assign) BOOL compactLayout;
 @property (nonatomic, strong) UIScrollView *navScroll;
@@ -3256,7 +3404,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     compactNav.translatesAutoresizingMaskIntoConstraints = NO;
     [self.compactBar addSubview:compactNav];
     NSMutableArray *compact = [NSMutableArray array];
-    NSArray *compactNames = @[@"主页", @"版本", @"模组", @"光影", @"资源包", @"账号", @"设置"];
+    NSArray *compactNames = @[@"主页", @"版本", @"模组", @"光影", @"资源包", @"设置"];
     for (NSInteger i = 0; i < compactNames.count; i++) {
         UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
         button.tag = i;
@@ -3375,10 +3523,8 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     nav.distribution = UIStackViewDistributionFillEqually;
     nav.spacing = 2.0;
     nav.translatesAutoresizingMaskIntoConstraints = NO;
-    NSArray *names = @[@"主页", @"版本", @"模组", @"光影", @"资源包", @"账号", @"设置"];
-    NSArray *symbols = @[@"house.fill", @"square.stack.3d.up.fill", @"puzzlepiece.extension.fill",
-                         @"sun.max.fill", @"square.grid.2x2.fill",
-                         @"person.crop.circle.fill", @"gearshape.fill"];
+    NSArray *names = @[@"主页", @"版本", @"模组", @"光影", @"资源包", @"设置"];
+    NSArray *symbols = @[@"house.fill", @"square.stack.3d.up.fill", @"puzzlepiece.extension.fill", @"sun.max.fill", @"square.grid.2x2.fill", @"gearshape.fill"];
     NSMutableArray *buttons = [NSMutableArray array];
     for (NSInteger i = 0; i < names.count; i++) {
         UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -3426,6 +3572,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     account.layer.cornerRadius = 12.0;
     UILabel *avatar = [self label:@"N" size:15.0 weight:UIFontWeightBold
                             color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
+    self.accountAvatarLabel = avatar;
     avatar.textAlignment = NSTextAlignmentCenter;
     avatar.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06];
     avatar.layer.cornerRadius = 16.0;
@@ -3435,7 +3582,15 @@ static NSString *NCLRSHA1Hex(NSData *data) {
                               color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
     UILabel *accountDetail = [self label:@"Microsoft 账号" size:9.0 weight:UIFontWeightRegular
                                     color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
+    UIImageView *avatarImage = [[UIImageView alloc] init];
+    avatarImage.translatesAutoresizingMaskIntoConstraints = NO;
+    avatarImage.contentMode = UIViewContentModeScaleAspectFill;
+    avatarImage.layer.cornerRadius = 16.0;
+    avatarImage.layer.masksToBounds = YES;
+    avatarImage.hidden = YES;
+    self.accountAvatarImage = avatarImage;
     [account addSubview:avatar];
+    [account addSubview:avatarImage];
     [account addSubview:self.accountLabel];
     [account addSubview:accountDetail];
     [NSLayoutConstraint activateConstraints:@[
@@ -3443,6 +3598,10 @@ static NSString *NCLRSHA1Hex(NSData *data) {
         [avatar.topAnchor constraintEqualToAnchor:account.topAnchor constant:10.0],
         [avatar.widthAnchor constraintEqualToConstant:32.0],
         [avatar.heightAnchor constraintEqualToConstant:32.0],
+        [avatarImage.leadingAnchor constraintEqualToAnchor:avatar.leadingAnchor],
+        [avatarImage.topAnchor constraintEqualToAnchor:avatar.topAnchor],
+        [avatarImage.widthAnchor constraintEqualToAnchor:avatar.widthAnchor],
+        [avatarImage.heightAnchor constraintEqualToAnchor:avatar.heightAnchor],
         [self.accountLabel.leadingAnchor constraintEqualToAnchor:avatar.trailingAnchor constant:8.0],
         [self.accountLabel.topAnchor constraintEqualToAnchor:account.topAnchor constant:9.0],
         [self.accountLabel.trailingAnchor constraintEqualToAnchor:account.trailingAnchor constant:-8.0],
@@ -3475,6 +3634,10 @@ static NSString *NCLRSHA1Hex(NSData *data) {
         [account.heightAnchor constraintGreaterThanOrEqualToConstant:56.0],
     ]];
 
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(refreshAccount)
+                                                 name:NCLRAvatarUpdatedNotification
+                                               object:nil];
     [self showPage:0];
 }
 
@@ -3532,7 +3695,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
 }
 
 - (void)accountTapped {
-    [self showPage:5];
+    [self showPage:6];
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -3626,8 +3789,8 @@ static NSString *NCLRSHA1Hex(NSData *data) {
             controller = c;
             break;
         }
-        case 5: controller = [[NCLRAccountController alloc] init]; break;
-        case 6: controller = [[NCLRSettingsController alloc] init]; break;
+        case 5: controller = [[NCLRSettingsController alloc] init]; break;
+        case 6: controller = [[NCLRAccountController alloc] init]; break;
         default: controller = [[NCLRHomeController alloc] init]; break;
     }
     if ([controller isKindOfClass:[NCLRPageController class]]) {
@@ -3651,6 +3814,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     NCLRAuth *auth = NCLRAuth.shared;
     BOOL premium = auth.token.length > 0;
     self.accountLabel.text = premium ? (auth.name ?: @"正版用户") : @"未登录";
+    NCLRLoadRemoteAvatar(auth.avatarURL, self.accountAvatarImage, self.accountAvatarLabel);
 }
 @end
 
