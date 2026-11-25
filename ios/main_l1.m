@@ -300,7 +300,8 @@ static NSString *NCLRModIdentifier(NSString *path) {
 @end
 
 // Runs on the main queue. Rates are integrated using hardware timestamps.
-static CMMotionManager *NCLRStartGyro(UIWindowScene *scene, CGFloat sensitivity) {
+static CMMotionManager *NCLRStartGyro(UIWindowScene *scene, CGFloat sensitivity,
+                                       BOOL invertX, BOOL invertY) {
     CMMotionManager *motion = [CMMotionManager new];
     if (!motion.gyroAvailable) return nil;
     motion.gyroUpdateInterval = 1.0 / 120.0;
@@ -325,8 +326,9 @@ static CMMotionManager *NCLRStartGyro(UIWindowScene *scene, CGFloat sensitivity)
         if (fabs(yaw) < 0.012) yaw = 0;
         if (fabs(pitch) < 0.012) pitch = 0;
         if (yaw || pitch) {
-            horizon_ios_add_motion(direction * yaw * elapsed * sensitivity * radiansToMouseUnits,
-                                  direction * pitch * elapsed * sensitivity * radiansToMouseUnits);
+            double scale = direction * elapsed * sensitivity * radiansToMouseUnits;
+            horizon_ios_add_motion((invertX ? -yaw : yaw) * scale,
+                                   (invertY ? -pitch : pitch) * scale);
         }
     }];
     return motion;
@@ -394,6 +396,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 @property (nonatomic, assign) CGFloat sensitivity;
 @property (nonatomic, assign) BOOL gyroEnabled;
 @property (nonatomic, assign) CGFloat gyroSensitivity;
+@property (nonatomic, assign) BOOL gyroInvertX;
+@property (nonatomic, assign) BOOL gyroInvertY;
 @property (nonatomic, assign) CGFloat joystickDeadzone;
 @property (nonatomic, assign) BOOL sprintButton;
 @property (nonatomic, assign) NSInteger buttonStyle;
@@ -454,6 +458,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     self.sensitivity = 1.0;
     self.gyroEnabled = NO;
     self.gyroSensitivity = 1.0;
+    self.gyroInvertX = NO;
+    self.gyroInvertY = NO;
     self.joystickDeadzone = 0.16;
     self.sprintButton = YES;
     self.buttonStyle = 0;
@@ -513,6 +519,10 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     if ([joystickSprint isKindOfClass:[NSNumber class]]) self.joystickSprint = joystickSprint.boolValue;
     NSNumber *gyroEnabled = json[@"gyroEnabled"];
     if ([gyroEnabled isKindOfClass:NSNumber.class]) self.gyroEnabled = gyroEnabled.boolValue;
+    NSNumber *gyroInvertX = json[@"gyroInvertX"];
+    NSNumber *gyroInvertY = json[@"gyroInvertY"];
+    if ([gyroInvertX isKindOfClass:NSNumber.class]) self.gyroInvertX = gyroInvertX.boolValue;
+    if ([gyroInvertY isKindOfClass:NSNumber.class]) self.gyroInvertY = gyroInvertY.boolValue;
     NSNumber *gyroSensitivity = json[@"gyroSensitivity"];
     if ([gyroSensitivity isKindOfClass:NSNumber.class] && isfinite(gyroSensitivity.doubleValue)) {
         self.gyroSensitivity = MAX(0.25, MIN(2.5, gyroSensitivity.doubleValue));
@@ -670,6 +680,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"sensitivity" : @(self.sensitivity),
         @"gyroEnabled" : @(self.gyroEnabled),
         @"gyroSensitivity" : @(self.gyroSensitivity),
+        @"gyroInvertX" : @(self.gyroInvertX),
+        @"gyroInvertY" : @(self.gyroInvertY),
         @"joystickDeadzone" : @(self.joystickDeadzone),
         @"sprintButton" : @(self.sprintButton),
         @"buttonStyle" : @(self.buttonStyle),
@@ -2064,7 +2076,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [display addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
     NCLRKeymap *keymap = NCLRKeymap.shared;
     CMMotionManager *motion = keymap.gyroEnabled
-        ? NCLRStartGyro(launcherWindow.windowScene, keymap.gyroSensitivity) : nil;
+        ? NCLRStartGyro(launcherWindow.windowScene, keymap.gyroSensitivity,
+                        keymap.gyroInvertX, keymap.gyroInvertY) : nil;
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
     [motion stopGyroUpdates];
     [display invalidate];
@@ -2750,6 +2763,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @property (nonatomic, strong) UIView *editorInspector;
 @property (nonatomic, strong) NSLayoutConstraint *inspectorWidth;
 @property (nonatomic, strong) UISlider *gyroSlider;
+@property (nonatomic, strong) UISwitch *gyroInvertXSwitch;
+@property (nonatomic, strong) UISwitch *gyroInvertYSwitch;
 @property (nonatomic, strong) UILabel *gyroValue;
 @property (nonatomic, strong) UILabel *canvasStatus;
 @property (nonatomic, assign) BOOL canvasFullscreen;
@@ -3377,7 +3392,13 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[caption, self.gyroSlider, self.gyroValue]];
     row.alignment = UIStackViewAlignmentCenter;
     row.spacing = 10;
-    UIStackView *content = [[UIStackView alloc] initWithArrangedSubviews:@[header, row]];
+    self.gyroInvertXSwitch = [self gyroAxisSwitch:NCLRKeymap.shared.gyroInvertX
+                                          label:@"反转 X 轴（左右）" enabled:enabled.on];
+    self.gyroInvertYSwitch = [self gyroAxisSwitch:NCLRKeymap.shared.gyroInvertY
+                                          label:@"反转 Y 轴（上下）" enabled:enabled.on];
+    UIStackView *invertXRow = [self gyroAxisRow:self.gyroInvertXSwitch];
+    UIStackView *invertYRow = [self gyroAxisRow:self.gyroInvertYSwitch];
+    UIStackView *content = [[UIStackView alloc] initWithArrangedSubviews:@[header, row, invertXRow, invertYRow]];
     content.axis = UILayoutConstraintAxisVertical;
     content.spacing = 5;
     content.translatesAutoresizingMaskIntoConstraints = NO;
@@ -3395,14 +3416,45 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     if (!motion.gyroAvailable) {
         enabled.enabled = NO;
         self.gyroSlider.enabled = NO;
+        self.gyroInvertXSwitch.enabled = NO;
+        self.gyroInvertYSwitch.enabled = NO;
         title.text = @"此设备不支持陀螺仪";
     }
     return card;
 }
 
+- (UISwitch *)gyroAxisSwitch:(BOOL)on label:(NSString *)label enabled:(BOOL)enabled {
+    UISwitch *toggle = [[UISwitch alloc] init];
+    toggle.on = on;
+    toggle.enabled = enabled;
+    toggle.onTintColor = NCLRAccent();
+    toggle.accessibilityLabel = label;
+    [toggle addTarget:self action:@selector(gyroAxesChanged) forControlEvents:UIControlEventValueChanged];
+    return toggle;
+}
+
+- (UIStackView *)gyroAxisRow:(UISwitch *)toggle {
+    UILabel *label = [self label:toggle.accessibilityLabel size:12 weight:UIFontWeightMedium
+                            color:NCLRColor(0.76, 0.76, 0.76, 1)];
+    label.isAccessibilityElement = NO;
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[label, [UIView new], toggle]];
+    row.alignment = UIStackViewAlignmentCenter;
+    row.spacing = 10;
+    return row;
+}
+
+- (void)gyroAxesChanged {
+    NCLRKeymap *keymap = NCLRKeymap.shared;
+    keymap.gyroInvertX = self.gyroInvertXSwitch.on;
+    keymap.gyroInvertY = self.gyroInvertYSwitch.on;
+    [keymap save];
+}
+
 - (void)gyroToggled:(UISwitch *)sender {
     NCLRKeymap.shared.gyroEnabled = sender.on;
     self.gyroSlider.enabled = sender.on;
+    self.gyroInvertXSwitch.enabled = sender.on;
+    self.gyroInvertYSwitch.enabled = sender.on;
     [NCLRKeymap.shared save];
 }
 
