@@ -326,13 +326,16 @@ index 550d63c..7c07782 100644
          let emote = settings.extras.emote_key.clone();
          settings.keys.set("key.emote", &emote);
 diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-render/src/touch.rs
-index b38a955..e09d600 100644
+index b38a955..a105b01 100644
 --- a/crates/horizon-client-render/src/touch.rs
 +++ b/crates/horizon-client-render/src/touch.rs
-@@ -61,11 +61,22 @@ enum Role {
+@@ -59,6 +59,17 @@ enum Role {
+     Shield,
+     /// Holds a controller button.
      Button(Button),
- }
- 
++    Extra(usize),
++}
++
 +/// A control's touch area, with a little slop so a finger near the rim
 +/// still presses it. The drawn disc stays the placement's size.
 +fn hit(rect: [f32; 4], point: [f32; 2]) -> bool {
@@ -341,18 +344,19 @@ index b38a955..e09d600 100644
 +        && point[0] <= rect[0] + rect[2] + pad
 +        && point[1] >= rect[1] - pad
 +        && point[1] <= rect[1] + rect[3] + pad
-+}
-+
+ }
+ 
  /// The on-screen controls' input state. The game feeds it touches with
- /// [`Self::update`] and reads [`Self::poll_state`] once a tick.
+@@ -66,6 +77,8 @@ enum Role {
  #[derive(Default)]
  pub struct TouchControls {
      pub settings: Settings,
 +    toggled: std::collections::BTreeSet<usize>,
++    extra_latched: std::collections::BTreeSet<usize>,
      /// The game needs the crosshair whatever the scheme.
      pub force_crosshair: bool,
      /// The held item is aimed along the crosshair ([`projectile_crosshair`]).
-@@ -100,6 +111,7 @@ pub struct TouchControls {
+@@ -100,6 +113,7 @@ pub struct TouchControls {
      /// A button was pressed; the game plays the click and clears it.
      pub clicked: bool,
      pub chat_requested: bool,
@@ -360,7 +364,7 @@ index b38a955..e09d600 100644
      pub settings_requested: bool,
      pub debug_requested: bool,
      pub perspective_requested: bool,
-@@ -174,7 +186,7 @@ impl TouchControls {
+@@ -174,7 +188,7 @@ impl TouchControls {
          Control::ALL.into_iter().any(|c| {
              Self::auxiliary_control(c)
                  && self.visible(c)
@@ -369,7 +373,7 @@ index b38a955..e09d600 100644
          })
      }
  
-@@ -191,7 +203,7 @@ impl TouchControls {
+@@ -191,7 +205,7 @@ impl TouchControls {
                      && !self.moving()
                      && layout::contains(area, point);
              }
@@ -378,7 +382,7 @@ index b38a955..e09d600 100644
          })
      }
  
-@@ -324,10 +336,10 @@ impl TouchControls {
+@@ -324,10 +338,10 @@ impl TouchControls {
      pub fn shield_held(&self) -> bool {
          self.settings.shield_button
              && self.shield_available
@@ -391,12 +395,35 @@ index b38a955..e09d600 100644
      }
  
      /// Where the touch marker goes in the tap schemes: under a look finger, or
-@@ -420,8 +432,30 @@ impl TouchControls {
+@@ -392,6 +406,7 @@ impl TouchControls {
+             }
+             // In the crosshair schemes the attack button can steer while it mines.
+             Role::Button(Button::RightTrigger) => attack_look,
++            Role::Extra(_) => false,
+             _ => false,
+         };
+         let delta = [point[0] - previous[0], point[1] - previous[1]];
+@@ -400,6 +415,12 @@ impl TouchControls {
+     }
+ 
+     fn lift(&mut self, id: u64) {
++        if let Some((Role::Extra(index), _)) = self.fingers.get(&id) {
++            let index = *index;
++            self.fingers.remove(&id);
++            self.extra_release(index);
++            return;
++        }
+         let Some((
+             Role::Look {
+                 start,
+@@ -420,8 +441,64 @@ impl TouchControls {
          }
      }
  
 +    pub fn cancel(&mut self, id: u64) {
-+        self.fingers.remove(&id);
++        if let Some((Role::Extra(index), _)) = self.fingers.remove(&id) {
++            self.extra_release(index);
++        }
 +        self.pending = PadState::default();
 +        self.pending_tap = None;
 +        self.tap_aim = None;
@@ -404,8 +431,40 @@ index b38a955..e09d600 100644
 +        self.holding_use = false;
 +    }
 +
++    fn extra_release(&mut self, index: usize) {
++        if let Some(button) = self.settings.extra_buttons.get(index) {
++            self.key_events.push((button.label.clone(), false));
++        }
++    }
++
++    fn extra_placement(&self, index: usize) -> Placement {
++        let mut placement = self.settings.extra_buttons[index].placement;
++        placement.size *= self.settings.button_scale;
++        self.fit(placement)
++    }
++
      fn land(&mut self, id: u64, point: [f32; 2]) {
 -        let role = match self.control_at(point) {
++        if !self.auxiliary_only && let Some(index) = (0..self.settings.extra_buttons.len()).rev()
++            .find(|&index| layout::contains(self.extra_placement(index).rect(self.aspect()), point))
++        {
++            let button = &self.settings.extra_buttons[index];
++            self.clicked = true;
++            if button.toggle {
++                let down = if self.extra_latched.remove(&index) {
++                    false
++                } else {
++                    self.extra_latched.insert(index);
++                    true
++                };
++                self.key_events.push((button.label.clone(), down));
++                self.fingers.insert(id, (Role::Ignore, point));
++            } else if !self.fingers.values().any(|(role, _)| matches!(role, Role::Extra(i) if *i == index)) {
++                self.key_events.push((button.label.clone(), true));
++                self.fingers.insert(id, (Role::Extra(index), point));
++            }
++            return;
++        }
 +        let control = self.control_at(point);
 +        let mut toggle = false;
 +        if let Some(c) = control
@@ -423,7 +482,7 @@ index b38a955..e09d600 100644
              Some(Control::Move) if !self.moving() => Role::Move(if self.dynamic_joystick() {
                  point
              } else {
-@@ -454,8 +488,14 @@ impl TouchControls {
+@@ -454,8 +531,14 @@ impl TouchControls {
                  self.perspective_requested = true;
                  Role::Ignore
              }
@@ -439,7 +498,7 @@ index b38a955..e09d600 100644
                      && !self.vertical_movement
                      && !self.swimming
                      && !self.mounted =>
-@@ -486,7 +526,7 @@ impl TouchControls {
+@@ -486,7 +569,7 @@ impl TouchControls {
                  committed: false,
              },
          };
@@ -448,15 +507,25 @@ index b38a955..e09d600 100644
          // Latch the press so a tap shorter than a tick still reaches the game.
          match role {
              Role::Button(Button::LeftTrigger) => self.pending.triggers[0] = 1.0,
-@@ -499,6 +539,7 @@ impl TouchControls {
+@@ -498,7 +581,17 @@ impl TouchControls {
+ 
      /// Lets go of everything: fingers, latched presses, requests.
      pub fn clear(&mut self) {
++        self.key_events.retain(|(_, down)| !*down);
++        let mut pressed = std::mem::take(&mut self.extra_latched);
++        pressed.extend(self.fingers.values().filter_map(|(role, _)| match role {
++            Role::Extra(index) => Some(*index),
++            _ => None,
++        }));
++        for index in pressed {
++            self.extra_release(index);
++        }
          self.fingers.clear();
 +        self.toggled.clear();
          self.last_sneak_tap = None;
          self.sprint_latched = false;
          self.pending = PadState::default();
-@@ -509,6 +550,7 @@ impl TouchControls {
+@@ -509,6 +602,7 @@ impl TouchControls {
          self.holding_use = false;
          self.holding = false;
          self.chat_requested = false;
@@ -464,7 +533,7 @@ index b38a955..e09d600 100644
          self.settings_requested = false;
          self.debug_requested = false;
          self.perspective_requested = false;
-@@ -517,6 +559,11 @@ impl TouchControls {
+@@ -517,6 +611,11 @@ impl TouchControls {
      /// A short world tap since the last call, and whether it uses the item.
      /// A tap never holds attack or use into the next tick: the game acts once
      /// at [`Self::aim`].
@@ -476,7 +545,7 @@ index b38a955..e09d600 100644
      pub fn take_tap(&mut self) -> Option<bool> {
          self.pending_tap.take()
      }
-@@ -588,6 +635,17 @@ impl TouchControls {
+@@ -588,6 +687,17 @@ impl TouchControls {
      /// The controller state the fingers hold right now.
      pub fn state(&self) -> PadState {
          let mut state = PadState::default();
@@ -494,7 +563,7 @@ index b38a955..e09d600 100644
          if self.settings.sprint_toggle && self.settings.sprint_button && self.sprint_latched {
              state.set(Button::LeftStick, true);
          }
-@@ -595,21 +653,37 @@ impl TouchControls {
+@@ -595,21 +705,37 @@ impl TouchControls {
              match role {
                  Role::Move(anchor) => {
                      let radius = self.placement(Control::Move).size / 2.0;
@@ -539,8 +608,17 @@ index b38a955..e09d600 100644
                      {
                          state.set(Button::LeftStick, true);
                      }
+@@ -617,7 +743,7 @@ impl TouchControls {
+                 Role::Button(Button::LeftTrigger) | Role::Shield => state.triggers[0] = 1.0,
+                 Role::Button(Button::RightTrigger) => state.triggers[1] = 1.0,
+                 Role::Button(b) => state.set(*b, true),
+-                Role::Look { .. } | Role::Ignore => {}
++                Role::Look { .. } | Role::Ignore | Role::Extra(_) => {}
+             }
+         }
+         state
 diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-client-render/src/touch/draw.rs
-index 9e8d8e4..5bef143 100644
+index 9e8d8e4..1eb61e2 100644
 --- a/crates/horizon-client-render/src/touch/draw.rs
 +++ b/crates/horizon-client-render/src/touch/draw.rs
 @@ -10,7 +10,6 @@
@@ -551,16 +629,26 @@ index 9e8d8e4..5bef143 100644
  
  const BUTTON: &str = "gui/sprites/widget/button";
  const BUTTON_HELD: &str = "gui/sprites/widget/button_highlighted";
-@@ -36,7 +35,7 @@ impl TouchControls {
+@@ -36,7 +35,17 @@ impl TouchControls {
                      .fingers
                      .values()
                      .any(|(_, point)| layout::contains(rect, *point));
 -            button(b, a, bounds, &self.label(control), pressed, color);
 +            button(b, a, bounds, &self.label(control), pressed, color, self.settings.button_style);
++        }
++        if !self.auxiliary_only {
++            for (index, extra) in self.settings.extra_buttons.iter().enumerate() {
++                let p = self.extra_placement(index);
++                let pressed = self.extra_latched.contains(&index)
++                    || self.fingers.values().any(|(role, _)| matches!(role, super::Role::Extra(i) if *i == index));
++                let bounds = square(b, p.center, p.size);
++                button(b, a, bounds, &extra.label, pressed,
++                       rgba(255, 255, 255, alpha(p.opacity)), self.settings.button_style);
++            }
          }
          if let Some(point) = self.pointer() {
              let center = [point[0] * b.width, point[1] * b.height];
-@@ -64,30 +63,47 @@ impl TouchControls {
+@@ -64,30 +73,47 @@ impl TouchControls {
          })
      }
  
@@ -628,7 +716,7 @@ index 9e8d8e4..5bef143 100644
      }
  
      /// The joystick (a rim and a knob) or the D-pad (four arrow buttons).
-@@ -114,7 +130,7 @@ impl TouchControls {
+@@ -114,7 +140,7 @@ impl TouchControls {
              let cell = size / 3.0;
              for ([dx, dy], label, pressed) in dpad(state.left) {
                  let bounds = [x + cell * dx, y + cell * dy, cell, cell];
@@ -637,7 +725,7 @@ index 9e8d8e4..5bef143 100644
              }
              return;
          }
-@@ -171,42 +187,36 @@ fn button(
+@@ -171,42 +197,36 @@ fn button(
      label: &str,
      pressed: bool,
      color: u32,
@@ -699,7 +787,7 @@ index 9e8d8e4..5bef143 100644
      };
      let drop = if pressed { (h / 18.0).min(2.0) } else { 0.0 };
      let width = HudBatch::text_width(a, label);
-@@ -219,15 +229,23 @@ fn button(
+@@ -219,15 +239,23 @@ fn button(
          text,
          true,
      );
@@ -727,7 +815,7 @@ index 9e8d8e4..5bef143 100644
  fn mining_radius(radius: f32, progress: f32) -> f32 {
      if progress.is_finite() {
 diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
-index e57f2d8..333f894 100644
+index e57f2d8..386ad65 100644
 --- a/crates/horizon-client-render/src/touch/layout.rs
 +++ b/crates/horizon-client-render/src/touch/layout.rs
 @@ -58,13 +58,14 @@ pub enum Control {
@@ -786,7 +874,28 @@ index e57f2d8..333f894 100644
          }
      }
  }
-@@ -170,6 +197,17 @@ pub struct Settings {
+@@ -147,6 +174,20 @@ pub const FOLLOW_SCHEME: u8 = 0;
+ pub const SHOWN: u8 = 1;
+ pub const HIDDEN: u8 = 2;
+ 
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
++pub struct ExtraButton {
++    pub label: String,
++    pub placement: Placement,
++    pub toggle: bool,
++}
++
++fn launcher_key(label: &str) -> bool {
++    let bytes = label.as_bytes();
++    (bytes.len() == 1 && bytes[0].is_ascii_alphanumeric())
++        || matches!(label, "Esc" | "Tab" | "Shift" | "Ctrl" | "Space" | "F1" | "F3" | "F5"
++            | "MouseLeft" | "MouseRight" | "MouseMiddle")
++}
++
+ /// The player's touch layout, saved as JSON. Missing fields take their
+ /// defaults, so later options can be added without resetting a saved file.
+ #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+@@ -170,6 +211,19 @@ pub struct Settings {
      pub layouts: [[Placement; CONTROLS]; 3],
      /// Camera turn speed for look drags; scales both axes.
      pub sensitivity: f32,
@@ -801,10 +910,12 @@ index e57f2d8..333f894 100644
 +    pub toggle_buttons: Vec<usize>,
 +    #[serde(default)]
 +    pub launcher_trigger_modes: bool,
++    #[serde(default)]
++    pub extra_buttons: Vec<ExtraButton>,
      /// Extra scale on the yaw (left and right) turn.
      pub sensitivity_horizontal: f32,
      /// Extra scale on the pitch (up and down) turn.
-@@ -214,6 +252,7 @@ impl Default for Settings {
+@@ -214,6 +268,7 @@ impl Default for Settings {
              Placement::new(0.58, 0.055, 0.075), // Perspective
              Placement::new(0.80, 0.96, 0.075),  // Offhand
              Placement::new(0.92, 0.36, 0.12),   // Shield
@@ -812,7 +923,7 @@ index e57f2d8..333f894 100644
          ];
          let mut layouts = [row; 3];
          // The D-pad sits where the joystick does; sneak becomes its centre.
-@@ -231,6 +270,11 @@ impl Default for Settings {
+@@ -231,6 +286,12 @@ impl Default for Settings {
              button_visibility: [FOLLOW_SCHEME; CONTROLS],
              layouts,
              sensitivity: 1.0,
@@ -821,10 +932,11 @@ index e57f2d8..333f894 100644
 +            icon_labels: false,
 +            toggle_buttons: Vec::new(),
 +            launcher_trigger_modes: false,
++            extra_buttons: Vec::new(),
              sensitivity_horizontal: 1.0,
              sensitivity_vertical: 1.0,
              sprint_toggle: false,
-@@ -264,6 +308,107 @@ impl Settings {
+@@ -264,6 +325,120 @@ impl Settings {
          std::fs::rename(temp, path)
      }
  
@@ -896,13 +1008,12 @@ index e57f2d8..333f894 100644
 +            return;
 +        };
 +        let joystick = layout.contains_key("move");
++        self.extra_buttons.clear();
 +        for (id, value) in layout {
 +            if joystick && matches!(id.as_str(), "forward" | "back" | "left" | "right") {
 +                continue;
 +            }
-+            let Some(control) = Control::from_launcher_id(id) else {
-+                continue;
-+            };
++            let control = Control::from_launcher_id(id);
 +            let Some(value) = value.as_object() else {
 +                continue;
 +            };
@@ -914,10 +1025,24 @@ index e57f2d8..333f894 100644
 +                size,
 +                opacity,
 +            };
-+            for row in &mut self.layouts {
-+                row[control as usize] = placement;
++            if let Some(control) = control {
++                for row in &mut self.layouts {
++                    row[control as usize] = placement;
++                }
++                self.button_visibility[control as usize] = SHOWN;
++            } else if self.extra_buttons.len() < 48 {
++                let hidden = json.get("hidden").and_then(|v| v.as_array())
++                    .is_some_and(|ids| ids.iter().any(|v| v.as_str() == Some(id.as_str())));
++                let label = json.get("bindings").and_then(|v| v.get(id)).and_then(|v| v.as_str())
++                    .unwrap_or(id.as_str());
++                if !hidden && launcher_key(label) && !self.extra_buttons.iter().any(|p| p.label == label) {
++                    let mut placement = placement;
++                    placement.sanitize();
++                    let toggle = json.get("triggerModes").and_then(|v| v.get(id)).and_then(|v| v.as_str())
++                        == Some("toggle");
++                    self.extra_buttons.push(ExtraButton { label: label.to_owned(), placement, toggle });
++                }
 +            }
-+            self.button_visibility[control as usize] = SHOWN;
 +        }
 +        if let Some(hidden) = json.get("hidden").and_then(|v| v.as_array()) {
 +            for id in hidden.iter().filter_map(|v| v.as_str()) {
@@ -932,7 +1057,7 @@ index e57f2d8..333f894 100644
      pub fn sanitize(&mut self) {
          // Only the D-pad has a split variant (see `Mode::SCHEMES`).
          if self.mode != Mode::Dpad {
-@@ -284,7 +429,9 @@ impl Settings {
+@@ -284,7 +459,9 @@ impl Settings {
          ] {
              *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
          }
@@ -1200,10 +1325,10 @@ index 026382e..7407b0e 100644
                  if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
              {
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..880b3bc 100644
+index 16664ff..766c835 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
-@@ -55,6 +55,107 @@ impl Game<'_> {
+@@ -55,6 +55,146 @@ impl Game<'_> {
          let zoom = self.zoom_turn_scale();
          self.turn_player(x * zoom, y * zoom);
      }
@@ -1271,6 +1396,45 @@ index 16664ff..880b3bc 100644
 +                f64::from(degrees[0]) / 0.15,
 +                f64::from(degrees[1]) / 0.15,
 +            );
++        }
++    }
++    pub(super) fn apply_touch_key_events(&mut self) {
++        use horizon_client_input::held::Source;
++        use horizon_client::keybinds::{key_code, mouse_button};
++        for (label, down) in self.touch.key_events() {
++            let mouse = match label.as_str() {
++                "MouseLeft" => Some("key.mouse.left"),
++                "MouseRight" => Some("key.mouse.right"),
++                "MouseMiddle" => Some("key.mouse.middle"),
++                _ => None,
++            };
++            if let Some(mouse) = mouse.and_then(mouse_button) {
++                let _ = self.mouse_mapping(mouse, down, Source::Pad);
++                continue;
++            }
++            let suffix = match label.as_str() {
++                "Esc" => "escape",
++                "Ctrl" => "left.control",
++                "Shift" => "left.shift",
++                "action:key.swapOffhand" => "f",
++                other => other,
++            };
++            let name = format!("key.keyboard.{}", suffix.to_ascii_lowercase());
++            if let Some(key) = key_code(&name) {
++                if matches!(key, KeyCode::ShiftLeft | KeyCode::ControlLeft) {
++                    let slot = usize::from(key == KeyCode::ControlLeft);
++                    let action = if down { horizon_client::debug_keys::KeyAction::Press }
++                                 else { horizon_client::debug_keys::KeyAction::Release };
++                    let screen_open = self.screen != Screen::Playing || self.title.is_some();
++                    self.toggles.key(slot, action, screen_open, false);
++                    self.sync_toggle(slot);
++                    if down {
++                        let _ = self.key_pressed(key, key);
++                    }
++                } else {
++                    let _ = self.mapped_key(key, down, false, key, Source::Pad);
++                }
++            }
 +        }
 +    }
 +    /// Acts on the one-shot touch buttons that are not pad buttons.
@@ -1610,10 +1774,10 @@ index ee73abf..3704fed 100644
      pub(super) fn facts(&self) -> &BlockFacts {
          &self.core.facts
 diff --git a/crates/horizon-client/src/game/runtime/window_handler.rs b/crates/horizon-client/src/game/runtime/window_handler.rs
-index 6a86a75..5d34144 100644
+index 6a86a75..4f334c1 100644
 --- a/crates/horizon-client/src/game/runtime/window_handler.rs
 +++ b/crates/horizon-client/src/game/runtime/window_handler.rs
-@@ -315,6 +315,26 @@ impl Game<'_> {
+@@ -315,6 +315,27 @@ impl Game<'_> {
          if self.pending_save.is_some() {
              return;
          }
@@ -1637,10 +1801,11 @@ index 6a86a75..5d34144 100644
 +            }
 +            self.pad.inject_state(Default::default());
 +        }
++        self.apply_touch_key_events();
          horizon_client::spans::time("pads", || self.poll_pads(event_loop));
          self.settle_after_run(event_loop);
          self.pause_if_inactive();
-@@ -326,9 +346,13 @@ impl Game<'_> {
+@@ -326,9 +347,13 @@ impl Game<'_> {
              return;
          }
          if let Some(w) = &self.window {
@@ -1655,7 +1820,7 @@ index 6a86a75..5d34144 100644
                  let id = w.id();
                  self.handle_window_event(
                      event_loop,
-@@ -351,11 +375,21 @@ impl Game<'_> {
+@@ -351,11 +376,21 @@ impl Game<'_> {
          }
          // Consume the last frame's result: a hidden compositor may stop sending
          // redraws altogether, leaving a successful result stale indefinitely.
@@ -1679,7 +1844,7 @@ index 6a86a75..5d34144 100644
      }
  }
  
-@@ -417,6 +451,7 @@ impl ApplicationHandler for Game<'_> {
+@@ -417,6 +452,7 @@ impl ApplicationHandler for Game<'_> {
          self.resize_state = Some(self.resize_state_of(window.inner_size()));
          self.window = Some(window);
          self.ime_allowed = false;
@@ -1687,7 +1852,7 @@ index 6a86a75..5d34144 100644
          self.ime_area = None;
          self.apply_settings();
          self.previous = Instant::now();
-@@ -437,14 +472,13 @@ impl ApplicationHandler for Game<'_> {
+@@ -437,14 +473,13 @@ impl ApplicationHandler for Game<'_> {
          };
          self.handle_window_event(event_loop, id, event, input_trace::InputOrigin::User);
          if let Some((event, modifiers)) = key {
