@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import <objc/runtime.h>
 #import <Security/Security.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <AuthenticationServices/AuthenticationServices.h>
@@ -29,23 +30,49 @@ static UIVisualEffectView *NCLRAddBlur(UIView *view, BOOL dark) {
     return blur;
 }
 
+static char NCLRAvatarRequestKey;
+
 static void NCLRLoadRemoteAvatar(NSString *url, UIImageView *imageView, UILabel *fallback) {
-    if (url.length == 0) {
-        imageView.hidden = YES;
-        fallback.hidden = NO;
+    if (!imageView) return;
+    NSString *previous = objc_getAssociatedObject(imageView, &NCLRAvatarRequestKey);
+    if ([previous isEqualToString:url]) return;
+    objc_setAssociatedObject(imageView, &NCLRAvatarRequestKey, url, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    imageView.image = nil;
+    imageView.hidden = YES;
+    fallback.hidden = NO;
+    NSURL *address = url.length ? [NSURL URLWithString:url] : nil;
+    if (![address.scheme.lowercaseString isEqualToString:@"https"]) return;
+
+    static NSCache<NSString *, UIImage *> *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        cache = [NSCache new];
+        cache.countLimit = 32;
+    });
+    __weak UIImageView *weakImageView = imageView;
+    __weak UILabel *weakFallback = fallback;
+    void (^display)(UIImage *) = ^(UIImage *image) {
+        UIImageView *target = weakImageView;
+        if (!target || ![objc_getAssociatedObject(target, &NCLRAvatarRequestKey) isEqualToString:url]) return;
+        target.image = image;
+        target.hidden = image == nil;
+        weakFallback.hidden = image != nil;
+        if (!image) objc_setAssociatedObject(target, &NCLRAvatarRequestKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    };
+    UIImage *cached = [cache objectForKey:url];
+    if (cached) {
+        display(cached);
         return;
     }
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:url]];
-        UIImage *image = data.length > 0 ? [UIImage imageWithData:data] : nil;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (image != nil) {
-                imageView.image = image;
-                imageView.hidden = NO;
-                fallback.hidden = YES;
-            }
-        });
-    });
+    NSURLRequest *request = [NSURLRequest requestWithURL:address
+        cachePolicy:NSURLRequestUseProtocolCachePolicy timeoutInterval:12];
+    [[NSURLSession.sharedSession dataTaskWithRequest:request
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            UIImage *image = !error && [(NSHTTPURLResponse *)response statusCode] == 200 && data.length > 0
+                ? [UIImage imageWithData:data] : nil;
+            if (image) [cache setObject:image forKey:url];
+            dispatch_async(dispatch_get_main_queue(), ^{ display(image); });
+        }] resume];
 }
 @interface NCLRResourcePreparer : NSObject
 + (instancetype)shared;
@@ -54,13 +81,9 @@ static void NCLRLoadRemoteAvatar(NSString *url, UIImageView *imageView, UILabel 
 @property (nonatomic, copy) NSString *lastLine;
 @property (nonatomic, assign) float progressValue;
 @property (nonatomic, assign) BOOL preparing;
-@property (nonatomic, assign) BOOL cancelRequested;
-@property (nonatomic, assign) unsigned long long totalBytes;
-@property (nonatomic, assign) unsigned long long downloadedBytes;
-@property (nonatomic, assign) NSTimeInterval startedAt;
-@property (nonatomic, assign) double bytesPerSecond;
-@property (nonatomic, strong) NSOperationQueue *assetQueue;
-@property (nonatomic, assign) NSTimeInterval lastProgressAt;
+@property (atomic, assign) BOOL cancelRequested;
+@property (nonatomic, assign) BOOL cancellable;
+@property (atomic, strong) NSURLSession *downloadSession;
 - (void)cancel;
 @end
 extern const char *horizon_ios_assemble(const char *bundle, const char *client_jar,
@@ -72,6 +95,14 @@ static NSString *const kNCLRAccount = @"minecraft-access-token";
 static NSString *const kNCLRClientKey = @"NCLRMicrosoftClientID";
 static NSString *const kNCLRDefaultClientID = @"da723f82-1e03-48ef-b3ae-313b2e4c34ca";
 static NSString *const kNCLRAccountNameKey = @"NCLRAccountName";
+static NSString *const kNCLRAccountUUIDKey = @"NCLRAccountUUID";
+
+static NSString *NCLRAvatarURLForName(NSString *name) {
+    NSCharacterSet *invalid = [[NSCharacterSet characterSetWithCharactersInString:
+        @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"] invertedSet];
+    if (name.length == 0 || name.length > 16 || [name rangeOfCharacterFromSet:invalid].location != NSNotFound) return nil;
+    return [NSString stringWithFormat:@"https://minotar.net/helm/%@/128", name];
+}
 
 @class NCLRRootController;
 static BOOL NCLRDarkMode = YES;
@@ -92,6 +123,9 @@ static void NCLRThemeSet(BOOL dark) {
 /// together; saturated accents keep their hue.
 static UIColor *NCLRColor(CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
     if (!NCLRDarkMode) {
+        if (g >= 0.65 && g - r >= 0.22 && g - b >= 0.15) {
+            return [UIColor colorWithRed:0.08 green:0.39 blue:0.23 alpha:a];
+        }
         CGFloat hi = MAX(r, MAX(g, b));
         CGFloat lo = MIN(r, MIN(g, b));
         if (hi - lo <= 0.10 || hi <= 0.12) {
@@ -852,6 +886,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     if (self) {
         _token = NCLRKeychainRead();
         _name = [[NSUserDefaults standardUserDefaults] stringForKey:kNCLRAccountNameKey];
+        if (_token.length > 0) {
+            _uuid = [[NSUserDefaults standardUserDefaults] stringForKey:kNCLRAccountUUIDKey];
+            _avatarURL = NCLRAvatarURLForName(_name);
+        }
         _developerPremium = NO;
     }
     return self;
@@ -860,8 +898,14 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 - (void)logout {
     self.token = nil;
     self.name = nil;
+    self.uuid = nil;
+    self.avatarURL = nil;
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:kNCLRAccountUUIDKey];
     NCLRKeychainWrite(nil);
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:kNCLRAccountNameKey];
+    unsetenv("HORIZON_SESSION_FILE");
+    [NSFileManager.defaultManager removeItemAtPath:
+        [NCLRDocuments() stringByAppendingPathComponent:@".nclr-session.json"] error:nil];
 }
 
 - (void)fail:(NSString *)message presenter:(UIViewController *)presenter completion:(NCLRAuthCompletion)completion {
@@ -1120,32 +1164,6 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     }];
 }
 
-- (void)fetchXboxAvatarWithUHS:(NSString *)uhs token:(NSString *)xstsToken {
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:
-        @"https://profile.xboxlive.com/users/me/profile/settings?settings=GameDisplayPicRaw"]];
-    [request setValue:[NSString stringWithFormat:@"XBL3.0 x=%@;%@", uhs, xstsToken]
-   forHTTPHeaderField:@"Authorization"];
-    [request setValue:@"3" forHTTPHeaderField:@"x-xbl-contract-version"];
-    [[NSURLSession.sharedSession dataTaskWithRequest:request
-        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-            if (data.length == 0) return;
-            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            NSArray *users = json[@"profileUsers"];
-            NSArray *settings = users.count > 0 ? users.firstObject[@"settings"] : nil;
-            for (NSDictionary *setting in settings) {
-                if ([setting[@"id"] isEqualToString:@"GameDisplayPicRaw"]) {
-                    NSString *url = NCLRString(setting[@"value"]);
-                    if (url.length > 0) {
-                        self.avatarURL = url;
-                        [[NSNotificationCenter defaultCenter] postNotificationName:NCLRAvatarUpdatedNotification
-                                                                            object:self];
-                    }
-                    break;
-                }
-            }
-        }] resume];
-}
-
 - (void)exchangeMicrosoftToken:(NSString *)microsoftToken completion:(NCLRAuthCompletion)completion {
     NSDictionary *xblBody = @{
         @"Properties" : @{
@@ -1182,7 +1200,6 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                 dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, nil, message); });
                 return;
             }
-            [weakSelf fetchXboxAvatarWithUHS:uhs token:xstsToken];
             NSDictionary *mcBody = @{
                 @"identityToken" : [NSString stringWithFormat:@"XBL3.0 x=%@;%@", uhs, xstsToken],
             };
@@ -1209,25 +1226,27 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
    forHTTPHeaderField:@"Authorization"];
     [[NSURLSession.sharedSession dataTaskWithRequest:request
         completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-            NCLRAuth *auth = NCLRAuth.shared;
-            NSString *name = @"Minecraft 玩家";
-            if (data.length > 0) {
-                NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                if ([json isKindOfClass:[NSDictionary class]]) {
-                    name = NCLRString(json[@"name"]) ?: name;
-                    NSString *uuid = NCLRString(json[@"id"]);
-                    if (uuid.length > 0) auth.uuid = uuid;
-                    if (auth.avatarURL.length == 0 && name.length > 0) {
-                        auth.avatarURL = [NSString stringWithFormat:@"https://minotar.net/helm/%@/128", name];
-                        [[NSNotificationCenter defaultCenter] postNotificationName:NCLRAvatarUpdatedNotification object:auth];
-                    }
-                }
-            }
-            auth.token = token;
-            auth.name = name;
-            NCLRKeychainWrite(token);
-            [[NSUserDefaults standardUserDefaults] setObject:name forKey:kNCLRAccountNameKey];
+            NSInteger status = [(NSHTTPURLResponse *)response statusCode];
+            id profile = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+            NSString *name = [profile isKindOfClass:NSDictionary.class] ? NCLRString(profile[@"name"]) : nil;
+            NSString *uuid = [profile isKindOfClass:NSDictionary.class] ? NCLRString(profile[@"id"]) : nil;
             dispatch_async(dispatch_get_main_queue(), ^{
+                NCLRAuth *auth = weakSelf;
+                if (error || status != 200 || name.length == 0 || uuid.length == 0) {
+                    [auth.authSafari dismissViewControllerAnimated:YES completion:nil];
+                    auth.authSafari = nil;
+                    completion(nil, nil, error.localizedDescription ?: @"无法读取 Minecraft 正版玩家资料");
+                    return;
+                }
+                auth.token = token;
+                auth.name = name;
+                auth.uuid = uuid;
+                auth.avatarURL = NCLRAvatarURLForName(name);
+                NCLRKeychainWrite(token);
+                NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+                [defaults setObject:name forKey:kNCLRAccountNameKey];
+                [defaults setObject:uuid forKey:kNCLRAccountUUIDKey];
+                [[NSNotificationCenter defaultCenter] postNotificationName:NCLRAvatarUpdatedNotification object:auth];
                 [weakSelf.authSafari dismissViewControllerAnimated:YES completion:nil];
                 weakSelf.authSafari = nil;
                 completion(token, name, nil);
@@ -1516,7 +1535,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
     UIView *activity = [self card];
     UILabel *activityTitle = [self eyebrow:@"状态"];
-    UILabel *activityText = [self label:@"启动器已就绪。版本切换和模组列表保存在本机；游戏端通过 nclr-game:// 接入。"
+    UILabel *activityText = [self label:NCLRResourcePreparer.shared.lastLine ?: @"启动器已就绪"
                                     size:12.0 weight:UIFontWeightRegular
                                    color:NCLRColor(0.70, 0.70, 0.70, 1.0)];
     UIStackView *activityStack = [[UIStackView alloc] initWithArrangedSubviews:@[activityTitle, activityText]];
@@ -1531,6 +1550,10 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [activityStack.bottomAnchor constraintEqualToAnchor:activity.bottomAnchor constant:-14.0],
     ]];
     [self.stack addArrangedSubview:activity];
+    self.prepareStatusLabel = activityText;
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    [center addObserver:self selector:@selector(prepareProgress:) name:NCLRPrepareProgressNotification object:nil];
+    [center addObserver:self selector:@selector(prepareFinished:) name:NCLRPrepareFinishedNotification object:nil];
 }
 
 - (void)writePerformanceOptions {
@@ -1601,6 +1624,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (void)launchTapped {
     [self writePerformanceOptions];
+    if (NCLRResourcePreparer.shared.preparing) return;
     if (NCLRAuth.shared.token.length == 0) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"需要正版登录"
                                                                        message:@"首次准备游戏资源前，请先在“账号”页登录 Microsoft 正版账号。"
@@ -1618,6 +1642,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     NSString *game = NCLRDocuments();
     NCLRCreateDirectory(game);
     setenv("HORIZON_HOME", game.UTF8String, 1);
+    unsetenv("HORIZON_SESSION_FILE");
     NCLRAuth *sessionAuth = NCLRAuth.shared;
     if (sessionAuth.token.length > 0 && sessionAuth.uuid.length > 0) {
         NSString *sessionPath = [game stringByAppendingPathComponent:@".nclr-session.json"];
@@ -1628,10 +1653,11 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
             @"user_type" : @"msa",
         };
         NSData *sessionData = [NSJSONSerialization dataWithJSONObject:session options:0 error:nil];
-        [sessionData writeToFile:sessionPath atomically:YES];
-        [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions : @0600}
-                                         ofItemAtPath:sessionPath error:nil];
-        setenv("HORIZON_SESSION_FILE", sessionPath.UTF8String, 1);
+        if ([sessionData writeToFile:sessionPath atomically:YES]) {
+            [NSFileManager.defaultManager setAttributes:@{NSFilePosixPermissions : @0600}
+                                           ofItemAtPath:sessionPath error:nil];
+            setenv("HORIZON_SESSION_FILE", sessionPath.UTF8String, 1);
+        }
     }
     setenv("HORIZON_NO_AUDIO", "1", 1);
     setenv("HORIZON_NO_DISCORD", "1", 1);
@@ -1667,8 +1693,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 }
 
 - (void)prepareFinished:(NSNotification *)note {
-    self.prepareStatusLabel.text = @"资源准备完成";
-    self.prepareStatusLabel.textColor = NCLRColor(0.35, 0.78, 0.52, 1.0);
+    NSString *status = note.userInfo[@"status"];
+    self.prepareStatusLabel.text = status;
+    self.prepareStatusLabel.textColor = [status isEqualToString:@"资源准备完成"]
+        ? NCLRColor(0.35, 0.78, 0.52, 1.0) : NCLRColor(0.70, 0.70, 0.70, 1.0);
 }
 
 - (void)dealloc {
@@ -1676,9 +1704,11 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 }
 
 - (void)prepareResources {
+    if (NCLRResourcePreparer.shared.preparing) return;
     self.prepareStatusLabel.text = @"资源下载中…";
     self.prepareStatusLabel.textColor = NCLRColor(0.35, 0.78, 0.52, 1.0);
     [[NCLRResourcePreparer shared] prepareWithProgress:nil completion:^(NSString *error) {
+        if (!self.viewIfLoaded.window || [error isEqualToString:@"下载已取消"]) return;
         if (error.length > 0) {
             UIAlertController *fail = [UIAlertController alertControllerWithTitle:@"资源准备失败"
                                                                            message:error
@@ -1742,18 +1772,20 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     UIProgressView *prepareBar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
     prepareBar.translatesAutoresizingMaskIntoConstraints = NO;
     prepareBar.progressTintColor = NCLRColor(0.25, 0.75, 0.48, 1.0);
-    prepareBar.trackTintColor = [UIColor colorWithWhite:1.0 alpha:0.10];
+    prepareBar.trackTintColor = NCLRColor(0.95, 0.95, 0.95, 0.17);
     [prepare addSubview:prepareLabel];
     [prepare addSubview:prepareBar];
     [NSLayoutConstraint activateConstraints:@[
         [prepareLabel.leadingAnchor constraintEqualToAnchor:prepare.leadingAnchor constant:16.0],
         [prepareLabel.trailingAnchor constraintLessThanOrEqualToAnchor:cancelPrepare.leadingAnchor constant:-8.0],
         [cancelPrepare.trailingAnchor constraintEqualToAnchor:prepare.trailingAnchor constant:-14.0],
-        [cancelPrepare.centerYAnchor constraintEqualToAnchor:prepareLabel.centerYAnchor],
+        [cancelPrepare.centerYAnchor constraintEqualToAnchor:prepare.centerYAnchor],
         [cancelPrepare.widthAnchor constraintEqualToConstant:56.0],
+        [cancelPrepare.heightAnchor constraintGreaterThanOrEqualToConstant:44.0],
+        [prepare.heightAnchor constraintGreaterThanOrEqualToConstant:56.0],
         [prepareLabel.topAnchor constraintEqualToAnchor:prepare.topAnchor constant:13.0],
         [prepareBar.leadingAnchor constraintEqualToAnchor:prepare.leadingAnchor constant:16.0],
-        [prepareBar.trailingAnchor constraintEqualToAnchor:prepare.trailingAnchor constant:-16.0],
+        [prepareBar.trailingAnchor constraintEqualToAnchor:cancelPrepare.leadingAnchor constant:-8.0],
         [prepareBar.topAnchor constraintEqualToAnchor:prepareLabel.bottomAnchor constant:9.0],
         [prepareBar.bottomAnchor constraintEqualToAnchor:prepare.bottomAnchor constant:-14.0],
     ]];
@@ -1774,6 +1806,8 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         prepare.hidden = NO;
         prepareLabel.text = NCLRResourcePreparer.shared.lastLine ?: @"准备游戏资源";
         prepareBar.progress = NCLRResourcePreparer.shared.progressValue;
+        cancelPrepare.enabled = NCLRResourcePreparer.shared.cancellable && !NCLRResourcePreparer.shared.cancelRequested;
+        prepare.hidden = NCLRResourcePreparer.shared.cancelRequested;
     }
 
     UILabel *note = [self label:@"版本配置会保存在本机。实际下载、校验和游戏启动由游戏端完成；启动器不绑定引擎生命周期。"
@@ -1786,13 +1820,12 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.prepareCard.hidden = NO;
     self.prepareLabel.text = note.userInfo[@"line"] ?: @"准备游戏资源";
     self.prepareBar.progress = NCLRResourcePreparer.shared.progressValue;
+    self.cancelPrepare.enabled = NCLRResourcePreparer.shared.cancellable;
 }
 
 - (void)prepareFinished:(NSNotification *)note {
-    self.prepareBar.progress = 1.0;
-    self.prepareLabel.text = @"资源准备完成";
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{ self.prepareCard.hidden = YES; });
+    self.prepareCard.hidden = YES;
+    self.cancelPrepare.enabled = YES;
 }
 
 - (void)dealloc {
@@ -1801,7 +1834,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (void)cancelPrepareTapped {
     [[NCLRResourcePreparer shared] cancel];
-    self.prepareLabel.text = @"正在取消下载…";
+    self.prepareCard.hidden = YES;
     self.cancelPrepare.enabled = NO;
 }
 
@@ -2119,11 +2152,6 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     avatarImage.hidden = YES;
     [account addSubview:avatarImage];
     NCLRLoadRemoteAvatar(auth.avatarURL, avatarImage, avatar);
-    [[NSNotificationCenter defaultCenter] addObserverForName:NCLRAvatarUpdatedNotification
-                                                      object:nil queue:[NSOperationQueue mainQueue]
-                                                  usingBlock:^(NSNotification *note) {
-        NCLRLoadRemoteAvatar(NCLRAuth.shared.avatarURL, avatarImage, avatar);
-    }];
     NSString *nameText = premium ? (auth.name ?: @"正版用户") : @"未登录";
     UILabel *name = [self label:nameText
                             size:20.0 weight:UIFontWeightSemibold
@@ -2824,11 +2852,16 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.keySizeSlider.minimumValue = 0.045f;
     self.keySizeSlider.maximumValue = 0.45f;
     self.keySizeSlider.value = 0.12f;
+    [self.keySizeSlider addTarget:self action:@selector(keySizeEditingStarted)
+                  forControlEvents:UIControlEventTouchDown];
+    [self.keySizeSlider addTarget:self action:@selector(keySizeEditingFinished)
+                  forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
     self.keySizeSlider.minimumTrackTintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
     [self.keySizeSlider addTarget:self action:@selector(keySizeChanged:)
                   forControlEvents:UIControlEventValueChanged];
     self.keySizeValue = [self label:@"0.12" size:11.0 weight:UIFontWeightSemibold
                              color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
+    self.keySizeSlider.enabled = NO;
     self.keySizeValue.textAlignment = NSTextAlignmentRight;
     [self.keySizeValue.widthAnchor constraintEqualToConstant:48.0].active = YES;
     UIStackView *keySizeRow = [[UIStackView alloc] initWithArrangedSubviews:
@@ -2839,6 +2872,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     UILabel *keyVisibleLabel = [self label:@"显示该按键" size:12.0 weight:UIFontWeightSemibold
                                     color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
     self.keyVisibleSwitch = [[UISwitch alloc] init];
+    self.keyVisibleSwitch.enabled = NO;
     [self.keyVisibleSwitch addTarget:self action:@selector(keyVisibleChanged:)
                      forControlEvents:UIControlEventValueChanged];
     UIView *keyVisibleSpacer = [[UIView alloc] init];
@@ -2906,14 +2940,14 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     self.grid.frame = self.preview.bounds;
     for (NSString *key in self.previewButtons) {
         UIButton *button = self.previewButtons[key];
-        NSDictionary *position = NCLRKeymap.shared.positions[key];
+        NSDictionary *position = key.length ? NCLRKeymap.shared.positions[key] : nil;
         if (position == nil) position = @{ @"x" : @0.5, @"y" : @0.5, @"size" : @0.08 };
         CGFloat x = [position[@"x"] doubleValue];
         CGFloat y = [position[@"y"] doubleValue];
         CGRect area = [self previewContentRect];
         CGFloat size = [position[@"size"] doubleValue] * area.size.height *
             NCLRKeymap.shared.buttonSize;
-        size = MAX(26.0, size);
+        size = MIN(MIN(area.size.width, area.size.height), MAX(26.0, size));
         CGFloat centerX = area.origin.x + x * area.size.width;
         CGFloat centerY = area.origin.y + y * area.size.height;
         centerX = MAX(CGRectGetMinX(area) + size / 2.0,
@@ -2943,14 +2977,31 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (void)selectKey:(NSString *)key {
     self.selectedKey = key;
-    NSDictionary *position = NCLRKeymap.shared.positions[key];
+    self.keySizeSlider.enabled = key.length > 0;
+    self.keyVisibleSwitch.enabled = key.length > 0;
+    NSDictionary *position = key.length ? NCLRKeymap.shared.positions[key] : nil;
     CGFloat size = [position[@"size"] doubleValue];
     if (size <= 0.0) size = 0.12;
     self.keySizeSlider.value = size;
     self.keySizeValue.text = [NSString stringWithFormat:@"%.2f", size];
-    self.keyVisibleSwitch.on = ![NCLRKeymap.shared isHidden:key];
+    self.keyVisibleSwitch.on = key.length > 0 && ![NCLRKeymap.shared isHidden:key];
     self.keyEditTitle.text = key.length > 0 ? key : @"选择画布上的按键";
     [self.view setNeedsLayout];
+}
+
+- (NSDictionary *)keyLayoutSnapshot {
+    NCLRKeymap *keymap = NCLRKeymap.shared;
+    return @{@"positions": [keymap.positions copy], @"hidden": [keymap.hiddenKeys copy]};
+}
+
+- (void)keySizeEditingStarted {
+    self.gestureStartPositions = [self keyLayoutSnapshot];
+}
+
+- (void)keySizeEditingFinished {
+    [self pushUndo:self.gestureStartPositions];
+    self.gestureStartPositions = nil;
+    [NCLRKeymap.shared save];
 }
 
 - (void)keySizeChanged:(UISlider *)sender {
@@ -2962,13 +3013,15 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         @"size" : @(sender.value),
     };
     self.keySizeValue.text = [NSString stringWithFormat:@"%.2f", sender.value];
-    [NCLRKeymap.shared save];
+    if (!sender.isTracking) [NCLRKeymap.shared save];
     [self.view setNeedsLayout];
 }
 
 - (void)keyVisibleChanged:(UISwitch *)sender {
     if (self.selectedKey.length == 0) return;
+    NSDictionary *before = [self keyLayoutSnapshot];
     [NCLRKeymap.shared setHidden:!sender.on forKey:self.selectedKey];
+    [self pushUndo:before];
     [NCLRKeymap.shared save];
     [self.view setNeedsLayout];
 }
@@ -3006,7 +3059,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     if (sender.state == UIGestureRecognizerStateBegan) {
         [self selectKey:key];
         self.dragStartCenter = button.center;
-        self.gestureStartPositions = [NCLRKeymap.shared.positions copy];
+        self.gestureStartPositions = [self keyLayoutSnapshot];
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     }
     CGPoint translation = [sender translationInView:self.preview];
@@ -3040,6 +3093,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         sender.state == UIGestureRecognizerStateCancelled) {
         [self pushUndo:self.gestureStartPositions];
         self.gestureStartPositions = nil;
+        [NCLRKeymap.shared save];
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
         [self.view setNeedsLayout];
     }
@@ -3047,7 +3101,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (void)resizeKey:(UIPanGestureRecognizer *)sender {
     if (sender.state == UIGestureRecognizerStateBegan) {
-        self.gestureStartPositions = [NCLRKeymap.shared.positions copy];
+        self.gestureStartPositions = [self keyLayoutSnapshot];
     }
     if (self.selectedKey.length == 0) {
         return;
@@ -3072,14 +3126,15 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         sender.state == UIGestureRecognizerStateCancelled) {
         [self pushUndo:self.gestureStartPositions];
         self.gestureStartPositions = nil;
+        [NCLRKeymap.shared save];
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     }
     [self.view setNeedsLayout];
 }
 
-- (void)pushUndo:(NSDictionary *)positions {
-    if (positions == nil) return;
-    [self.undoStack addObject:positions];
+- (void)pushUndo:(NSDictionary *)snapshot {
+    if (snapshot == nil || [snapshot isEqualToDictionary:[self keyLayoutSnapshot]]) return;
+    [self.undoStack addObject:snapshot];
     if (self.undoStack.count > 30) [self.undoStack removeObjectAtIndex:0];
     [self.redoStack removeAllObjects];
 }
@@ -3088,10 +3143,11 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     if (self.undoStack.count == 0) return;
     NSDictionary *previous = self.undoStack.lastObject;
     [self.undoStack removeLastObject];
-    [self.redoStack addObject:[NCLRKeymap.shared.positions copy]];
-    NCLRKeymap.shared.positions = [previous mutableCopy];
+    [self.redoStack addObject:[self keyLayoutSnapshot]];
+    NCLRKeymap.shared.positions = [previous[@"positions"] mutableCopy];
+    NCLRKeymap.shared.hiddenKeys = [previous[@"hidden"] mutableCopy];
     [NCLRKeymap.shared save];
-    [self.view setNeedsLayout];
+    [self selectKey:self.selectedKey];
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
 }
 
@@ -3099,10 +3155,11 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     if (self.redoStack.count == 0) return;
     NSDictionary *next = self.redoStack.lastObject;
     [self.redoStack removeLastObject];
-    [self.undoStack addObject:[NCLRKeymap.shared.positions copy]];
-    NCLRKeymap.shared.positions = [next mutableCopy];
+    [self.undoStack addObject:[self keyLayoutSnapshot]];
+    NCLRKeymap.shared.positions = [next[@"positions"] mutableCopy];
+    NCLRKeymap.shared.hiddenKeys = [next[@"hidden"] mutableCopy];
     [NCLRKeymap.shared save];
-    [self.view setNeedsLayout];
+    [self selectKey:self.selectedKey];
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
 }
 
@@ -3117,8 +3174,11 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"重置" style:UIAlertActionStyleDestructive
                                             handler:^(UIAlertAction *action) {
+        NSDictionary *before = [self keyLayoutSnapshot];
         [NCLRKeymap.shared resetLayout];
+        [self pushUndo:before];
         [NCLRKeymap.shared save];
+        [self selectKey:self.selectedKey];
         [self.view setNeedsLayout];
     }]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -3369,55 +3429,114 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     return self;
 }
 - (void)cancel {
-    self.cancelRequested = YES;
-    self.preparing = NO;
-    [self.assetQueue cancelAllOperations];
-    [[NSNotificationCenter defaultCenter] postNotificationName:NCLRPrepareFinishedNotification object:self];
+    if (!self.preparing || !self.cancellable || self.cancelRequested) return;
+    @synchronized (self) {
+        self.cancelRequested = YES;
+        [self.downloadSession invalidateAndCancel];
+    }
 }
 
 - (NSData *)download:(NSString *)url error:(NSString **)error {
-    if (self.cancelRequested) {
-        if (error) *error = @"下载已取消";
+    return [self download:url error:error received:nil];
+}
+
+- (NSData *)download:(NSString *)url error:(NSString **)error
+             received:(void (^)(unsigned long long bytes))received {
+    NSURL *address = [NSURL URLWithString:url];
+    if (![address.scheme.lowercaseString isEqualToString:@"https"] || address.host.length == 0) {
+        if (error) *error = @"下载地址无效";
         return nil;
     }
-    NSError *last = nil;
-    for (int attempt = 0; attempt < 3; attempt++) {
-        NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:url]
-                                             options:0 error:&last];
-        if (data.length > 0) return data;
-        [NSThread sleepForTimeInterval:1.0 + attempt];
+    __block NSString *failure = @"无响应";
+    for (int attempt = 0; attempt < 3 && !self.cancelRequested; attempt++) {
+        dispatch_semaphore_t finished = dispatch_semaphore_create(0);
+        __block NSData *result = nil;
+        NSURLSessionDataTask *task = nil;
+        @synchronized (self) {
+            if (self.cancelRequested) break;
+            task = [self.downloadSession dataTaskWithURL:address
+                completionHandler:^(NSData *data, NSURLResponse *response, NSError *networkError) {
+                    NSInteger status = [(NSHTTPURLResponse *)response statusCode];
+                    if (networkError == nil && status == 200) result = data;
+                    else failure = networkError.localizedDescription ?: [NSString stringWithFormat:@"HTTP %ld", (long)status];
+                    dispatch_semaphore_signal(finished);
+                }];
+            [task resume];
+        }
+        if (task == nil) break;
+        if (received) {
+            while (dispatch_semaphore_wait(finished, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_MSEC))) {
+                received((unsigned long long)MAX(0, task.countOfBytesReceived));
+            }
+        } else {
+            dispatch_semaphore_wait(finished, DISPATCH_TIME_FOREVER);
+        }
+        if (!self.cancelRequested && result != nil) return result;
+        if (received) received(0);
     }
-    if (error) *error = [NSString stringWithFormat:@"下载失败：%@（%@）", url, last.localizedDescription ?: @"无响应"];
+    if (error) *error = self.cancelRequested ? @"下载已取消"
+        : [NSString stringWithFormat:@"下载失败：%@（%@）", address.lastPathComponent, failure];
     return nil;
 }
+
+- (NSData *)verifiedFile:(NSString *)path metadata:(NSDictionary *)metadata error:(NSString **)error {
+    NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];
+    NSString *hash = metadata[@"sha1"];
+    if (data != nil && [NCLRSHA1Hex(data) isEqualToString:hash]) return data;
+    data = [self download:metadata[@"url"] error:error];
+    if (data == nil) return nil;
+    if (![NCLRSHA1Hex(data) isEqualToString:hash]) {
+        *error = [NSString stringWithFormat:@"%@ SHA-1 校验失败", path.lastPathComponent];
+        return nil;
+    }
+    NSError *writeError = nil;
+    if (![data writeToFile:path options:NSDataWritingAtomic error:&writeError]) {
+        *error = writeError.localizedDescription;
+        return nil;
+    }
+    return data;
+}
+
 - (void)prepareWithProgress:(void (^)(NSString *))progress
                  completion:(void (^)(NSString *))completion {
+    if (self.preparing) return;
+    self.preparing = YES;
+    self.cancellable = YES;
+    self.cancelRequested = NO;
+    self.progressValue = 0;
+    self.lastLine = @"准备游戏资源";
+    NSURLSessionConfiguration *configuration = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    configuration.URLCache = nil;
+    configuration.timeoutIntervalForRequest = 20;
+    configuration.timeoutIntervalForResource = 180;
+    self.downloadSession = [NSURLSession sessionWithConfiguration:configuration];
+
     dispatch_async(_queue, ^{
-        self.preparing = YES;
-        void (^report)(NSString *) = ^(NSString *line) {
-            self.lastLine = line;
-            NSInteger downloaded = 0, total = 0;
-            NSRange slash = [line rangeOfString:@"/"];
-            if ([line containsString:@"下载资源"] && slash.location != NSNotFound) {
-                NSString *left = [line substringToIndex:slash.location];
-                NSString *right = [line substringFromIndex:slash.location + 1];
-                NSCharacterSet *digits = NSCharacterSet.decimalDigitCharacterSet;
-                NSRange leftRange = [left rangeOfCharacterFromSet:digits options:NSBackwardsSearch];
-                NSRange rightRange = [right rangeOfCharacterFromSet:digits];
-                if (leftRange.location != NSNotFound && rightRange.location != NSNotFound) {
-                    downloaded = [[left substringFromIndex:leftRange.location] integerValue];
-                    total = [[right substringFromIndex:rightRange.location] integerValue];
-                }
+        void (^finish)(NSString *) = ^(NSString *error) {
+            @synchronized (self) {
+                if (!self.cancelRequested) [self.downloadSession finishTasksAndInvalidate];
+                self.downloadSession = nil;
             }
-            if (self.totalBytes > 0) self.progressValue = MIN(0.9, 0.05 + 0.85 * (float)self.downloadedBytes / (float)self.totalBytes);
-            else if (total > 0) self.progressValue = MIN(0.9, 0.05 + 0.85 * (float)downloaded / (float)total);
-            else if ([line containsString:@"组装"]) self.progressValue = 0.93;
-            else if ([line containsString:@"音效"]) self.progressValue = 0.96;
-            else self.progressValue = MAX(self.progressValue, 0.03);
-            [[NSNotificationCenter defaultCenter] postNotificationName:NCLRPrepareProgressNotification
-                                                                object:self
-                                                              userInfo:@{@"line": line ?: @""}];
-            dispatch_async(dispatch_get_main_queue(), ^{ if (progress) progress(line); });
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSString *result = self.cancelRequested ? @"下载已取消" : error;
+                self.cancellable = NO;
+                self.preparing = NO;
+                self.lastLine = result ?: @"资源准备完成";
+                if (!result) self.progressValue = 1.0;
+                [[NSNotificationCenter defaultCenter] postNotificationName:NCLRPrepareFinishedNotification
+                                                                    object:self userInfo:@{@"status": self.lastLine}];
+                if (completion) completion(result);
+            });
+        };
+        void (^report)(NSString *, float) = ^(NSString *line, float value) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (self.cancelRequested) return;
+                self.lastLine = line;
+                self.progressValue = value;
+                [[NSNotificationCenter defaultCenter] postNotificationName:NCLRPrepareProgressNotification
+                                                                    object:self userInfo:@{@"line": line}];
+                if (progress) progress(line);
+            });
         };
         NSString *cache = [NCLRDocuments() stringByAppendingPathComponent:@".nclr-cache"];
         NSString *jarPath = [cache stringByAppendingPathComponent:@"client.jar"];
@@ -3428,137 +3547,182 @@ static NSString *NCLRSHA1Hex(NSData *data) {
         NCLRCreateDirectory(objects);
         NSString *error = nil;
 
-        report(@"读取 Mojang 版本清单…");
+        report(@"读取 Mojang 版本清单…", 0.01);
         NSData *manifestData = [self download:@"https://piston-meta.mojang.com/mc/game/version_manifest_v2.json" error:&error];
-        if (manifestData == nil) { completion(error); return; }
-        NSDictionary *manifest = [NSJSONSerialization JSONObjectWithData:manifestData options:0 error:nil];
+        if (manifestData == nil) { finish(error); return; }
+        id manifest = [NSJSONSerialization JSONObjectWithData:manifestData options:0 error:nil];
+        id versions = [manifest isKindOfClass:NSDictionary.class] ? manifest[@"versions"] : nil;
+        if (![versions isKindOfClass:NSArray.class]) { finish(@"Mojang 版本清单格式无效"); return; }
         NSString *versionURL = nil;
-        for (NSDictionary *v in manifest[@"versions"]) {
-            if ([v[@"id"] isEqualToString:@"26.3"]) { versionURL = v[@"url"]; break; }
-        }
-        if (versionURL == nil) { completion(@"Mojang 清单里没有 26.3"); return; }
-
-        report(@"读取 26.3 版本信息…");
-        NSData *versionData = [self download:versionURL error:&error];
-        if (versionData == nil) { completion(error); return; }
-        NSDictionary *version = [NSJSONSerialization JSONObjectWithData:versionData options:0 error:nil];
-        NSDictionary *client = version[@"downloads"][@"client"];
-        NSDictionary *assets = version[@"assetIndex"];
-        if (client[@"url"] == nil || assets[@"url"] == nil) { completion(@"版本信息缺少 client/assetIndex"); return; }
-
-        report(@"下载 client.jar…");
-        NSData *jar = [self download:client[@"url"] error:&error];
-        if (jar == nil) { completion(error); return; }
-        if (![NCLRSHA1Hex(jar) isEqualToString:client[@"sha1"]]) { completion(@"client.jar SHA-1 校验失败"); return; }
-        [jar writeToFile:jarPath atomically:YES];
-
-        report(@"下载资源索引…");
-        NSData *indexData = [self download:assets[@"url"] error:&error];
-        if (indexData == nil) { completion(error); return; }
-        if (![NCLRSHA1Hex(indexData) isEqualToString:assets[@"sha1"]]) { completion(@"asset index SHA-1 校验失败"); return; }
-        [indexData writeToFile:indexPath atomically:YES];
-        NSDictionary *index = [NSJSONSerialization JSONObjectWithData:indexData options:0 error:nil];
-        NSDictionary *objectsMap = index[@"objects"];
-        NSArray *names = [objectsMap.allKeys sortedArrayUsingSelector:@selector(compare:)];
-        // 4,900 small objects: a serial loop is dominated by round trips. Eight
-        // workers keep the first run practical on a phone.
-        NSOperationQueue *assetQueue = [[NSOperationQueue alloc] init];
-        assetQueue.maxConcurrentOperationCount = 4;
-        self.lastProgressAt = 0;
-        self.assetQueue = assetQueue;
-        self.cancelRequested = NO;
-        self.startedAt = [NSDate timeIntervalSinceReferenceDate];
-        unsigned long long totalBytes = 0;
-        for (NSString *objectName in names) {
-            totalBytes += [objectsMap[objectName][@"size"] unsignedLongLongValue];
-        }
-        self.totalBytes = totalBytes;
-        self.downloadedBytes = 0;
-        NSInteger cached = 0;
-        for (NSString *objectName in names) {
-            NSDictionary *object = objectsMap[objectName];
-            NSString *hash = object[@"hash"];
-            if (hash.length < 2) continue;
-            NSString *file = [[objects stringByAppendingPathComponent:[hash substringToIndex:2]]
-                              stringByAppendingPathComponent:hash];
-            NSDictionary *attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:file error:nil];
-            if ([attributes[NSFileSize] unsignedLongLongValue] == [object[@"size"] unsignedLongLongValue]) {
-                self.downloadedBytes += [object[@"size"] unsignedLongLongValue];
-                cached++;
+        for (id version in versions) {
+            if ([version isKindOfClass:NSDictionary.class] &&
+                [NCLRString(version[@"id"]) isEqualToString:@"26.3"]) {
+                versionURL = NCLRString(version[@"url"]);
+                break;
             }
         }
-        if (cached > 0) {
-            report([NSString stringWithFormat:@"继续下载，已有 %ld 个缓存文件…", (long)cached]);
+        if (versionURL == nil) { finish(@"Mojang 清单里没有 26.3"); return; }
+
+        report(@"读取 26.3 版本信息…", 0.02);
+        NSData *versionData = [self download:versionURL error:&error];
+        if (versionData == nil) { finish(error); return; }
+        id version = [NSJSONSerialization JSONObjectWithData:versionData options:0 error:nil];
+        id downloads = [version isKindOfClass:NSDictionary.class] ? version[@"downloads"] : nil;
+        id client = [downloads isKindOfClass:NSDictionary.class] ? downloads[@"client"] : nil;
+        id assets = [version isKindOfClass:NSDictionary.class] ? version[@"assetIndex"] : nil;
+        if (![client isKindOfClass:NSDictionary.class] || ![assets isKindOfClass:NSDictionary.class] ||
+            !NCLRString(client[@"url"]) || !NCLRString(assets[@"url"]) ||
+            !NCLRString(client[@"sha1"]) || !NCLRString(assets[@"sha1"])) {
+            finish(@"版本信息缺少有效的 client/assetIndex");
+            return;
         }
-        NSLock *state = [[NSLock alloc] init];
-        __block NSInteger done = 0;
-        __block NSString *assetError = nil;
+
+        report(@"检查 client.jar…", 0.03);
+        if ([self verifiedFile:jarPath metadata:client error:&error] == nil) { finish(error); return; }
+
+        report(@"检查资源索引…", 0.04);
+        NSData *indexData = [self verifiedFile:indexPath metadata:assets error:&error];
+        if (indexData == nil) { finish(error); return; }
+        id index = [NSJSONSerialization JSONObjectWithData:indexData options:0 error:nil];
+        NSDictionary *objectsMap = [index isKindOfClass:NSDictionary.class] ? index[@"objects"] : nil;
+        if (![objectsMap isKindOfClass:NSDictionary.class] || objectsMap.count == 0) {
+            finish(@"资源索引缺少资源列表");
+            return;
+        }
+        NSArray<NSString *> *names = [objectsMap.allKeys sortedArrayUsingSelector:@selector(compare:)];
+        NSMutableDictionary<NSString *, NSNumber *> *sizes = [NSMutableDictionary dictionary];
+        NSCharacterSet *invalidHashCharacters = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
         for (NSString *name in names) {
+            id object = objectsMap[name];
+            NSString *hash = [object isKindOfClass:NSDictionary.class] ? NCLRString(object[@"hash"]) : nil;
+            NSNumber *size = hash ? object[@"size"] : nil;
+            if (hash.length != 40 || [hash rangeOfCharacterFromSet:invalidHashCharacters].location != NSNotFound ||
+                ![size isKindOfClass:NSNumber.class] || size.longLongValue < 0 ||
+                (sizes[hash] && ![sizes[hash] isEqualToNumber:size])) {
+                finish(@"资源索引中的校验值或文件大小无效");
+                return;
+            }
+            sizes[hash] = size;
+        }
+
+        NSOperationQueue *assetQueue = [[NSOperationQueue alloc] init];
+        assetQueue.maxConcurrentOperationCount = 4;
+        NSMutableArray<NSString *> *pending = [NSMutableArray array];
+        unsigned long long totalBytes = 0;
+        unsigned long long cachedBytes = 0;
+        report(@"校验本地资源缓存…", 0.05);
+        for (NSString *hash in sizes) {
+            @autoreleasepool {
+                if (self.cancelRequested) { finish(@"下载已取消"); return; }
+                unsigned long long size = sizes[hash].unsignedLongLongValue;
+                totalBytes += size;
+                NSString *file = [[objects stringByAppendingPathComponent:[hash substringToIndex:2]]
+                                  stringByAppendingPathComponent:hash];
+                NSData *cached = [NSData dataWithContentsOfFile:file options:NSDataReadingMappedIfSafe error:nil];
+                if (cached && cached.length == size && [NCLRSHA1Hex(cached) isEqualToString:hash]) cachedBytes += size;
+                else [pending addObject:hash];
+            }
+        }
+
+        NSLock *state = [[NSLock alloc] init];
+        __block NSUInteger done = sizes.count - pending.count;
+        __block unsigned long long transferred = 0;
+        NSMutableDictionary<NSString *, NSNumber *> *inFlight = [NSMutableDictionary dictionary];
+        __block NSTimeInterval lastUpdate = 0;
+        __block NSString *assetError = nil;
+        NSTimeInterval started = NSProcessInfo.processInfo.systemUptime;
+        unsigned long long expectedBytes = totalBytes;
+        unsigned long long bytesOnDisk = cachedBytes;
+        void (^reportAssets)(NSTimeInterval) = ^(NSTimeInterval now) {
+            unsigned long long currentBytes = transferred;
+            for (NSNumber *bytes in inFlight.objectEnumerator) currentBytes += bytes.unsignedLongLongValue;
+            float fraction = expectedBytes ? (double)(bytesOnDisk + currentBytes) / expectedBytes : (double)done / sizes.count;
+            NSString *speed = [NSByteCountFormatter stringFromByteCount:currentBytes / MAX(0.25, now - started)
+                                                             countStyle:NSByteCountFormatterCountStyleFile];
+            report([NSString stringWithFormat:@"下载资源 %lu/%lu · %@/s · %d%%",
+                    (unsigned long)done, (unsigned long)sizes.count, speed, (int)(100 * fraction)],
+                   0.05 + 0.85 * fraction);
+        };
+        reportAssets(started);
+        for (NSString *hash in pending) {
             [assetQueue addOperationWithBlock:^{
-                [state lock];
-                if (assetError != nil || self.cancelRequested) { [state unlock]; return; }
-                [state unlock];
-                NSDictionary *object = objectsMap[name];
-                NSString *hash = object[@"hash"];
-                if (hash.length < 2) return;
-                NSString *folder = [objects stringByAppendingPathComponent:[hash substringToIndex:2]];
-                NCLRCreateDirectory(folder);
-                NSString *file = [folder stringByAppendingPathComponent:hash];
-                if ([[NSFileManager defaultManager] fileExistsAtPath:file]) {
-                    [state lock]; done++; [state unlock];
-                    return;
-                }
-                NSString *url = [NSString stringWithFormat:@"https://resources.download.minecraft.net/%@/%@",
-                                 [hash substringToIndex:2], hash];
-                NSString *oneError = nil;
-                NSData *data = [self download:url error:&oneError];
-                if (data == nil || ![NCLRSHA1Hex(data) isEqualToString:hash]) {
+                @autoreleasepool {
                     [state lock];
-                    if (assetError == nil) assetError = oneError ?: [NSString stringWithFormat:@"资源校验失败：%@", name];
+                    BOOL stopped = assetError != nil || self.cancelRequested;
                     [state unlock];
-                    [assetQueue cancelAllOperations];
-                    return;
-                }
-                [data writeToFile:file atomically:YES];
-                NSInteger current;
-                [state lock];
-                current = ++done;
-                self.downloadedBytes += data.length;
-                NSTimeInterval elapsed = [NSDate timeIntervalSinceReferenceDate] - self.startedAt;
-                if (elapsed > 0.5) self.bytesPerSecond = (double)self.downloadedBytes / elapsed;
-                [state unlock];
-                NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-                if (now - self.lastProgressAt > 0.12 || current == names.count) {
-                    self.lastProgressAt = now;
-                    NSString *speed = [NSByteCountFormatter stringFromByteCount:(long long)self.bytesPerSecond
-                                                                     countStyle:NSByteCountFormatterCountStyleFile];
-                    NSInteger percent = self.totalBytes > 0
-                        ? (NSInteger)(100.0 * (double)self.downloadedBytes / (double)self.totalBytes) : 0;
-                    report([NSString stringWithFormat:@"下载资源 %ld/%lu · %@/s · %ld%%",
-                            (long)current, (unsigned long)names.count, speed, (long)percent]);
+                    if (stopped) return;
+
+                    NSString *prefix = [hash substringToIndex:2];
+                    NSString *folder = [objects stringByAppendingPathComponent:prefix];
+                    NCLRCreateDirectory(folder);
+                    NSString *file = [folder stringByAppendingPathComponent:hash];
+                    NSString *url = [NSString stringWithFormat:@"https://resources.download.minecraft.net/%@/%@", prefix, hash];
+                    NSString *oneError = nil;
+                    NSError *writeError = nil;
+                    NSData *data = [self download:url error:&oneError received:^(unsigned long long bytes) {
+                        [state lock];
+                        inFlight[hash] = @(MIN(bytes, sizes[hash].unsignedLongLongValue));
+                        NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+                        if (!assetError && now - lastUpdate >= 0.12) {
+                            lastUpdate = now;
+                            reportAssets(now);
+                        }
+                        [state unlock];
+                    }];
+                    if (self.cancelRequested) return;
+                    if (data == nil || data.length != sizes[hash].unsignedLongLongValue ||
+                        ![NCLRSHA1Hex(data) isEqualToString:hash]) {
+                        oneError = oneError ?: [NSString stringWithFormat:@"资源校验失败：%@", hash];
+                    } else if (![data writeToFile:file options:NSDataWritingAtomic error:&writeError]) {
+                        oneError = writeError.localizedDescription;
+                    }
+
+                    [state lock];
+                    [inFlight removeObjectForKey:hash];
+                    if (oneError) {
+                        if (!assetError) assetError = oneError;
+                    } else if (!assetError) {
+                        done++;
+                        transferred += data.length;
+                        NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+                        if (now - lastUpdate >= 0.12 || done == sizes.count) {
+                            lastUpdate = now;
+                            reportAssets(now);
+                        }
+                    }
+                    [state unlock];
                 }
             }];
         }
         [assetQueue waitUntilAllOperationsAreFinished];
-        [state lock]; NSString *finalAssetError = assetError; [state unlock];
-        if (self.cancelRequested) { self.preparing = NO; completion(@"下载已取消"); return; }
-        if (finalAssetError != nil) { self.preparing = NO; completion(finalAssetError); return; }
+        if (self.cancelRequested) { finish(@"下载已取消"); return; }
+        if (assetError) { finish(assetError); return; }
+
+        dispatch_sync(dispatch_get_main_queue(), ^{ self.cancellable = NO; });
+        if (self.cancelRequested) { finish(@"下载已取消"); return; }
 
         NSString *bundle = [[NSBundle mainBundle] pathForResource:@"ship" ofType:@"hzr3"];
-        if (bundle.length == 0) { completion(@"IPA 内缺少 ship.hzr3"); return; }
-        report(@"组装游戏资源…");
-        [[NSFileManager defaultManager] removeItemAtPath:out error:nil];
+        if (bundle.length == 0) { finish(@"IPA 内缺少 ship.hzr3"); return; }
+        report(@"组装游戏资源…", 0.93);
+        NSString *destination = out;
+        out = [out stringByAppendingString:@".preparing"];
+        NSFileManager *files = NSFileManager.defaultManager;
+        NSError *cleanupError = nil;
+        if ([files fileExistsAtPath:out] && ![files removeItemAtPath:out error:&cleanupError]) {
+            finish(cleanupError.localizedDescription);
+            return;
+        }
         NCLRCreateDirectory([out stringByDeletingLastPathComponent]);
         const char *message = horizon_ios_assemble(bundle.UTF8String, jarPath.UTF8String,
                                                    indexPath.UTF8String, objects.UTF8String,
                                                    out.UTF8String);
         if (message != NULL) {
-            completion([NSString stringWithUTF8String:message]);
+            finish([NSString stringWithUTF8String:message]);
             return;
         }
         // hzr-device assembles models/data but not the optional 360 MB sound
         // store; copy the official sounds into the finished tree as well.
-        report(@"复制原版音效…");
+        report(@"复制原版音效…", 0.96);
         NSString *soundRoot = [out stringByAppendingPathComponent:@"assets/minecraft"];
         for (NSString *name in names) {
             NSString *dest = nil;
@@ -3575,20 +3739,31 @@ static NSString *NCLRSHA1Hex(NSData *data) {
             NSString *hash = objectsMap[name][@"hash"];
             NSString *source = [[objects stringByAppendingPathComponent:[hash substringToIndex:2]]
                                 stringByAppendingPathComponent:hash];
-            [[NSFileManager defaultManager] copyItemAtPath:source toPath:dest error:nil];
+            NSError *copyError = nil;
+            if (![[NSFileManager defaultManager] copyItemAtPath:source toPath:dest error:&copyError]) {
+                finish(copyError.localizedDescription);
+                return;
+            }
         }
         if (![[NSFileManager defaultManager] fileExistsAtPath:
                 [out stringByAppendingPathComponent:@"horizon-resources.json"]]) {
-            completion(@"组装完成但资源清单不存在");
+            finish(@"组装完成但资源清单不存在");
             return;
         }
-        report(@"资源准备完成");
-        self.preparing = NO;
-        self.progressValue = 1.0;
-        [[NSNotificationCenter defaultCenter] postNotificationName:NCLRPrepareFinishedNotification object:self];
-        completion(nil);
+        NSError *publishError = nil;
+        if ([files fileExistsAtPath:destination] &&
+            ![files removeItemAtPath:destination error:&publishError]) {
+            finish(publishError.localizedDescription);
+            return;
+        }
+        if (![files moveItemAtPath:out toPath:destination error:&publishError]) {
+            finish(publishError.localizedDescription);
+            return;
+        }
+        finish(nil);
     });
 }
+
 @end
 
 @interface NCLRRootController : UIViewController <UITableViewDataSource, UITableViewDelegate>

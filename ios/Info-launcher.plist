@@ -17,13 +17,13 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.0</string>
+	<string>7.3</string>
 	<key>CFBundleSupportedPlatforms</key>
 	<array>
 		<string>iPhoneOS</string>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>202611251457</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -120,7 +120,7 @@
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
 	<key>NCLRVersionName</key>
-	<string>L1.1</string>
+	<string>L7.3</string>
 </dict>
 </plist>
 
