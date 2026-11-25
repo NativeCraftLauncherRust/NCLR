@@ -10,6 +10,14 @@ use std::sync::OnceLock;
 
 static DIAGNOSTICS: OnceLock<CString> = OnceLock::new();
 
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_add_motion(x: f64, y: f64) {
+    #[cfg(target_os = "ios")]
+    horizon_client::entry::add_ios_motion(x, y);
+    #[cfg(not(target_os = "ios"))]
+    let _ = (x, y);
+}
+
 /// Returns a NUL-terminated UTF-8 diagnostics string owned by this library.
 ///
 /// The pointer stays valid for the lifetime of the process.

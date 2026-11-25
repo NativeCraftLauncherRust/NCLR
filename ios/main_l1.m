@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <CoreMotion/CoreMotion.h>
 #import <SceneKit/SceneKit.h>
 #import <objc/runtime.h>
 #import <Security/Security.h>
@@ -11,6 +12,7 @@
 #include <math.h>
 
 extern int horizon_ios_run(const char *resources, const char *game_dir);
+extern void horizon_ios_add_motion(double dx, double dy);
 @class NCLRResourcePreparer;
 static NSString *const NCLRPrepareProgressNotification = @"NCLRPrepareProgress";
 static NSString *const NCLRPrepareFinishedNotification = @"NCLRPrepareFinished";
@@ -297,6 +299,39 @@ static NSString *NCLRModIdentifier(NSString *path) {
 }
 @end
 
+// Runs on the main queue. Rates are integrated using hardware timestamps.
+static CMMotionManager *NCLRStartGyro(UIWindowScene *scene, CGFloat sensitivity) {
+    CMMotionManager *motion = [CMMotionManager new];
+    if (!motion.gyroAvailable) return nil;
+    motion.gyroUpdateInterval = 1.0 / 120.0;
+    __block NSTimeInterval previous = 0;
+    __weak UIWindowScene *gameScene = scene;
+    [motion startGyroUpdatesToQueue:NSOperationQueue.mainQueue
+                        withHandler:^(CMGyroData *sample, NSError *error) {
+        if (error || !sample || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+            previous = 0;
+            return;
+        }
+        NSTimeInterval elapsed = previous > 0 ? sample.timestamp - previous : 0;
+        previous = sample.timestamp;
+        if (elapsed <= 0 || elapsed > 0.04 ||
+            NSProcessInfo.processInfo.systemUptime - sample.timestamp > 0.08) return;
+        UIInterfaceOrientation orientation = gameScene.interfaceOrientation;
+        if (!UIInterfaceOrientationIsLandscape(orientation)) return;
+        double direction = orientation == UIInterfaceOrientationLandscapeLeft ? 1.0 : -1.0;
+        double yaw = sample.rotationRate.x;
+        double pitch = sample.rotationRate.y;
+        const double radiansToMouseUnits = 180.0 / (M_PI * 0.15);
+        if (fabs(yaw) < 0.012) yaw = 0;
+        if (fabs(pitch) < 0.012) pitch = 0;
+        if (yaw || pitch) {
+            horizon_ios_add_motion(direction * yaw * elapsed * sensitivity * radiansToMouseUnits,
+                                  direction * pitch * elapsed * sensitivity * radiansToMouseUnits);
+        }
+    }];
+    return motion;
+}
+
 static NSString *NCLRModSwitchesPath(void) {
     return [NCLRDocuments() stringByAppendingPathComponent:@"horizon-mods.txt"];
 }
@@ -357,6 +392,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 @property (nonatomic, assign) BOOL leftHanded;
 @property (nonatomic, assign) BOOL joystickSprint;
 @property (nonatomic, assign) CGFloat sensitivity;
+@property (nonatomic, assign) BOOL gyroEnabled;
+@property (nonatomic, assign) CGFloat gyroSensitivity;
 @property (nonatomic, assign) CGFloat joystickDeadzone;
 @property (nonatomic, assign) BOOL sprintButton;
 @property (nonatomic, assign) NSInteger buttonStyle;
@@ -415,6 +452,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     self.leftHanded = NO;
     self.joystickSprint = NO;
     self.sensitivity = 1.0;
+    self.gyroEnabled = NO;
+    self.gyroSensitivity = 1.0;
     self.joystickDeadzone = 0.16;
     self.sprintButton = YES;
     self.buttonStyle = 0;
@@ -472,6 +511,12 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     if ([left isKindOfClass:[NSNumber class]]) self.leftHanded = left.boolValue;
     NSNumber *joystickSprint = json[@"joystickSprint"];
     if ([joystickSprint isKindOfClass:[NSNumber class]]) self.joystickSprint = joystickSprint.boolValue;
+    NSNumber *gyroEnabled = json[@"gyroEnabled"];
+    if ([gyroEnabled isKindOfClass:NSNumber.class]) self.gyroEnabled = gyroEnabled.boolValue;
+    NSNumber *gyroSensitivity = json[@"gyroSensitivity"];
+    if ([gyroSensitivity isKindOfClass:NSNumber.class] && isfinite(gyroSensitivity.doubleValue)) {
+        self.gyroSensitivity = MAX(0.25, MIN(2.5, gyroSensitivity.doubleValue));
+    }
     NSNumber *sensitivity = json[@"sensitivity"];
     if ([sensitivity isKindOfClass:[NSNumber class]]) {
         self.sensitivity = MAX(0.3, MIN(2.5, sensitivity.doubleValue));
@@ -623,6 +668,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"leftHanded" : @(self.leftHanded),
         @"joystickSprint" : @(self.joystickSprint),
         @"sensitivity" : @(self.sensitivity),
+        @"gyroEnabled" : @(self.gyroEnabled),
+        @"gyroSensitivity" : @(self.gyroSensitivity),
         @"joystickDeadzone" : @(self.joystickDeadzone),
         @"sprintButton" : @(self.sprintButton),
         @"buttonStyle" : @(self.buttonStyle),
@@ -2015,7 +2062,11 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     display.preferredFrameRateRange = highRefresh ? CAFrameRateRangeMake(80, 120, 120)
                                                  : CAFrameRateRangeMake(30, 60, 60);
     [display addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    NCLRKeymap *keymap = NCLRKeymap.shared;
+    CMMotionManager *motion = keymap.gyroEnabled
+        ? NCLRStartGyro(launcherWindow.windowScene, keymap.gyroSensitivity) : nil;
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
+    [motion stopGyroUpdates];
     [display invalidate];
     unsetenv("HORIZON_SESSION_FILE");
     [files removeItemAtPath:sessionPath error:nil];
@@ -2695,6 +2746,11 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @property (nonatomic, strong) UIButton *redoTool;
 @property (nonatomic, strong) UIButton *gridTool;
 @property (nonatomic, strong) UIView *touchSettings;
+@property (nonatomic, strong) UIStackView *editorWorkspace;
+@property (nonatomic, strong) UIView *editorInspector;
+@property (nonatomic, strong) NSLayoutConstraint *inspectorWidth;
+@property (nonatomic, strong) UISlider *gyroSlider;
+@property (nonatomic, strong) UILabel *gyroValue;
 @property (nonatomic, strong) UILabel *canvasStatus;
 @property (nonatomic, assign) BOOL canvasFullscreen;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *undoStack;
@@ -2892,8 +2948,10 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.undoStack = [NSMutableArray array];
     self.redoStack = [NSMutableArray array];
     [self setupPage];
-    [self.stack addArrangedSubview:[self headerWithTitle:@"触控界面"
-                                                subtitle:@"游戏内触控按钮 · 布局、位置与大小"
+    self.view.backgroundColor = NCLRCanvas();
+    self.stack.spacing = 12;
+    [self.stack addArrangedSubview:[self headerWithTitle:@"触控编辑"
+                                                subtitle:@"拖动按键调整位置，点按查看设置"
                                              actionTitle:nil action:nil]];
 
     UIView *menu = [self card];
@@ -3209,8 +3267,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     }
     [self.preview bringSubviewToFront:self.selection];
     [self.preview bringSubviewToFront:self.resizeHandle];
-    [self.stack addArrangedSubview:previewCard];
-
     UIView *keyCard = [self card];
     self.keyEditTitle = [self label:@"选择画布上的按键"
                                size:13.0 weight:UIFontWeightSemibold
@@ -3255,14 +3311,13 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.triggerControl.enabled = NO;
     self.triggerControl.selectedSegmentIndex = 0;
     [self.triggerControl addTarget:self action:@selector(triggerChanged:) forControlEvents:UIControlEventValueChanged];
-    UIStackView *inspectorHeader = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.keyEditTitle, keyVisibleRow, self.triggerControl]];
-    inspectorHeader.alignment = UIStackViewAlignmentCenter;
-    inspectorHeader.spacing = 8;
+    UILabel *inspectorTitle = [self eyebrow:@"选中按键"];
+    inspectorTitle.textColor = NCLRAccent();
     self.keyEditTitle.numberOfLines = 1;
     [self.keyEditTitle setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
                                                       forAxis:UILayoutConstraintAxisHorizontal];
-    UIStackView *keyStack = [[UIStackView alloc] initWithArrangedSubviews:@[inspectorHeader, keySizeRow]];
+    UIStackView *keyStack = [[UIStackView alloc] initWithArrangedSubviews:
+        @[inspectorTitle, self.keyEditTitle, keySizeRow, keyVisibleRow, self.triggerControl]];
     keyStack.axis = UILayoutConstraintAxisVertical;
     keyStack.spacing = 9.0;
     keyStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -3273,7 +3328,13 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [keyStack.topAnchor constraintEqualToAnchor:keyCard.topAnchor constant:14.0],
         [keyStack.bottomAnchor constraintEqualToAnchor:keyCard.bottomAnchor constant:-14.0],
     ]];
-    [self.stack insertArrangedSubview:keyCard atIndex:[self.stack.arrangedSubviews indexOfObject:previewCard]];
+    self.editorInspector = keyCard;
+    self.inspectorWidth = [keyCard.widthAnchor constraintEqualToConstant:222];
+    self.editorWorkspace = [[UIStackView alloc] initWithArrangedSubviews:@[previewCard, keyCard]];
+    self.editorWorkspace.axis = UILayoutConstraintAxisVertical;
+    self.editorWorkspace.spacing = 12;
+    [self.stack addArrangedSubview:self.editorWorkspace];
+    [self.stack addArrangedSubview:[self gyroCard]];
     [self.stack addArrangedSubview:menu];
 
     UIButton *save = [self button:@"保存" action:@selector(saveKeymap) primary:YES];
@@ -3283,6 +3344,83 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     actions.spacing = 10.0;
     actions.distribution = UIStackViewDistributionFillEqually;
     [self.stack addArrangedSubview:actions];
+}
+
+- (UIView *)gyroCard {
+    UIView *card = [self card];
+    UILabel *title = [self label:@"陀螺仪视角" size:15 weight:UIFontWeightSemibold
+                            color:NCLRColor(0.94, 0.94, 0.94, 1)];
+    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"gyroscope"]];
+    icon.tintColor = NCLRAccent();
+    icon.contentMode = UIViewContentModeScaleAspectFit;
+    UISwitch *enabled = [[UISwitch alloc] init];
+    enabled.onTintColor = NCLRAccent();
+    enabled.on = NCLRKeymap.shared.gyroEnabled;
+    enabled.accessibilityLabel = @"启用陀螺仪视角";
+    [enabled addTarget:self action:@selector(gyroToggled:) forControlEvents:UIControlEventValueChanged];
+    UIView *spacer = [UIView new];
+    UIStackView *header = [[UIStackView alloc] initWithArrangedSubviews:@[icon, title, spacer, enabled]];
+    header.alignment = UIStackViewAlignmentCenter;
+    header.spacing = 10;
+    self.gyroSlider = [[UISlider alloc] init];
+    self.gyroSlider.minimumValue = 0.25;
+    self.gyroSlider.maximumValue = 2.5;
+    self.gyroSlider.value = NCLRKeymap.shared.gyroSensitivity;
+    self.gyroSlider.enabled = enabled.on;
+    self.gyroSlider.minimumTrackTintColor = NCLRAccent();
+    self.gyroSlider.accessibilityLabel = @"陀螺仪灵敏度";
+    [self.gyroSlider addTarget:self action:@selector(gyroSensitivityChanged:) forControlEvents:UIControlEventValueChanged];
+    UILabel *caption = [self label:@"灵敏度" size:12 weight:UIFontWeightMedium color:NCLRColor(0.76,0.76,0.76,1)];
+    self.gyroValue = [self label:[NSString stringWithFormat:@"%.2f×", self.gyroSlider.value]
+                           size:12 weight:UIFontWeightSemibold color:NCLRAccent()];
+    self.gyroValue.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightSemibold];
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[caption, self.gyroSlider, self.gyroValue]];
+    row.alignment = UIStackViewAlignmentCenter;
+    row.spacing = 10;
+    UIStackView *content = [[UIStackView alloc] initWithArrangedSubviews:@[header, row]];
+    content.axis = UILayoutConstraintAxisVertical;
+    content.spacing = 5;
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:content];
+    [NSLayoutConstraint activateConstraints:@[
+        [icon.widthAnchor constraintEqualToConstant:22],
+        [icon.heightAnchor constraintEqualToConstant:22],
+        [self.gyroValue.widthAnchor constraintEqualToConstant:42],
+        [content.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:14],
+        [content.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-14],
+        [content.topAnchor constraintEqualToAnchor:card.topAnchor constant:10],
+        [content.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-10],
+    ]];
+    CMMotionManager *motion = [CMMotionManager new];
+    if (!motion.gyroAvailable) {
+        enabled.enabled = NO;
+        self.gyroSlider.enabled = NO;
+        title.text = @"此设备不支持陀螺仪";
+    }
+    return card;
+}
+
+- (void)gyroToggled:(UISwitch *)sender {
+    NCLRKeymap.shared.gyroEnabled = sender.on;
+    self.gyroSlider.enabled = sender.on;
+    [NCLRKeymap.shared save];
+}
+
+- (void)gyroSensitivityChanged:(UISlider *)sender {
+    self.gyroValue.text = [NSString stringWithFormat:@"%.2f×", sender.value];
+    NCLRKeymap.shared.gyroSensitivity = sender.value;
+    [NCLRKeymap.shared save];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    BOOL wide = !self.canvasFullscreen && CGRectGetWidth(self.view.bounds) >= 720;
+    UILayoutConstraintAxis axis = wide ? UILayoutConstraintAxisHorizontal : UILayoutConstraintAxisVertical;
+    if (self.editorWorkspace.axis != axis) {
+        self.inspectorWidth.active = NO;
+        self.editorWorkspace.axis = axis;
+        self.inspectorWidth.active = wide;
+    }
 }
 
 - (UIButton *)canvasTool:(NSString *)symbol label:(NSString *)label action:(SEL)action {
@@ -3777,7 +3915,12 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 - (void)toggleCanvas {
     self.canvasFullscreen = !self.canvasFullscreen;
     for (UIView *view in self.stack.arrangedSubviews) {
-        view.hidden = self.canvasFullscreen && view != self.previewCard;
+        view.hidden = self.canvasFullscreen && view != self.editorWorkspace;
+    }
+    self.editorInspector.hidden = self.canvasFullscreen;
+    if (self.canvasFullscreen) {
+        self.inspectorWidth.active = NO;
+        self.editorWorkspace.axis = UILayoutConstraintAxisVertical;
     }
     NSString *symbol = self.canvasFullscreen ? @"arrow.down.right.and.arrow.up.left" : @"arrow.up.left.and.arrow.down.right";
     [self.canvasClose setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];

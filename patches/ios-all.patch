@@ -1094,7 +1094,7 @@ index 7b7a557..8b097d7 100644
  # DirectX 12 driver (`graphicsApi`, graphics.rs).
  wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 diff --git a/crates/horizon-client/src/entry.rs b/crates/horizon-client/src/entry.rs
-index 78cfdee..6efe239 100644
+index 78cfdee..c257073 100644
 --- a/crates/horizon-client/src/entry.rs
 +++ b/crates/horizon-client/src/entry.rs
 @@ -3,6 +3,7 @@
@@ -1124,10 +1124,29 @@ index 78cfdee..6efe239 100644
      Startup {
          launch,
          options,
-@@ -47,6 +52,30 @@ pub fn prepare() -> Startup {
+@@ -47,6 +52,49 @@ pub fn prepare() -> Startup {
      }
  }
  
++#[cfg(target_os = "ios")]
++static IOS_MOTION: std::sync::Mutex<[f64; 2]> = std::sync::Mutex::new([0.0; 2]);
++
++#[cfg(target_os = "ios")]
++pub fn add_ios_motion(x: f64, y: f64) {
++    if !x.is_finite() || !y.is_finite() {
++        return;
++    }
++    if let Ok(mut motion) = IOS_MOTION.lock() {
++        motion[0] = (motion[0] + x).clamp(-180.0, 180.0);
++        motion[1] = (motion[1] + y).clamp(-180.0, 180.0);
++    }
++}
++
++#[cfg(target_os = "ios")]
++pub(crate) fn take_ios_motion() -> [f64; 2] {
++    IOS_MOTION.lock().map_or([0.0; 2], |mut motion| std::mem::take(&mut *motion))
++}
++
 +/// iOS startup: the app has no command line, so the shell supplies the resource
 +/// directory and the writable game directory. The synthetic command line is
 +/// accepted by the same parser the desktop executable uses.
@@ -1774,14 +1793,23 @@ index ee73abf..3704fed 100644
      pub(super) fn facts(&self) -> &BlockFacts {
          &self.core.facts
 diff --git a/crates/horizon-client/src/game/runtime/window_handler.rs b/crates/horizon-client/src/game/runtime/window_handler.rs
-index 6a86a75..4f334c1 100644
+index 6a86a75..8cb9de6 100644
 --- a/crates/horizon-client/src/game/runtime/window_handler.rs
 +++ b/crates/horizon-client/src/game/runtime/window_handler.rs
-@@ -315,6 +315,27 @@ impl Game<'_> {
+@@ -312,9 +312,36 @@ impl Game<'_> {
+         }
+         horizon_client::spans::time("server_packs", || self.tick_server_packs());
+         horizon_client::spans::time("control", || self.poll_control(event_loop));
++        #[cfg(target_os = "ios")]
++        let [gyro_x, gyro_y] = crate::entry::take_ios_motion();
          if self.pending_save.is_some() {
              return;
          }
 +        if self.screen == Screen::Playing && self.focused {
++            #[cfg(target_os = "ios")]
++            if self.title.is_none() && (gyro_x != 0.0 || gyro_y != 0.0) {
++                self.look_turn(gyro_x, gyro_y);
++            }
 +            let touch = self.touch.poll_state();
 +            // A finger that lifts after mining must stop the attack even if the
 +            // pad's trigger release is lost.
@@ -1805,7 +1833,7 @@ index 6a86a75..4f334c1 100644
          horizon_client::spans::time("pads", || self.poll_pads(event_loop));
          self.settle_after_run(event_loop);
          self.pause_if_inactive();
-@@ -326,9 +347,13 @@ impl Game<'_> {
+@@ -326,9 +353,13 @@ impl Game<'_> {
              return;
          }
          if let Some(w) = &self.window {
@@ -1820,7 +1848,7 @@ index 6a86a75..4f334c1 100644
                  let id = w.id();
                  self.handle_window_event(
                      event_loop,
-@@ -351,11 +376,21 @@ impl Game<'_> {
+@@ -351,11 +382,21 @@ impl Game<'_> {
          }
          // Consume the last frame's result: a hidden compositor may stop sending
          // redraws altogether, leaving a successful result stale indefinitely.
@@ -1844,7 +1872,7 @@ index 6a86a75..4f334c1 100644
      }
  }
  
-@@ -417,6 +452,7 @@ impl ApplicationHandler for Game<'_> {
+@@ -417,6 +458,7 @@ impl ApplicationHandler for Game<'_> {
          self.resize_state = Some(self.resize_state_of(window.inner_size()));
          self.window = Some(window);
          self.ime_allowed = false;
@@ -1852,7 +1880,7 @@ index 6a86a75..4f334c1 100644
          self.ime_area = None;
          self.apply_settings();
          self.previous = Instant::now();
-@@ -437,14 +473,13 @@ impl ApplicationHandler for Game<'_> {
+@@ -437,14 +479,13 @@ impl ApplicationHandler for Game<'_> {
          };
          self.handle_window_event(event_loop, id, event, input_trace::InputOrigin::User);
          if let Some((event, modifiers)) = key {
