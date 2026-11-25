@@ -2911,7 +2911,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.sizeRow.axis = UILayoutConstraintAxisHorizontal;
     self.sizeRow.spacing = 10.0;
     self.sizeRow.alignment = UIStackViewAlignmentCenter;
-    self.sizeRow.hidden = YES;
     self.sizeRow.translatesAutoresizingMaskIntoConstraints = NO;
     [self.sizeValue.widthAnchor constraintEqualToConstant:48.0].active = YES;
 
