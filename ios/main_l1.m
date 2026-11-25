@@ -60,6 +60,7 @@ static void NCLRLoadRemoteAvatar(NSString *url, UIImageView *imageView, UILabel 
 @property (nonatomic, assign) NSTimeInterval startedAt;
 @property (nonatomic, assign) double bytesPerSecond;
 @property (nonatomic, strong) NSOperationQueue *assetQueue;
+@property (nonatomic, assign) NSTimeInterval lastProgressAt;
 - (void)cancel;
 @end
 extern const char *horizon_ios_assemble(const char *bundle, const char *client_jar,
@@ -94,7 +95,14 @@ static UIColor *NCLRColor(CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
         CGFloat hi = MAX(r, MAX(g, b));
         CGFloat lo = MIN(r, MIN(g, b));
         if (hi - lo <= 0.10 || hi <= 0.12) {
-            r = 1.0 - r; g = 1.0 - g; b = 1.0 - b;
+            if (hi >= 0.30 && hi < 0.86) {
+                // Mid-grey secondary text: inversion leaves it at 50% grey on
+                // white, which is barely readable. Pull it down to ink.
+                CGFloat ink = 0.16 + 0.10 * (1.0 - hi);
+                r = ink; g = ink; b = ink;
+            } else {
+                r = 1.0 - r; g = 1.0 - g; b = 1.0 - b;
+            }
         }
     }
     return [UIColor colorWithRed:r green:g blue:b alpha:a];
@@ -1210,7 +1218,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                     NSString *uuid = NCLRString(json[@"id"]);
                     if (uuid.length > 0) auth.uuid = uuid;
                     if (auth.avatarURL.length == 0 && name.length > 0) {
-                        auth.avatarURL = [NSString stringWithFormat:@"https://mc-heads.net/avatar/%@/128", name];
+                        auth.avatarURL = [NSString stringWithFormat:@"https://minotar.net/helm/%@/128", name];
                         [[NSNotificationCenter defaultCenter] postNotificationName:NCLRAvatarUpdatedNotification object:auth];
                     }
                 }
@@ -3362,7 +3370,9 @@ static NSString *NCLRSHA1Hex(NSData *data) {
 }
 - (void)cancel {
     self.cancelRequested = YES;
+    self.preparing = NO;
     [self.assetQueue cancelAllOperations];
+    [[NSNotificationCenter defaultCenter] postNotificationName:NCLRPrepareFinishedNotification object:self];
 }
 
 - (NSData *)download:(NSString *)url error:(NSString **)error {
@@ -3453,7 +3463,8 @@ static NSString *NCLRSHA1Hex(NSData *data) {
         // 4,900 small objects: a serial loop is dominated by round trips. Eight
         // workers keep the first run practical on a phone.
         NSOperationQueue *assetQueue = [[NSOperationQueue alloc] init];
-        assetQueue.maxConcurrentOperationCount = 8;
+        assetQueue.maxConcurrentOperationCount = 4;
+        self.lastProgressAt = 0;
         self.assetQueue = assetQueue;
         self.cancelRequested = NO;
         self.startedAt = [NSDate timeIntervalSinceReferenceDate];
@@ -3463,6 +3474,22 @@ static NSString *NCLRSHA1Hex(NSData *data) {
         }
         self.totalBytes = totalBytes;
         self.downloadedBytes = 0;
+        NSInteger cached = 0;
+        for (NSString *objectName in names) {
+            NSDictionary *object = objectsMap[objectName];
+            NSString *hash = object[@"hash"];
+            if (hash.length < 2) continue;
+            NSString *file = [[objects stringByAppendingPathComponent:[hash substringToIndex:2]]
+                              stringByAppendingPathComponent:hash];
+            NSDictionary *attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:file error:nil];
+            if ([attributes[NSFileSize] unsignedLongLongValue] == [object[@"size"] unsignedLongLongValue]) {
+                self.downloadedBytes += [object[@"size"] unsignedLongLongValue];
+                cached++;
+            }
+        }
+        if (cached > 0) {
+            report([NSString stringWithFormat:@"继续下载，已有 %ld 个缓存文件…", (long)cached]);
+        }
         NSLock *state = [[NSLock alloc] init];
         __block NSInteger done = 0;
         __block NSString *assetError = nil;
@@ -3500,7 +3527,9 @@ static NSString *NCLRSHA1Hex(NSData *data) {
                 NSTimeInterval elapsed = [NSDate timeIntervalSinceReferenceDate] - self.startedAt;
                 if (elapsed > 0.5) self.bytesPerSecond = (double)self.downloadedBytes / elapsed;
                 [state unlock];
-                if (current % 25 == 0 || current == names.count) {
+                NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+                if (now - self.lastProgressAt > 0.12 || current == names.count) {
+                    self.lastProgressAt = now;
                     NSString *speed = [NSByteCountFormatter stringFromByteCount:(long long)self.bytesPerSecond
                                                                      countStyle:NSByteCountFormatterCountStyleFile];
                     NSInteger percent = self.totalBytes > 0
