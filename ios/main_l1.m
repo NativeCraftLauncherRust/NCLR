@@ -54,6 +54,13 @@ static void NCLRLoadRemoteAvatar(NSString *url, UIImageView *imageView, UILabel 
 @property (nonatomic, copy) NSString *lastLine;
 @property (nonatomic, assign) float progressValue;
 @property (nonatomic, assign) BOOL preparing;
+@property (nonatomic, assign) BOOL cancelRequested;
+@property (nonatomic, assign) unsigned long long totalBytes;
+@property (nonatomic, assign) unsigned long long downloadedBytes;
+@property (nonatomic, assign) NSTimeInterval startedAt;
+@property (nonatomic, assign) double bytesPerSecond;
+@property (nonatomic, strong) NSOperationQueue *assetQueue;
+- (void)cancel;
 @end
 extern const char *horizon_ios_assemble(const char *bundle, const char *client_jar,
                                         const char *index, const char *store, const char *out);
@@ -818,6 +825,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, assign) BOOL developerPremium;
 @property (nonatomic, copy) NSString *avatarURL;
+@property (nonatomic, copy) NSString *uuid;
 @property (nonatomic, strong) ASWebAuthenticationSession *session;
 @property (nonatomic, weak) UIViewController *presenter;
 @property (nonatomic, strong) SFSafariViewController *authSafari;
@@ -1198,6 +1206,12 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                 NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                 if ([json isKindOfClass:[NSDictionary class]]) {
                     name = NCLRString(json[@"name"]) ?: name;
+                    NSString *uuid = NCLRString(json[@"id"]);
+                    if (uuid.length > 0) auth.uuid = uuid;
+                    if (auth.avatarURL.length == 0 && name.length > 0) {
+                        auth.avatarURL = [NSString stringWithFormat:@"https://mc-heads.net/avatar/%@/128", name];
+                        [[NSNotificationCenter defaultCenter] postNotificationName:NCLRAvatarUpdatedNotification object:auth];
+                    }
                 }
             }
             NCLRAuth *auth = NCLRAuth.shared;
@@ -1383,6 +1397,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 #pragma mark - Pages
 
 @interface NCLRHomeController : NCLRPageController
+@property (nonatomic, strong) UILabel *prepareStatusLabel;
 @end
 
 @implementation NCLRHomeController
@@ -1595,6 +1610,21 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     NSString *game = NCLRDocuments();
     NCLRCreateDirectory(game);
     setenv("HORIZON_HOME", game.UTF8String, 1);
+    NCLRAuth *sessionAuth = NCLRAuth.shared;
+    if (sessionAuth.token.length > 0 && sessionAuth.uuid.length > 0) {
+        NSString *sessionPath = [game stringByAppendingPathComponent:@".nclr-session.json"];
+        NSDictionary *session = @{
+            @"name" : sessionAuth.name ?: @"Player",
+            @"uuid" : sessionAuth.uuid,
+            @"access_token" : sessionAuth.token,
+            @"user_type" : @"msa",
+        };
+        NSData *sessionData = [NSJSONSerialization dataWithJSONObject:session options:0 error:nil];
+        [sessionData writeToFile:sessionPath atomically:YES];
+        [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions : @0600}
+                                         ofItemAtPath:sessionPath error:nil];
+        setenv("HORIZON_SESSION_FILE", sessionPath.UTF8String, 1);
+    }
     setenv("HORIZON_NO_AUDIO", "1", 1);
     setenv("HORIZON_NO_DISCORD", "1", 1);
     // This call starts winit only now. The patched winit attaches to the
@@ -1618,7 +1648,28 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     horizon_ios_run(resources.UTF8String, game.UTF8String);
 }
 
+- (void)prepareProgress:(NSNotification *)note {
+    NSString *line = note.userInfo[@"line"] ?: @"准备游戏资源";
+    if ([line containsString:@"组装"] || [line containsString:@"音效"]) {
+        self.prepareStatusLabel.text = [NSString stringWithFormat:@"正在准备资源 · %@", line];
+    } else {
+        self.prepareStatusLabel.text = [NSString stringWithFormat:@"资源下载中 · %@", line];
+    }
+    self.prepareStatusLabel.textColor = NCLRColor(0.35, 0.78, 0.52, 1.0);
+}
+
+- (void)prepareFinished:(NSNotification *)note {
+    self.prepareStatusLabel.text = @"资源准备完成";
+    self.prepareStatusLabel.textColor = NCLRColor(0.35, 0.78, 0.52, 1.0);
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
 - (void)prepareResources {
+    self.prepareStatusLabel.text = @"资源下载中…";
+    self.prepareStatusLabel.textColor = NCLRColor(0.35, 0.78, 0.52, 1.0);
     [[NCLRResourcePreparer shared] prepareWithProgress:nil completion:^(NSString *error) {
         if (error.length > 0) {
             UIAlertController *fail = [UIAlertController alertControllerWithTitle:@"资源准备失败"
@@ -1637,6 +1688,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @property (nonatomic, strong) UIView *prepareCard;
 @property (nonatomic, strong) UIProgressView *prepareBar;
 @property (nonatomic, strong) UILabel *prepareLabel;
+@property (nonatomic, strong) UIButton *cancelPrepare;
 @end
 
 @implementation NCLRVersionsController
@@ -1676,6 +1728,9 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     UILabel *prepareLabel = [self label:@"准备游戏资源"
                                   size:11.0 weight:UIFontWeightSemibold
                                  color:NCLRColor(0.92, 0.92, 0.92, 1.0)];
+    UIButton *cancelPrepare = [self button:@"取消" action:@selector(cancelPrepareTapped) primary:NO];
+    cancelPrepare.titleLabel.font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightSemibold];
+    [prepare addSubview:cancelPrepare];
     UIProgressView *prepareBar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
     prepareBar.translatesAutoresizingMaskIntoConstraints = NO;
     prepareBar.progressTintColor = NCLRColor(0.25, 0.75, 0.48, 1.0);
@@ -1684,7 +1739,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [prepare addSubview:prepareBar];
     [NSLayoutConstraint activateConstraints:@[
         [prepareLabel.leadingAnchor constraintEqualToAnchor:prepare.leadingAnchor constant:16.0],
-        [prepareLabel.trailingAnchor constraintEqualToAnchor:prepare.trailingAnchor constant:-16.0],
+        [prepareLabel.trailingAnchor constraintLessThanOrEqualToAnchor:cancelPrepare.leadingAnchor constant:-8.0],
+        [cancelPrepare.trailingAnchor constraintEqualToAnchor:prepare.trailingAnchor constant:-14.0],
+        [cancelPrepare.centerYAnchor constraintEqualToAnchor:prepareLabel.centerYAnchor],
+        [cancelPrepare.widthAnchor constraintEqualToConstant:56.0],
         [prepareLabel.topAnchor constraintEqualToAnchor:prepare.topAnchor constant:13.0],
         [prepareBar.leadingAnchor constraintEqualToAnchor:prepare.leadingAnchor constant:16.0],
         [prepareBar.trailingAnchor constraintEqualToAnchor:prepare.trailingAnchor constant:-16.0],
@@ -1693,6 +1751,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     ]];
     self.prepareCard = prepare;
     self.prepareLabel = prepareLabel;
+    self.cancelPrepare = cancelPrepare;
     self.prepareBar = prepareBar;
     [self.stack addArrangedSubview:prepare];
     [[NSNotificationCenter defaultCenter] addObserver:self
@@ -1730,6 +1789,12 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)cancelPrepareTapped {
+    [[NCLRResourcePreparer shared] cancel];
+    self.prepareLabel.text = @"正在取消下载…";
+    self.cancelPrepare.enabled = NO;
 }
 
 - (void)addVersion {
@@ -2091,10 +2156,6 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     ]];
     [self.stack addArrangedSubview:account];
 
-    UILabel *legal = [self label:@"启动器只在你主动登录时联系 Microsoft / Minecraft Services。使用公开的 Azure Client ID，不提供离线绕过。"
-                             size:10.0 weight:UIFontWeightRegular
-                            color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
-    [self.stack addArrangedSubview:legal];
 }
 
 - (void)configClientId {
@@ -2262,6 +2323,10 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *undoStack;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *redoStack;
 @property (nonatomic, strong) NSDictionary *gestureStartPositions;
+@property (nonatomic, strong) UILabel *keyEditTitle;
+@property (nonatomic, strong) UISlider *keySizeSlider;
+@property (nonatomic, strong) UILabel *keySizeValue;
+@property (nonatomic, strong) UISwitch *keyVisibleSwitch;
 @end
 
 @interface NCLRSettingsController : NCLRPageController
@@ -2741,44 +2806,51 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
     [self.preview bringSubviewToFront:self.resizeHandle];
     [self.stack addArrangedSubview:previewCard];
 
-    NSArray<NSString *> *names = @[@"移动摇杆", @"跳跃", @"潜行", @"冲刺", @"攻击",
-                                   @"使用", @"背包", @"聊天", @"暂停", @"触控设置",
-                                   @"调试", @"视角", @"副手", @"盾牌", @"系统键盘"];
-    NSArray<NSString *> *keys = @[@"move", @"jump", @"sneak", @"sprint", @"attack",
-                                  @"use", @"inventory", @"chat", @"pause", @"settings",
-                                  @"debug", @"perspective", @"offhand", @"shield", @"keyboard"];
-    for (NSInteger i = 0; i < names.count; i++) {
-        UIView *card = [self card];
-        UILabel *name = [self label:names[i] size:13.0 weight:UIFontWeightSemibold
+    UIView *keyCard = [self card];
+    self.keyEditTitle = [self label:@"选择画布上的按键"
+                               size:13.0 weight:UIFontWeightSemibold
                               color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
-        UIButton *key = [self button:NCLRKeymap.shared.bindings[keys[i]] ?: @"—"
-                                action:@selector(editKey:) primary:NO];
-        key.tag = i;
-        key.titleLabel.font = [UIFont monospacedSystemFontOfSize:14.0 * NCLRKeymap.shared.buttonSize
-                                                          weight:UIFontWeightSemibold];
-        key.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
-        [self.keyButtons addObject:key];
-        UISwitch *vis = [[UISwitch alloc] init];
-        vis.on = ![NCLRKeymap.shared isHidden:keys[i]];
-        vis.tag = i;
-        [vis addTarget:self action:@selector(visibilityChanged:) forControlEvents:UIControlEventValueChanged];
-        self.visibilitySwitches[keys[i]] = vis;
-        [card addSubview:name];
-        [card addSubview:key];
-        [card addSubview:vis];
-        [NSLayoutConstraint activateConstraints:@[
-            [name.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
-            [name.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
-            [name.trailingAnchor constraintLessThanOrEqualToAnchor:key.leadingAnchor constant:-10.0],
-            [key.trailingAnchor constraintEqualToAnchor:vis.leadingAnchor constant:-10.0],
-            [key.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
-            [key.widthAnchor constraintEqualToConstant:96.0],
-            [key.heightAnchor constraintEqualToConstant:36.0],
-            [vis.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-14.0],
-            [vis.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
-        ]];
-        [self.stack addArrangedSubview:card];
-    }
+    UILabel *keySizeLabel = [self label:@"按键大小" size:12.0 weight:UIFontWeightSemibold
+                                  color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
+    self.keySizeSlider = [[UISlider alloc] init];
+    self.keySizeSlider.minimumValue = 0.045f;
+    self.keySizeSlider.maximumValue = 0.45f;
+    self.keySizeSlider.value = 0.12f;
+    self.keySizeSlider.minimumTrackTintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
+    [self.keySizeSlider addTarget:self action:@selector(keySizeChanged:)
+                  forControlEvents:UIControlEventValueChanged];
+    self.keySizeValue = [self label:@"0.12" size:11.0 weight:UIFontWeightSemibold
+                             color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
+    self.keySizeValue.textAlignment = NSTextAlignmentRight;
+    [self.keySizeValue.widthAnchor constraintEqualToConstant:48.0].active = YES;
+    UIStackView *keySizeRow = [[UIStackView alloc] initWithArrangedSubviews:
+        @[keySizeLabel, self.keySizeSlider, self.keySizeValue]];
+    keySizeRow.axis = UILayoutConstraintAxisHorizontal;
+    keySizeRow.spacing = 10.0;
+    keySizeRow.alignment = UIStackViewAlignmentCenter;
+    UILabel *keyVisibleLabel = [self label:@"显示该按键" size:12.0 weight:UIFontWeightSemibold
+                                    color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
+    self.keyVisibleSwitch = [[UISwitch alloc] init];
+    [self.keyVisibleSwitch addTarget:self action:@selector(keyVisibleChanged:)
+                     forControlEvents:UIControlEventValueChanged];
+    UIView *keyVisibleSpacer = [[UIView alloc] init];
+    UIStackView *keyVisibleRow = [[UIStackView alloc] initWithArrangedSubviews:
+        @[keyVisibleLabel, keyVisibleSpacer, self.keyVisibleSwitch]];
+    keyVisibleRow.axis = UILayoutConstraintAxisHorizontal;
+    keyVisibleRow.alignment = UIStackViewAlignmentCenter;
+    UIStackView *keyStack = [[UIStackView alloc] initWithArrangedSubviews:
+        @[self.keyEditTitle, keySizeRow, keyVisibleRow]];
+    keyStack.axis = UILayoutConstraintAxisVertical;
+    keyStack.spacing = 9.0;
+    keyStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [keyCard addSubview:keyStack];
+    [NSLayoutConstraint activateConstraints:@[
+        [keyStack.leadingAnchor constraintEqualToAnchor:keyCard.leadingAnchor constant:16.0],
+        [keyStack.trailingAnchor constraintEqualToAnchor:keyCard.trailingAnchor constant:-16.0],
+        [keyStack.topAnchor constraintEqualToAnchor:keyCard.topAnchor constant:14.0],
+        [keyStack.bottomAnchor constraintEqualToAnchor:keyCard.bottomAnchor constant:-14.0],
+    ]];
+    [self.stack addArrangedSubview:keyCard];
 
     UILabel *path = [self label:[NSString stringWithFormat:@"保存到：%@", NCLRKeymap.shared.path]
                             size:10.0 weight:UIFontWeightRegular
@@ -2834,9 +2906,13 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
         CGFloat size = [position[@"size"] doubleValue] * area.size.height *
             NCLRKeymap.shared.buttonSize;
         size = MAX(26.0, size);
-        button.frame = CGRectMake(area.origin.x + x * area.size.width - size / 2.0,
-                                  area.origin.y + y * area.size.height - size / 2.0,
-                                  size, size);
+        CGFloat centerX = area.origin.x + x * area.size.width;
+        CGFloat centerY = area.origin.y + y * area.size.height;
+        centerX = MAX(CGRectGetMinX(area) + size / 2.0,
+                      MIN(CGRectGetMaxX(area) - size / 2.0, centerX));
+        centerY = MAX(CGRectGetMinY(area) + size / 2.0,
+                      MIN(CGRectGetMaxY(area) - size / 2.0, centerY));
+        button.frame = CGRectMake(centerX - size / 2.0, centerY - size / 2.0, size, size);
         button.titleLabel.font = [UIFont monospacedSystemFontOfSize:MAX(9.0, 11.0 * NCLRKeymap.shared.buttonSize)
                                                               weight:UIFontWeightBold];
         BOOL move = [key isEqualToString:@"move"];
@@ -2859,6 +2935,33 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (void)selectKey:(NSString *)key {
     self.selectedKey = key;
+    NSDictionary *position = NCLRKeymap.shared.positions[key];
+    CGFloat size = [position[@"size"] doubleValue];
+    if (size <= 0.0) size = 0.12;
+    self.keySizeSlider.value = size;
+    self.keySizeValue.text = [NSString stringWithFormat:@"%.2f", size];
+    self.keyVisibleSwitch.on = ![NCLRKeymap.shared isHidden:key];
+    self.keyEditTitle.text = key.length > 0 ? key : @"选择画布上的按键";
+    [self.view setNeedsLayout];
+}
+
+- (void)keySizeChanged:(UISlider *)sender {
+    if (self.selectedKey.length == 0) return;
+    NSDictionary *old = NCLRKeymap.shared.positions[self.selectedKey];
+    NCLRKeymap.shared.positions[self.selectedKey] = @{
+        @"x" : old[@"x"] ?: @0.5,
+        @"y" : old[@"y"] ?: @0.5,
+        @"size" : @(sender.value),
+    };
+    self.keySizeValue.text = [NSString stringWithFormat:@"%.2f", sender.value];
+    [NCLRKeymap.shared save];
+    [self.view setNeedsLayout];
+}
+
+- (void)keyVisibleChanged:(UISwitch *)sender {
+    if (self.selectedKey.length == 0) return;
+    [NCLRKeymap.shared setHidden:!sender.on forKey:self.selectedKey];
+    [NCLRKeymap.shared save];
     [self.view setNeedsLayout];
 }
 
@@ -3170,7 +3273,7 @@ static void NCLRBoostLayerTree(CALayer *layer, NSMutableString *log, int depth) 
 
 - (CGRect)previewContentRect {
     if (!self.canvasFullscreen) return self.preview.bounds;
-    return UIEdgeInsetsInsetRect(self.preview.bounds, self.view.safeAreaInsets);
+    return UIEdgeInsetsInsetRect(self.preview.bounds, UIEdgeInsetsMake(10.0, 10.0, 10.0, 10.0));
 }
 
 - (void)toggleCanvas {
@@ -3257,7 +3360,16 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     if (self) _queue = dispatch_queue_create("dev.zrxmaxlnx.nclr.prepare", DISPATCH_QUEUE_SERIAL);
     return self;
 }
+- (void)cancel {
+    self.cancelRequested = YES;
+    [self.assetQueue cancelAllOperations];
+}
+
 - (NSData *)download:(NSString *)url error:(NSString **)error {
+    if (self.cancelRequested) {
+        if (error) *error = @"下载已取消";
+        return nil;
+    }
     NSError *last = nil;
     for (int attempt = 0; attempt < 3; attempt++) {
         NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:url]
@@ -3287,7 +3399,8 @@ static NSString *NCLRSHA1Hex(NSData *data) {
                     total = [[right substringFromIndex:rightRange.location] integerValue];
                 }
             }
-            if (total > 0) self.progressValue = MIN(0.9, 0.05 + 0.85 * (float)downloaded / (float)total);
+            if (self.totalBytes > 0) self.progressValue = MIN(0.9, 0.05 + 0.85 * (float)self.downloadedBytes / (float)self.totalBytes);
+            else if (total > 0) self.progressValue = MIN(0.9, 0.05 + 0.85 * (float)downloaded / (float)total);
             else if ([line containsString:@"组装"]) self.progressValue = 0.93;
             else if ([line containsString:@"音效"]) self.progressValue = 0.96;
             else self.progressValue = MAX(self.progressValue, 0.03);
@@ -3341,13 +3454,22 @@ static NSString *NCLRSHA1Hex(NSData *data) {
         // workers keep the first run practical on a phone.
         NSOperationQueue *assetQueue = [[NSOperationQueue alloc] init];
         assetQueue.maxConcurrentOperationCount = 8;
+        self.assetQueue = assetQueue;
+        self.cancelRequested = NO;
+        self.startedAt = [NSDate timeIntervalSinceReferenceDate];
+        unsigned long long totalBytes = 0;
+        for (NSString *objectName in names) {
+            totalBytes += [objectsMap[objectName][@"size"] unsignedLongLongValue];
+        }
+        self.totalBytes = totalBytes;
+        self.downloadedBytes = 0;
         NSLock *state = [[NSLock alloc] init];
         __block NSInteger done = 0;
         __block NSString *assetError = nil;
         for (NSString *name in names) {
             [assetQueue addOperationWithBlock:^{
                 [state lock];
-                if (assetError != nil) { [state unlock]; return; }
+                if (assetError != nil || self.cancelRequested) { [state unlock]; return; }
                 [state unlock];
                 NSDictionary *object = objectsMap[name];
                 NSString *hash = object[@"hash"];
@@ -3372,15 +3494,26 @@ static NSString *NCLRSHA1Hex(NSData *data) {
                 }
                 [data writeToFile:file atomically:YES];
                 NSInteger current;
-                [state lock]; current = ++done; [state unlock];
-                if (current % 50 == 0) {
-                    report([NSString stringWithFormat:@"下载资源 %ld/%lu…", (long)current, (unsigned long)names.count]);
+                [state lock];
+                current = ++done;
+                self.downloadedBytes += data.length;
+                NSTimeInterval elapsed = [NSDate timeIntervalSinceReferenceDate] - self.startedAt;
+                if (elapsed > 0.5) self.bytesPerSecond = (double)self.downloadedBytes / elapsed;
+                [state unlock];
+                if (current % 25 == 0 || current == names.count) {
+                    NSString *speed = [NSByteCountFormatter stringFromByteCount:(long long)self.bytesPerSecond
+                                                                     countStyle:NSByteCountFormatterCountStyleFile];
+                    NSInteger percent = self.totalBytes > 0
+                        ? (NSInteger)(100.0 * (double)self.downloadedBytes / (double)self.totalBytes) : 0;
+                    report([NSString stringWithFormat:@"下载资源 %ld/%lu · %@/s · %ld%%",
+                            (long)current, (unsigned long)names.count, speed, (long)percent]);
                 }
             }];
         }
         [assetQueue waitUntilAllOperationsAreFinished];
         [state lock]; NSString *finalAssetError = assetError; [state unlock];
-        if (finalAssetError != nil) { completion(finalAssetError); return; }
+        if (self.cancelRequested) { self.preparing = NO; completion(@"下载已取消"); return; }
+        if (finalAssetError != nil) { self.preparing = NO; completion(finalAssetError); return; }
 
         NSString *bundle = [[NSBundle mainBundle] pathForResource:@"ship" ofType:@"hzr3"];
         if (bundle.length == 0) { completion(@"IPA 内缺少 ship.hzr3"); return; }
