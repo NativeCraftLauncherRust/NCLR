@@ -547,26 +547,30 @@ impl WinitView {
         // send individual events for each character
         app_state::handle_nonuser_events(
             mtm,
-            text.to_string().chars().flat_map(|c| {
-                let text = smol_str::SmolStr::from_iter([c]);
-                // Emit both press and release events
+            text.to_string().replace("\r\n", "\n").chars().flat_map(|c| {
+                let (logical_key, physical_key, text) = if matches!(c, '\r' | '\n') {
+                    // UIKeyInput sends the software Return as a newline. Title screens
+                    // handle Enter by key code; a committed newline is ordinary text.
+                    (Key::Named(NamedKey::Enter), PhysicalKey::Code(KeyCode::Enter), None)
+                } else {
+                    let text = smol_str::SmolStr::from_iter([c]);
+                    (
+                        Key::Character(text.clone()),
+                        PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
+                        Some(text),
+                    )
+                };
                 [ElementState::Pressed, ElementState::Released].map(|state| {
                     EventWrapper::StaticEvent(Event::WindowEvent {
                         window_id,
                         event: WindowEvent::KeyboardInput {
                             event: KeyEvent {
-                                text: if state == ElementState::Pressed {
-                                    Some(text.clone())
-                                } else {
-                                    None
-                                },
+                                text: if state == ElementState::Pressed { text.clone() } else { None },
                                 state,
                                 location: KeyLocation::Standard,
                                 repeat: false,
-                                logical_key: Key::Character(text.clone()),
-                                physical_key: PhysicalKey::Unidentified(
-                                    NativeKeyCode::Unidentified,
-                                ),
+                                logical_key: logical_key.clone(),
+                                physical_key,
                                 platform_specific: KeyEventExtra {},
                             },
                             is_synthetic: false,
