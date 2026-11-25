@@ -385,6 +385,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 @interface NCLRKeymap : NSObject
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *bindings;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *positions;
+@property (nonatomic, strong) NSMutableSet<NSString *> *deletedKeys;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *triggerModes;
 @property (nonatomic, assign) CGFloat buttonSize;
 @property (nonatomic, assign) CGFloat opacity;
@@ -453,6 +454,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     } mutableCopy];
     self.opacity = 0.55;
     self.layoutVersion = 2;
+    self.deletedKeys = [NSMutableSet set];
     self.leftHanded = NO;
     self.joystickSprint = NO;
     self.sensitivity = 1.0;
@@ -575,6 +577,12 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 
         }
     }
+    NSArray *deleted = json[@"deletedKeys"];
+    if ([deleted isKindOfClass:NSArray.class]) {
+        for (id key in deleted) {
+            if ([key isKindOfClass:NSString.class]) [self.deletedKeys addObject:key];
+        }
+    }
     NSArray *hidden = json[@"hidden"];
     if ([hidden isKindOfClass:[NSArray class]]) {
         [self.hiddenKeys removeAllObjects];
@@ -591,6 +599,10 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 }
 
 - (void)addKey:(NSString *)key label:(NSString *)label {
+    if ([self.deletedKeys containsObject:key]) {
+        [self.deletedKeys removeObject:key];
+        return;
+    }
     if (key.length == 0 || self.bindings[key] != nil) {
         return;
     }
@@ -599,6 +611,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 }
 
 - (void)resetLayout {
+    [self.deletedKeys removeAllObjects];
     self.positions = [@{
         @"forward" : @{ @"x" : @0.10, @"y" : @0.80, @"size" : @0.10 },
         @"back" : @{ @"x" : @0.16, @"y" : @0.88, @"size" : @0.08 },
@@ -687,6 +700,7 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"buttonStyle" : @(self.buttonStyle),
         @"iconLabels" : @(self.iconLabels),
         @"hidden" : self.hiddenKeys.allObjects ?: @[],
+        @"deletedKeys" : self.deletedKeys.allObjects ?: @[],
         @"bindings" : self.bindings ?: @{},
         @"layout" : self.positions ?: @{},
         @"triggerModes" : self.triggerModes ?: @{},
@@ -2774,6 +2788,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @property (nonatomic, strong) UILabel *keyEditTitle;
 @property (nonatomic, strong) UISlider *keySizeSlider;
 @property (nonatomic, strong) UISegmentedControl *triggerControl;
+@property (nonatomic, strong) UIButton *deleteKeyButton;
 @property (nonatomic, strong) UILabel *keySizeValue;
 @property (nonatomic, strong) UISwitch *keyVisibleSwitch;
 @end
@@ -3234,54 +3249,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
                                                                                    action:@selector(resizeKey:)]];
     [self.preview addSubview:self.resizeHandle];
 
-    for (NSString *key in NCLRKeymap.shared.bindings) {
-        if ([key isEqualToString:@"forward"] || [key isEqualToString:@"back"] ||
-            [key isEqualToString:@"left"] || [key isEqualToString:@"right"]) {
-            continue;
-        }
-        UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
-        button.accessibilityIdentifier = key;
-        BOOL move = [key isEqualToString:@"move"];
-        if (move) {
-            [button setTitle:nil forState:UIControlStateNormal];
-            button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.08];
-            button.layer.borderWidth = 2.0;
-            button.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.35].CGColor;
-            UIView *knob = [[UIView alloc] initWithFrame:CGRectZero];
-            knob.tag = 991;
-            knob.userInteractionEnabled = NO;
-            knob.backgroundColor = NCLRAccent();
-            knob.layer.cornerRadius = 8.0;
-            [button addSubview:knob];
-            UILabel *caption = [self label:@"移动" size:9.0 weight:UIFontWeightSemibold
-                                         color:NCLRColor(0.92, 0.92, 0.92, 1.0)];
-            caption.tag = 992;
-            caption.textAlignment = NSTextAlignmentCenter;
-            caption.userInteractionEnabled = NO;
-            caption.translatesAutoresizingMaskIntoConstraints = YES;
-            [button addSubview:caption];
-        } else {
-            NSString *binding = NCLRKeymap.shared.bindings[key];
-            button.accessibilityLabel = binding;
-            NSString *caption = [binding isEqualToString:@"MouseLeft"] ? @"左键"
-                : [binding isEqualToString:@"MouseRight"] ? @"右键"
-                : [binding isEqualToString:@"MouseMiddle"] ? @"中键"
-                : [binding isEqualToString:@"Space"] ? @"空格" : binding;
-            [button setTitle:caption forState:UIControlStateNormal];
-            [button setTitleColor:NCLRColor(0.04, 0.04, 0.04, 1.0) forState:UIControlStateNormal];
-            button.titleLabel.font = [UIFont monospacedSystemFontOfSize:11.0 weight:UIFontWeightBold];
-            button.backgroundColor = NCLRColor(0.95, 0.95, 0.95, 0.86);
-            button.layer.cornerRadius = 8.0;
-        }
-        [button addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self
-                                                                            action:@selector(dragKey:)]];
-        [button addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self
-                                                                              action:@selector(tapKey:)]];
-        [self.preview addSubview:button];
-        self.previewButtons[key] = button;
-    }
-    [self.preview bringSubviewToFront:self.selection];
-    [self.preview bringSubviewToFront:self.resizeHandle];
+    [self refreshPreviewButtons];
     UIView *keyCard = [self card];
     self.keyEditTitle = [self label:@"选择画布上的按键"
                                size:13.0 weight:UIFontWeightSemibold
@@ -3331,8 +3299,13 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.keyEditTitle.numberOfLines = 1;
     [self.keyEditTitle setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
                                                       forAxis:UILayoutConstraintAxisHorizontal];
+    self.deleteKeyButton = [self button:@"删除按键" action:@selector(deleteSelectedKey) primary:NO];
+    self.deleteKeyButton.enabled = NO;
+    [self.deleteKeyButton setTitleColor:NCLRDarkMode ? [UIColor colorWithRed:1 green:0.57 blue:0.57 alpha:1]
+                                                   : [UIColor colorWithRed:0.62 green:0.12 blue:0.17 alpha:1]
+                               forState:UIControlStateNormal];
     UIStackView *keyStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[inspectorTitle, self.keyEditTitle, keySizeRow, keyVisibleRow, self.triggerControl]];
+        @[inspectorTitle, self.keyEditTitle, keySizeRow, keyVisibleRow, self.triggerControl, self.deleteKeyButton]];
     keyStack.axis = UILayoutConstraintAxisVertical;
     keyStack.spacing = 9.0;
     keyStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -3359,6 +3332,58 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     actions.spacing = 10.0;
     actions.distribution = UIStackViewDistributionFillEqually;
     [self.stack addArrangedSubview:actions];
+}
+
+- (void)refreshPreviewButtons {
+    for (NSString *key in NCLRKeymap.shared.bindings) {
+        if (self.previewButtons[key] || [key isEqualToString:@"forward"] || [key isEqualToString:@"back"] ||
+            [key isEqualToString:@"left"] || [key isEqualToString:@"right"]) {
+            continue;
+        }
+        UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+        button.accessibilityIdentifier = key;
+        BOOL move = [key isEqualToString:@"move"];
+        if (move) {
+            [button setTitle:nil forState:UIControlStateNormal];
+            button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.08];
+            button.layer.borderWidth = 2.0;
+            button.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.35].CGColor;
+            UIView *knob = [[UIView alloc] initWithFrame:CGRectZero];
+            knob.tag = 991;
+            knob.userInteractionEnabled = NO;
+            knob.backgroundColor = NCLRAccent();
+            knob.layer.cornerRadius = 8.0;
+            [button addSubview:knob];
+            UILabel *caption = [self label:@"移动" size:9.0 weight:UIFontWeightSemibold
+                                         color:NCLRColor(0.92, 0.92, 0.92, 1.0)];
+            caption.tag = 992;
+            caption.textAlignment = NSTextAlignmentCenter;
+            caption.userInteractionEnabled = NO;
+            caption.translatesAutoresizingMaskIntoConstraints = YES;
+            [button addSubview:caption];
+        } else {
+            NSString *binding = NCLRKeymap.shared.bindings[key];
+            button.accessibilityLabel = binding;
+            NSString *caption = [binding isEqualToString:@"MouseLeft"] ? @"左键"
+                : [binding isEqualToString:@"MouseRight"] ? @"右键"
+                : [binding isEqualToString:@"MouseMiddle"] ? @"中键"
+                : [binding isEqualToString:@"Space"] ? @"空格" : binding;
+            [button setTitle:caption forState:UIControlStateNormal];
+            [button setTitleColor:NCLRColor(0.04, 0.04, 0.04, 1.0) forState:UIControlStateNormal];
+            button.titleLabel.font = [UIFont monospacedSystemFontOfSize:11.0 weight:UIFontWeightBold];
+            button.backgroundColor = NCLRColor(0.95, 0.95, 0.95, 0.86);
+            button.layer.cornerRadius = 8.0;
+        }
+        [button addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self
+                                                                            action:@selector(dragKey:)]];
+        [button addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self
+                                                                              action:@selector(tapKey:)]];
+        [self.preview addSubview:button];
+        self.previewButtons[key] = button;
+    }
+    [self.preview bringSubviewToFront:self.selection];
+    [self.preview bringSubviewToFront:self.resizeHandle];
+    [self.preview setNeedsLayout];
 }
 
 - (UIView *)gyroCard {
@@ -3525,6 +3550,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.grid.frame = self.preview.bounds;
     for (NSString *key in self.previewButtons) {
         UIButton *button = self.previewButtons[key];
+        button.hidden = [NCLRKeymap.shared.deletedKeys containsObject:key] || !NCLRKeymap.shared.bindings[key];
+        if (button.hidden) continue;
         NSDictionary *position = key.length ? NCLRKeymap.shared.positions[key] : nil;
         if (position == nil) position = @{ @"x" : @0.5, @"y" : @0.5, @"size" : @0.08 };
         CGFloat x = [position[@"x"] doubleValue];
@@ -3569,7 +3596,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 }
 
 - (void)selectKey:(NSString *)key {
+    if (key && ([NCLRKeymap.shared.deletedKeys containsObject:key] || !NCLRKeymap.shared.bindings[key])) key = nil;
     self.selectedKey = key;
+    self.deleteKeyButton.enabled = key.length > 0;
     self.triggerControl.enabled = key.length > 0 && ![key isEqualToString:@"move"];
     self.triggerControl.selectedSegmentIndex = key.length > 0 &&
         [NCLRKeymap.shared.triggerModes[key] isEqualToString:@"toggle"] ? 1 : 0;
@@ -3591,7 +3620,30 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 - (NSDictionary *)keyLayoutSnapshot {
     NCLRKeymap *keymap = NCLRKeymap.shared;
     return @{@"positions": [keymap.positions copy], @"hidden": [keymap.hiddenKeys copy],
+             @"bindings": [keymap.bindings copy], @"deletedKeys": [keymap.deletedKeys copy],
              @"triggerModes": [keymap.triggerModes copy] ?: @{}};
+}
+
+- (void)deleteSelectedKey {
+    NSString *key = self.selectedKey;
+    if (!key.length) return;
+    NSDictionary *before = [self keyLayoutSnapshot];
+    [NCLRKeymap.shared.deletedKeys addObject:key];
+    [self pushUndo:before];
+    [NCLRKeymap.shared save];
+    [self selectKey:nil];
+}
+
+- (void)restoreKeyLayoutSnapshot:(NSDictionary *)snapshot {
+    NCLRKeymap *keys = NCLRKeymap.shared;
+    keys.positions = [snapshot[@"positions"] mutableCopy];
+    keys.hiddenKeys = [snapshot[@"hidden"] mutableCopy];
+    keys.bindings = [snapshot[@"bindings"] mutableCopy];
+    keys.deletedKeys = [snapshot[@"deletedKeys"] mutableCopy];
+    keys.triggerModes = [snapshot[@"triggerModes"] mutableCopy];
+    [keys save];
+    [self refreshPreviewButtons];
+    [self selectKey:self.selectedKey];
 }
 
 - (void)triggerChanged:(UISegmentedControl *)sender {
@@ -3691,7 +3743,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     if (y < 0.043) y = 0.025;
     if (y > 0.957) y = 0.975;
     for (NSString *other in NCLRKeymap.shared.positions) {
-        if ([other isEqualToString:key]) continue;
+        if ([other isEqualToString:key] || [NCLRKeymap.shared.deletedKeys containsObject:other]) continue;
         NSDictionary *p = NCLRKeymap.shared.positions[other];
         CGFloat ox = [p[@"x"] doubleValue], oy = [p[@"y"] doubleValue];
         if (fabs(x - ox) < 0.018) x = ox;
@@ -3761,11 +3813,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NSDictionary *previous = self.undoStack.lastObject;
     [self.undoStack removeLastObject];
     [self.redoStack addObject:[self keyLayoutSnapshot]];
-    NCLRKeymap.shared.positions = [previous[@"positions"] mutableCopy];
-    NCLRKeymap.shared.hiddenKeys = [previous[@"hidden"] mutableCopy];
-    NCLRKeymap.shared.triggerModes = [previous[@"triggerModes"] mutableCopy];
-    [NCLRKeymap.shared save];
-    [self selectKey:self.selectedKey];
+    [self restoreKeyLayoutSnapshot:previous];
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
 }
 
@@ -3774,11 +3822,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NSDictionary *next = self.redoStack.lastObject;
     [self.redoStack removeLastObject];
     [self.undoStack addObject:[self keyLayoutSnapshot]];
-    NCLRKeymap.shared.positions = [next[@"positions"] mutableCopy];
-    NCLRKeymap.shared.hiddenKeys = [next[@"hidden"] mutableCopy];
-    NCLRKeymap.shared.triggerModes = [next[@"triggerModes"] mutableCopy];
-    [NCLRKeymap.shared save];
-    [self selectKey:self.selectedKey];
+    [self restoreKeyLayoutSnapshot:next];
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
 }
 
@@ -3915,13 +3959,12 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 
 - (void)addKeyTapped {
     [NCLRKeyPickerController presentFrom:self title:@"添加触控键" onPick:^(NSString *picked) {
+        NSDictionary *before = [self keyLayoutSnapshot];
         [NCLRKeymap.shared addKey:picked label:picked];
+        [self pushUndo:before];
         [NCLRKeymap.shared save];
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已添加"
-                                                                       message:@"退出触控编辑再进入即可看到新按键。"
-                                                                preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-        [self presentViewController:alert animated:YES completion:nil];
+        [self refreshPreviewButtons];
+        [self selectKey:picked];
     }];
 }
 - (void)editKey:(UIButton *)sender {

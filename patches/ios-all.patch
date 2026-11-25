@@ -326,7 +326,7 @@ index 550d63c..7c07782 100644
          let emote = settings.extras.emote_key.clone();
          settings.keys.set("key.emote", &emote);
 diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-render/src/touch.rs
-index b38a955..a105b01 100644
+index b38a955..3a04b08 100644
 --- a/crates/horizon-client-render/src/touch.rs
 +++ b/crates/horizon-client-render/src/touch.rs
 @@ -59,6 +59,17 @@ enum Role {
@@ -533,7 +533,7 @@ index b38a955..a105b01 100644
          self.settings_requested = false;
          self.debug_requested = false;
          self.perspective_requested = false;
-@@ -517,6 +611,11 @@ impl TouchControls {
+@@ -517,11 +611,25 @@ impl TouchControls {
      /// A short world tap since the last call, and whether it uses the item.
      /// A tap never holds attack or use into the next tick: the game acts once
      /// at [`Self::aim`].
@@ -545,7 +545,21 @@ index b38a955..a105b01 100644
      pub fn take_tap(&mut self) -> Option<bool> {
          self.pending_tap.take()
      }
-@@ -588,6 +687,17 @@ impl TouchControls {
+ 
+     /// Key or action presses for the game's key bindings since the last call.
++    pub fn extra_attack_held(&self) -> bool {
++        self.settings.extra_buttons.iter().enumerate().any(|(index, button)| {
++            button.label == "MouseLeft" &&
++                (self.extra_latched.contains(&index) || self.fingers.values().any(|(role, _)| {
++                    matches!(role, Role::Extra(active) if *active == index)
++                }))
++        })
++    }
++
+     pub fn key_events(&mut self) -> Vec<(String, bool)> {
+         std::mem::take(&mut self.key_events)
+     }
+@@ -588,6 +696,17 @@ impl TouchControls {
      /// The controller state the fingers hold right now.
      pub fn state(&self) -> PadState {
          let mut state = PadState::default();
@@ -563,7 +577,7 @@ index b38a955..a105b01 100644
          if self.settings.sprint_toggle && self.settings.sprint_button && self.sprint_latched {
              state.set(Button::LeftStick, true);
          }
-@@ -595,21 +705,37 @@ impl TouchControls {
+@@ -595,21 +714,37 @@ impl TouchControls {
              match role {
                  Role::Move(anchor) => {
                      let radius = self.placement(Control::Move).size / 2.0;
@@ -608,7 +622,7 @@ index b38a955..a105b01 100644
                      {
                          state.set(Button::LeftStick, true);
                      }
-@@ -617,7 +743,7 @@ impl TouchControls {
+@@ -617,7 +752,7 @@ impl TouchControls {
                  Role::Button(Button::LeftTrigger) | Role::Shield => state.triggers[0] = 1.0,
                  Role::Button(Button::RightTrigger) => state.triggers[1] = 1.0,
                  Role::Button(b) => state.set(*b, true),
@@ -815,7 +829,7 @@ index 9e8d8e4..1eb61e2 100644
  fn mining_radius(radius: f32, progress: f32) -> f32 {
      if progress.is_finite() {
 diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
-index e57f2d8..386ad65 100644
+index e57f2d8..490d623 100644
 --- a/crates/horizon-client-render/src/touch/layout.rs
 +++ b/crates/horizon-client-render/src/touch/layout.rs
 @@ -58,13 +58,14 @@ pub enum Control {
@@ -936,7 +950,7 @@ index e57f2d8..386ad65 100644
              sensitivity_horizontal: 1.0,
              sensitivity_vertical: 1.0,
              sprint_toggle: false,
-@@ -264,6 +325,120 @@ impl Settings {
+@@ -264,6 +325,132 @@ impl Settings {
          std::fs::rename(temp, path)
      }
  
@@ -1008,8 +1022,13 @@ index e57f2d8..386ad65 100644
 +            return;
 +        };
 +        let joystick = layout.contains_key("move");
++        let deleted = json.get("deletedKeys").and_then(|v| v.as_array());
++        let deleted_key = |id: &str| deleted.is_some_and(|keys| keys.iter().any(|key| key.as_str() == Some(id)));
 +        self.extra_buttons.clear();
 +        for (id, value) in layout {
++            if deleted_key(id) {
++                continue;
++            }
 +            if joystick && matches!(id.as_str(), "forward" | "back" | "left" | "right") {
 +                continue;
 +            }
@@ -1044,6 +1063,13 @@ index e57f2d8..386ad65 100644
 +                }
 +            }
 +        }
++        if let Some(deleted) = deleted {
++            for id in deleted.iter().filter_map(|v| v.as_str()) {
++                if let Some(control) = Control::from_launcher_id(id) {
++                    self.button_visibility[control as usize] = HIDDEN;
++                }
++            }
++        }
 +        if let Some(hidden) = json.get("hidden").and_then(|v| v.as_array()) {
 +            for id in hidden.iter().filter_map(|v| v.as_str()) {
 +                if let Some(control) = Control::from_launcher_id(id) {
@@ -1057,7 +1083,7 @@ index e57f2d8..386ad65 100644
      pub fn sanitize(&mut self) {
          // Only the D-pad has a split variant (see `Mode::SCHEMES`).
          if self.mode != Mode::Dpad {
-@@ -284,7 +459,9 @@ impl Settings {
+@@ -284,7 +471,9 @@ impl Settings {
          ] {
              *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
          }
@@ -1344,10 +1370,10 @@ index 026382e..9289a31 100644
                  if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
              {
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..5269514 100644
+index 16664ff..c595ff6 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
-@@ -55,6 +55,146 @@ impl Game<'_> {
+@@ -55,6 +55,170 @@ impl Game<'_> {
          let zoom = self.zoom_turn_scale();
          self.turn_player(x * zoom, y * zoom);
      }
@@ -1417,12 +1443,16 @@ index 16664ff..5269514 100644
 +            );
 +        }
 +    }
-+    pub(super) fn apply_touch_key_events(&mut self) {
++    pub(super) fn apply_touch_key_events(&mut self) -> bool {
 +        use horizon_client_input::held::Source;
 +        use horizon_client::keybinds::{key_code, mouse_button};
++        let mut attack_clicked = false;
 +        for (label, down) in self.touch.key_events() {
 +            let mouse = match label.as_str() {
-+                "MouseLeft" => Some("key.mouse.left"),
++                "MouseLeft" => {
++                    attack_clicked |= down;
++                    continue;
++                }
 +                "MouseRight" => Some("key.mouse.right"),
 +                "MouseMiddle" => Some("key.mouse.middle"),
 +                _ => None,
@@ -1454,6 +1484,26 @@ index 16664ff..5269514 100644
 +                    let _ = self.mapped_key(key, down, false, key, Source::Pad);
 +                }
 +            }
++        }
++        attack_clicked
++    }
++
++    pub(super) fn apply_touch_attack(&mut self, held: bool, clicked: bool) {
++        let was_held = std::mem::replace(&mut self.touch_attack_down, held);
++        if was_held == held && !clicked {
++            return;
++        }
++        use horizon_client_input::held::Source;
++        let button = winit::event::MouseButton::Left;
++        // Touch already chooses between a held button and an explicit toggle.
++        // A controller/keyboard toggle must not swallow the touch release.
++        if held || !self.mouse_mapping_held_elsewhere(button, Source::Pad) {
++            self.toggles.0[2].set_down(held, false);
++            self.left = self.toggles.is_down(2);
++        }
++        if (!was_held && held) || clicked {
++            self.pvp_click(button);
++            self.mouse_mapping_click(button);
 +        }
 +    }
 +    /// Acts on the one-shot touch buttons that are not pad buttons.
@@ -1793,10 +1843,10 @@ index ee73abf..3704fed 100644
      pub(super) fn facts(&self) -> &BlockFacts {
          &self.core.facts
 diff --git a/crates/horizon-client/src/game/runtime/window_handler.rs b/crates/horizon-client/src/game/runtime/window_handler.rs
-index 6a86a75..8cb9de6 100644
+index 6a86a75..6120b8b 100644
 --- a/crates/horizon-client/src/game/runtime/window_handler.rs
 +++ b/crates/horizon-client/src/game/runtime/window_handler.rs
-@@ -312,9 +312,36 @@ impl Game<'_> {
+@@ -312,9 +312,31 @@ impl Game<'_> {
          }
          horizon_client::spans::time("server_packs", || self.tick_server_packs());
          horizon_client::spans::time("control", || self.poll_control(event_loop));
@@ -1805,18 +1855,15 @@ index 6a86a75..8cb9de6 100644
          if self.pending_save.is_some() {
              return;
          }
++        let mut touch_attack = false;
 +        if self.screen == Screen::Playing && self.focused {
 +            #[cfg(target_os = "ios")]
 +            if self.title.is_none() && (gyro_x != 0.0 || gyro_y != 0.0) {
 +                self.look_turn(gyro_x, gyro_y);
 +            }
-+            let touch = self.touch.poll_state();
-+            // A finger that lifts after mining must stop the attack even if the
-+            // pad's trigger release is lost.
-+            if self.touch_attack_down && touch.triggers[1] <= 0.1 {
-+                self.stop_mining();
-+            }
-+            self.touch_attack_down = touch.triggers[1] > 0.1;
++            let mut touch = self.touch.poll_state();
++            touch_attack = touch.triggers[1] > 0.1 || self.touch.extra_attack_held();
++            touch.triggers[1] = 0.0;
 +            self.pad.inject_state(touch);
 +            self.apply_touch_requests();
 +        } else {
@@ -1824,16 +1871,14 @@ index 6a86a75..8cb9de6 100644
 +            // touch pad before the menu's mouse/keyboard input, or the last
 +            // button stays held and the next screen looks like pad mode.
 +            self.touch.clear();
-+            if std::mem::take(&mut self.touch_attack_down) {
-+                self.stop_mining();
-+            }
 +            self.pad.inject_state(Default::default());
 +        }
-+        self.apply_touch_key_events();
++        let attack_clicked = self.apply_touch_key_events();
++        self.apply_touch_attack(touch_attack, attack_clicked);
          horizon_client::spans::time("pads", || self.poll_pads(event_loop));
          self.settle_after_run(event_loop);
          self.pause_if_inactive();
-@@ -326,9 +353,13 @@ impl Game<'_> {
+@@ -326,9 +348,13 @@ impl Game<'_> {
              return;
          }
          if let Some(w) = &self.window {
@@ -1848,7 +1893,7 @@ index 6a86a75..8cb9de6 100644
                  let id = w.id();
                  self.handle_window_event(
                      event_loop,
-@@ -351,11 +382,21 @@ impl Game<'_> {
+@@ -351,11 +377,21 @@ impl Game<'_> {
          }
          // Consume the last frame's result: a hidden compositor may stop sending
          // redraws altogether, leaving a successful result stale indefinitely.
@@ -1872,7 +1917,7 @@ index 6a86a75..8cb9de6 100644
      }
  }
  
-@@ -417,6 +458,7 @@ impl ApplicationHandler for Game<'_> {
+@@ -417,6 +453,7 @@ impl ApplicationHandler for Game<'_> {
          self.resize_state = Some(self.resize_state_of(window.inner_size()));
          self.window = Some(window);
          self.ime_allowed = false;
@@ -1880,7 +1925,7 @@ index 6a86a75..8cb9de6 100644
          self.ime_area = None;
          self.apply_settings();
          self.previous = Instant::now();
-@@ -437,14 +479,13 @@ impl ApplicationHandler for Game<'_> {
+@@ -437,14 +474,13 @@ impl ApplicationHandler for Game<'_> {
          };
          self.handle_window_event(event_loop, id, event, input_trace::InputOrigin::User);
          if let Some((event, modifiers)) = key {
