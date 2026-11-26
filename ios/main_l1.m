@@ -476,20 +476,20 @@ static void NCLRRunOnMain(dispatch_block_t block) {
     keyboard.keyboardInput.keyChangedHandler =
         ^(GCKeyboardInput *input, GCControllerButtonInput *key, GCKeyCode keyCode, BOOL pressed) {
         (void)key;
-        NCLRHardwareInput *strongSelf = weakSelf;
-        if (!strongSelf) return;
-        if (keyCode == GCKeyCodeCapsLock && pressed) {
-            strongSelf.capsLock = !strongSelf.capsLock;
-        }
-        uint8_t modifiers = [strongSelf modifiersForInput:input];
-        NSNumber *code = @(keyCode);
-        BOOL repeat = pressed && [strongSelf.keysDown containsObject:code];
-        if (pressed) {
-            [strongSelf.keysDown addObject:code];
-        } else {
-            [strongSelf.keysDown removeObject:code];
-        }
         NCLRRunOnMain(^{
+            NCLRHardwareInput *strongSelf = weakSelf;
+            if (!strongSelf) return;
+            if (keyCode == GCKeyCodeCapsLock && pressed) {
+                strongSelf.capsLock = !strongSelf.capsLock;
+            }
+            uint8_t modifiers = [strongSelf modifiersForInput:input];
+            NSNumber *code = @(keyCode);
+            BOOL repeat = pressed && [strongSelf.keysDown containsObject:code];
+            if (pressed) {
+                [strongSelf.keysDown addObject:code];
+            } else {
+                [strongSelf.keysDown removeObject:code];
+            }
             horizon_ios_hardware_key((uint16_t)keyCode, pressed ? 1 : 0, repeat ? 1 : 0, modifiers);
         });
     };
@@ -515,7 +515,7 @@ static void NCLRRunOnMain(dispatch_block_t block) {
     __weak typeof(self) weakSelf = self;
     mouse.mouseInput.mouseMovedHandler = ^(GCMouseInput *input, float deltaX, float deltaY) {
         (void)input;
-        [weakSelf moveMouseX:deltaX y:deltaY];
+        NCLRRunOnMain(^{ [weakSelf moveMouseX:deltaX y:deltaY]; });
     };
     mouse.mouseInput.leftButton.pressedChangedHandler =
         ^(GCControllerButtonInput *button, float value, BOOL pressed) {
