@@ -309,19 +309,118 @@ static NSString *NCLRModIdentifier(NSString *path) {
 
 // Runs on the main queue. Device motion is fused and low-pass filtered, then
 // integrated with hardware timestamps so frame drops do not change the turn.
-static CMMotionManager *NCLRStartGyro(UIWindowScene *scene, CGFloat sensitivity,
-                                       BOOL invertX, BOOL invertY) {
-    CMMotionManager *motion = [CMMotionManager new];
-    if (!motion.deviceMotionAvailable) return nil;
-    motion.deviceMotionUpdateInterval = 1.0 / 120.0;
+// The manager can report unavailable for a moment right after launch, and iOS
+// stops updates in the background, so this controller keeps retrying while a
+// game is running instead of giving up for the whole session.
+@interface NCLRGyro : NSObject
+@property (nonatomic, strong) CMMotionManager *motion;
+@property (nonatomic, strong) NSTimer *retry;
+@property (nonatomic, weak) UIWindowScene *scene;
+@property (nonatomic, assign) CGFloat sensitivity;
+@property (nonatomic, assign) BOOL invertX;
+@property (nonatomic, assign) BOOL invertY;
+@property (nonatomic, assign) BOOL enabled;
++ (instancetype)shared;
+- (void)startWithScene:(UIWindowScene *)scene
+           sensitivity:(CGFloat)sensitivity
+               invertX:(BOOL)invertX
+               invertY:(BOOL)invertY;
+- (void)stop;
+@end
+
+@implementation NCLRGyro
++ (instancetype)shared {
+    static NCLRGyro *gyro;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ gyro = [[NCLRGyro alloc] init]; });
+    return gyro;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+        [center addObserver:self selector:@selector(appBecameActive)
+                       name:UIApplicationDidBecomeActiveNotification object:nil];
+        [center addObserver:self selector:@selector(appResignedActive)
+                       name:UIApplicationWillResignActiveNotification object:nil];
+    }
+    return self;
+}
+
+- (void)startWithScene:(UIWindowScene *)scene
+           sensitivity:(CGFloat)sensitivity
+               invertX:(BOOL)invertX
+               invertY:(BOOL)invertY {
+    self.scene = scene;
+    self.sensitivity = sensitivity;
+    self.invertX = invertX;
+    self.invertY = invertY;
+    self.enabled = YES;
+    [self attach];
+}
+
+- (void)stop {
+    self.enabled = NO;
+    [self stopUpdates];
+}
+
+- (void)appBecameActive {
+    if (self.enabled) [self attach];
+}
+
+- (void)appResignedActive {
+    [self stopUpdates];
+}
+
+- (void)stopUpdates {
+    [self.motion stopDeviceMotionUpdates];
+    [self.retry invalidate];
+    self.retry = nil;
+}
+
+- (void)scheduleRetry {
+    if (self.retry || !self.enabled) return;
+    __weak typeof(self) weakSelf = self;
+    self.retry = [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:NO block:^(NSTimer *timer) {
+        (void)timer;
+        NCLRGyro *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.retry = nil;
+        [strongSelf attach];
+    }];
+}
+
+- (void)attach {
+    if (!self.enabled) return;
+    if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+    if (!self.motion) {
+        self.motion = [CMMotionManager new];
+    }
+    if (self.motion.deviceMotionActive) return;
+    if (!self.motion.deviceMotionAvailable) {
+        [self scheduleRetry];
+        return;
+    }
+    self.motion.deviceMotionUpdateInterval = 1.0 / 120.0;
     __block NSTimeInterval previous = 0;
     __block double smoothYaw = 0.0;
     __block double smoothPitch = 0.0;
     __block UIInterfaceOrientation lastOrientation = UIInterfaceOrientationUnknown;
-    __weak UIWindowScene *gameScene = scene;
-    [motion startDeviceMotionUpdatesToQueue:NSOperationQueue.mainQueue
-                                withHandler:^(CMDeviceMotion *sample, NSError *error) {
-        if (error || !sample || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+    __weak typeof(self) weakSelf = self;
+    __weak UIWindowScene *gameScene = self.scene;
+    [self.motion startDeviceMotionUpdatesToQueue:NSOperationQueue.mainQueue
+                                     withHandler:^(CMDeviceMotion *sample, NSError *error) {
+        NCLRGyro *strongSelf = weakSelf;
+        if (error) {
+            previous = 0;
+            smoothYaw = smoothPitch = 0.0;
+            lastOrientation = UIInterfaceOrientationUnknown;
+            [strongSelf stopUpdates];
+            [strongSelf scheduleRetry];
+            return;
+        }
+        if (!sample || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
             previous = 0;
             smoothYaw = smoothPitch = 0.0;
             lastOrientation = UIInterfaceOrientationUnknown;
@@ -356,17 +455,18 @@ static CMMotionManager *NCLRStartGyro(UIWindowScene *scene, CGFloat sensitivity,
         double pitch = fabs(smoothPitch) < deadzone ? 0.0 : smoothPitch;
         const double radiansToMouseUnits = 180.0 / (M_PI * 0.15);
         if (yaw || pitch) {
+            CGFloat sensitivity = strongSelf.sensitivity;
             double scale = direction * elapsed * sensitivity * radiansToMouseUnits;
-            double dx = (invertX ? -yaw : yaw) * scale;
-            double dy = (invertY ? -pitch : pitch) * scale;
+            double dx = (strongSelf.invertX ? -yaw : yaw) * scale;
+            double dy = (strongSelf.invertY ? -pitch : pitch) * scale;
             const double maxStep = 24.0;
             dx = fmax(-maxStep, fmin(maxStep, dx));
             dy = fmax(-maxStep, fmin(maxStep, dy));
             horizon_ios_add_motion(dx, dy);
         }
     }];
-    return motion;
 }
+@end
 
 static void NCLRRunOnMain(dispatch_block_t block) {
     if (NSThread.isMainThread) {
@@ -2566,13 +2666,16 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
                                                  : CAFrameRateRangeMake(30, 60, 60);
     [display addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
     NCLRKeymap *keymap = NCLRKeymap.shared;
-    CMMotionManager *motion = keymap.gyroEnabled
-        ? NCLRStartGyro(launcherWindow.windowScene, keymap.gyroSensitivity,
-                        keymap.gyroInvertX, keymap.gyroInvertY) : nil;
+    if (keymap.gyroEnabled) {
+        [NCLRGyro.shared startWithScene:launcherWindow.windowScene
+                            sensitivity:keymap.gyroSensitivity
+                                invertX:keymap.gyroInvertX
+                                invertY:keymap.gyroInvertY];
+    }
     [[NCLRHardwareInput shared] start];
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
     [[NCLRHardwareInput shared] stop];
-    [motion stopDeviceMotionUpdates];
+    [NCLRGyro.shared stop];
     [display invalidate];
     unsetenv("HORIZON_SESSION_FILE");
     [files removeItemAtPath:sessionPath error:nil];
