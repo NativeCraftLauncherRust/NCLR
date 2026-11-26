@@ -2429,7 +2429,7 @@ diff --git a/crates/horizon-client/src/game/runtime/window_handler.rs b/crates/h
 index 6a86a75..8388ee5 100644
 --- a/crates/horizon-client/src/game/runtime/window_handler.rs
 +++ b/crates/horizon-client/src/game/runtime/window_handler.rs
-@@ -312,9 +312,35 @@ impl Game<'_> {
+@@ -312,9 +312,34 @@ impl Game<'_> {
          }
          horizon_client::spans::time("server_packs", || self.tick_server_packs());
          horizon_client::spans::time("control", || self.poll_control(event_loop));
@@ -2444,7 +2444,6 @@ index 6a86a75..8388ee5 100644
 +            if self.title.is_none()
 +                && (gyro_x != 0.0 || gyro_y != 0.0)
 +                && !self.touch.look_dragging()
-+                && !crate::entry::ios_hardware_mouse()
 +            {
 +                self.look_turn(gyro_x, gyro_y);
 +            }
