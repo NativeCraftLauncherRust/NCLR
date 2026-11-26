@@ -23,3 +23,6 @@ mod-render = { package = "horizon-mod-render", path = "../horizon-mod-render" }
 hzr-device = { path = "../hzr-device" }
 hzr-download = { path = "../hzr-download" }
 hzr-fetch = { path = "../hzr-fetch" }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06"] }

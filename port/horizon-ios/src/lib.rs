@@ -18,6 +18,56 @@ pub extern "C" fn horizon_ios_add_motion(x: f64, y: f64) {
     let _ = (x, y);
 }
 
+/// Hardware keyboard/mouse presence, pushed by the UIKit shell's
+/// GameController observers.
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_set_hardware_input(attached: i32, mouse: i32) {
+    #[cfg(target_os = "ios")]
+    horizon_client::entry::set_ios_hardware_input(attached != 0, mouse != 0);
+    #[cfg(not(target_os = "ios"))]
+    let _ = (attached, mouse);
+}
+
+/// A hardware key from GCKeyboard. `usage` is a USB HID keyboard usage code.
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_hardware_key(
+    usage: u16,
+    pressed: i32,
+    repeat: i32,
+    modifiers: u8,
+) {
+    #[cfg(target_os = "ios")]
+    winit::platform::ios::send_hardware_key(usage, pressed != 0, repeat != 0, modifiers);
+    #[cfg(not(target_os = "ios"))]
+    let _ = (usage, pressed, repeat, modifiers);
+}
+
+/// Relative mouse motion plus the pointer position in physical pixels.
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_hardware_mouse_motion(dx: f64, dy: f64, x: f64, y: f64) {
+    #[cfg(target_os = "ios")]
+    winit::platform::ios::send_hardware_mouse_motion(dx, dy, x, y);
+    #[cfg(not(target_os = "ios"))]
+    let _ = (dx, dy, x, y);
+}
+
+/// External mouse buttons: 0 left, 1 right, 2 middle.
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_hardware_mouse_button(button: i32, pressed: i32) {
+    #[cfg(target_os = "ios")]
+    winit::platform::ios::send_hardware_mouse_button(button as u8, pressed != 0);
+    #[cfg(not(target_os = "ios"))]
+    let _ = (button, pressed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_hardware_mouse_scroll(dx: f64, dy: f64) {
+    #[cfg(target_os = "ios")]
+    winit::platform::ios::send_hardware_mouse_scroll(dx, dy);
+    #[cfg(not(target_os = "ios"))]
+    let _ = (dx, dy);
+}
+
 /// Returns a NUL-terminated UTF-8 diagnostics string owned by this library.
 ///
 /// The pointer stays valid for the lifetime of the process.

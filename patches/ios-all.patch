@@ -326,7 +326,7 @@ index 550d63c..7c07782 100644
          let emote = settings.extras.emote_key.clone();
          settings.keys.set("key.emote", &emote);
 diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-render/src/touch.rs
-index b38a955..0d26f4a 100644
+index b38a955..adecc9d 100644
 --- a/crates/horizon-client-render/src/touch.rs
 +++ b/crates/horizon-client-render/src/touch.rs
 @@ -59,6 +59,17 @@ enum Role {
@@ -560,7 +560,7 @@ index b38a955..0d26f4a 100644
          self.settings_requested = false;
          self.debug_requested = false;
          self.perspective_requested = false;
-@@ -517,11 +616,46 @@ impl TouchControls {
+@@ -517,11 +616,53 @@ impl TouchControls {
      /// A short world tap since the last call, and whether it uses the item.
      /// A tap never holds attack or use into the next tick: the game acts once
      /// at [`Self::aim`].
@@ -598,6 +598,13 @@ index b38a955..0d26f4a 100644
 +        self.settings.menu_buttons.get(index).map(|button| button.label.as_str())
 +    }
 +
++    /// A finger is turning the camera; gyro input pauses so both do not add.
++    pub fn look_dragging(&self) -> bool {
++        self.fingers.values().any(|(role, _)| {
++            matches!(role, Role::Look { dragged: true, .. })
++        })
++    }
++
 +    /// Queues one press and release for a custom menu key.
 +    pub fn tap_label(&mut self, label: &str) {
 +        self.key_events.push((label.to_owned(), true));
@@ -607,7 +614,7 @@ index b38a955..0d26f4a 100644
      pub fn key_events(&mut self) -> Vec<(String, bool)> {
          std::mem::take(&mut self.key_events)
      }
-@@ -588,6 +722,17 @@ impl TouchControls {
+@@ -588,6 +729,17 @@ impl TouchControls {
      /// The controller state the fingers hold right now.
      pub fn state(&self) -> PadState {
          let mut state = PadState::default();
@@ -625,7 +632,7 @@ index b38a955..0d26f4a 100644
          if self.settings.sprint_toggle && self.settings.sprint_button && self.sprint_latched {
              state.set(Button::LeftStick, true);
          }
-@@ -595,21 +740,37 @@ impl TouchControls {
+@@ -595,21 +747,37 @@ impl TouchControls {
              match role {
                  Role::Move(anchor) => {
                      let radius = self.placement(Control::Move).size / 2.0;
@@ -670,7 +677,7 @@ index b38a955..0d26f4a 100644
                      {
                          state.set(Button::LeftStick, true);
                      }
-@@ -617,7 +778,7 @@ impl TouchControls {
+@@ -617,7 +785,7 @@ impl TouchControls {
                  Role::Button(Button::LeftTrigger) | Role::Shield => state.triggers[0] = 1.0,
                  Role::Button(Button::RightTrigger) => state.triggers[1] = 1.0,
                  Role::Button(b) => state.set(*b, true),
@@ -1482,18 +1489,20 @@ index 7b7a557..8b097d7 100644
  # DirectX 12 driver (`graphicsApi`, graphics.rs).
  wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 diff --git a/crates/horizon-client/src/entry.rs b/crates/horizon-client/src/entry.rs
-index 78cfdee..c257073 100644
+index 78cfdee..213c4a2 100644
 --- a/crates/horizon-client/src/entry.rs
 +++ b/crates/horizon-client/src/entry.rs
-@@ -3,6 +3,7 @@
+@@ -3,6 +3,9 @@
  mod horizon_look;
  use crate::{crash, game, logging};
  use horizon_mod_package::selection::{Argument, LaunchArguments};
 +use std::path::PathBuf;
++#[cfg(target_os = "ios")]
++use std::sync::atomic::{AtomicBool, Ordering};
  pub(crate) mod dedicated_arguments;
  pub(crate) mod runtime_environment;
  
-@@ -24,6 +25,7 @@ impl Startup {
+@@ -24,6 +27,7 @@ impl Startup {
  /// and resource marker metadata only: no logging, account loading, mods or worker threads.
  /// Account IO, cwd changes and command registration remain in Options::read, after leases.
  pub fn prepare() -> Startup {
@@ -1501,7 +1510,7 @@ index 78cfdee..c257073 100644
      horizon_mod_package::holder::enter();
      let result: crate::Result<_> = (|| {
          let mut command = std::process::Command::new(std::env::current_exe()?);
-@@ -39,7 +41,10 @@ pub fn prepare() -> Startup {
+@@ -39,7 +43,10 @@ pub fn prepare() -> Startup {
      let Some(options) = options else {
          std::process::exit(0);
      };
@@ -1512,12 +1521,18 @@ index 78cfdee..c257073 100644
      Startup {
          launch,
          options,
-@@ -47,6 +52,49 @@ pub fn prepare() -> Startup {
+@@ -47,6 +54,71 @@ pub fn prepare() -> Startup {
      }
  }
  
 +#[cfg(target_os = "ios")]
 +static IOS_MOTION: std::sync::Mutex<[f64; 2]> = std::sync::Mutex::new([0.0; 2]);
++
++#[cfg(target_os = "ios")]
++static IOS_HARDWARE_INPUT: AtomicBool = AtomicBool::new(false);
++
++#[cfg(target_os = "ios")]
++static IOS_HARDWARE_MOUSE: AtomicBool = AtomicBool::new(false);
 +
 +#[cfg(target_os = "ios")]
 +pub fn add_ios_motion(x: f64, y: f64) {
@@ -1533,6 +1548,22 @@ index 78cfdee..c257073 100644
 +#[cfg(target_os = "ios")]
 +pub(crate) fn take_ios_motion() -> [f64; 2] {
 +    IOS_MOTION.lock().map_or([0.0; 2], |mut motion| std::mem::take(&mut *motion))
++}
++
++#[cfg(target_os = "ios")]
++pub fn set_ios_hardware_input(attached: bool, mouse: bool) {
++    IOS_HARDWARE_INPUT.store(attached, Ordering::SeqCst);
++    IOS_HARDWARE_MOUSE.store(attached && mouse, Ordering::SeqCst);
++}
++
++#[cfg(target_os = "ios")]
++pub(crate) fn ios_hardware_input() -> bool {
++    IOS_HARDWARE_INPUT.load(Ordering::SeqCst)
++}
++
++#[cfg(target_os = "ios")]
++pub(crate) fn ios_hardware_mouse() -> bool {
++    IOS_HARDWARE_MOUSE.load(Ordering::SeqCst)
 +}
 +
 +/// iOS startup: the app has no command line, so the shell supplies the resource
@@ -1563,7 +1594,7 @@ index 78cfdee..c257073 100644
  /// Cells cannot roll back: each copy merges all requesting rows, so stopping the whole
  /// start is how we ensure none of a refused mod's rows run.
 diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.rs
-index 55bd735..fc70481 100644
+index 55bd735..dfe94d4 100644
 --- a/crates/horizon-client/src/game.rs
 +++ b/crates/horizon-client/src/game.rs
 @@ -1113,6 +1113,10 @@ struct Game<'a> {
@@ -1577,7 +1608,7 @@ index 55bd735..fc70481 100644
      /// The candidate window's area last given to the window, in pixels.
      ime_area: Option<[i32; 4]>,
      /// When the window lost focus, while it is still without
-@@ -1189,6 +1193,11 @@ struct Game<'a> {
+@@ -1189,6 +1193,15 @@ struct Game<'a> {
      last_input: Instant,
      /// Controllers (Horizon's own).
      pad: pad::Pads,
@@ -1585,17 +1616,23 @@ index 55bd735..fc70481 100644
 +    touch: horizon_client_render::touch::TouchControls,
 +    /// The touch attack trigger was down at the last frame.
 +    touch_attack_down: bool,
++    /// A keyboard or mouse is attached; the touch mapping stays hidden.
++    ios_hardware_input: bool,
++    #[cfg(target_os = "ios")]
++    ios_hardware_mouse: bool,
 +    menu_escape_touch: Option<u64>,
      frames: u64,
      /// The glint clock and options, read once per frame (game/interface/item_draw.rs).
      glint_frame: horizon_client::item_render::GlintFrame,
-@@ -5306,6 +5315,43 @@ impl Game<'_> {
+@@ -5306,6 +5319,47 @@ impl Game<'_> {
          self.draw_studio_bars(&mut batch);
          if show_hud {
              self.draw_pad_guide(&mut batch, guide_from);
 +            if self.screen == Screen::Playing {
 +                self.touch.viewport(batch.width as u32, batch.height as u32);
-+                self.touch.draw(&mut batch, &self.gui.atlas);
++                if !self.hardware_input_attached() {
++                    self.touch.draw(&mut batch, &self.gui.atlas);
++                }
 +            }
 +        }
 +        // A visible pointer and back button for touch menus: the finger drags
@@ -1603,29 +1640,31 @@ index 55bd735..fc70481 100644
 +        // leaves an inventory or pause screen.
 +        if self.screen != Screen::Playing {
 +            let menu_inventory = matches!(self.screen, Screen::Inventory | Screen::Creative);
-+            let [x, y, w, h] = self.touch.settings.menu_escape_rect(
-+                menu_inventory, batch.width, batch.height,
-+            );
-+            batch.fill(&self.gui.atlas, x, y, w, h, rgba(0, 0, 0, 210));
-+            if w > 2.0 && h > 2.0 {
-+                batch.fill(&self.gui.atlas, x + 1.0, y + 1.0, w - 2.0, h - 2.0, rgba(90, 90, 90, 230));
-+            }
-+            self.native_text(&mut batch, "ESC", [x + w * 0.12, y + (h - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
-+            let [kx, ky, kw, kh] = self.touch.settings.menu_keyboard_rect(
-+                menu_inventory, batch.width, batch.height,
-+            );
-+            batch.fill(&self.gui.atlas, kx, ky, kw, kh, rgba(0, 0, 0, 210));
-+            if kw > 2.0 && kh > 2.0 {
-+                batch.fill(&self.gui.atlas, kx + 1.0, ky + 1.0, kw - 2.0, kh - 2.0, rgba(90, 90, 90, 230));
-+            }
-+            self.native_text(&mut batch, "键盘", [kx + kw * 0.12, ky + (kh - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
-+            let menu_screen = match self.screen {
-+                Screen::Inventory | Screen::Creative => Some(0),
-+                Screen::Paused => Some(1),
-+                _ => None,
-+            };
-+            if let Some(menu_screen) = menu_screen {
-+                self.touch.draw_menu(&mut batch, &self.gui.atlas, menu_screen);
++            if !self.hardware_input_attached() {
++                let [x, y, w, h] = self.touch.settings.menu_escape_rect(
++                    menu_inventory, batch.width, batch.height,
++                );
++                batch.fill(&self.gui.atlas, x, y, w, h, rgba(0, 0, 0, 210));
++                if w > 2.0 && h > 2.0 {
++                    batch.fill(&self.gui.atlas, x + 1.0, y + 1.0, w - 2.0, h - 2.0, rgba(90, 90, 90, 230));
++                }
++                self.native_text(&mut batch, "ESC", [x + w * 0.12, y + (h - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
++                let [kx, ky, kw, kh] = self.touch.settings.menu_keyboard_rect(
++                    menu_inventory, batch.width, batch.height,
++                );
++                batch.fill(&self.gui.atlas, kx, ky, kw, kh, rgba(0, 0, 0, 210));
++                if kw > 2.0 && kh > 2.0 {
++                    batch.fill(&self.gui.atlas, kx + 1.0, ky + 1.0, kw - 2.0, kh - 2.0, rgba(90, 90, 90, 230));
++                }
++                self.native_text(&mut batch, "键盘", [kx + kw * 0.12, ky + (kh - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
++                let menu_screen = match self.screen {
++                    Screen::Inventory | Screen::Creative => Some(0),
++                    Screen::Paused => Some(1),
++                    _ => None,
++                };
++                if let Some(menu_screen) = menu_screen {
++                    self.touch.draw_menu(&mut batch, &self.gui.atlas, menu_screen);
++                }
 +            }
 +            let (x, y) = self.cursor;
 +            batch.fill(&self.gui.atlas, x - 3.0, y - 3.0, 6.0, 6.0, rgba(0, 0, 0, 190));
@@ -1633,7 +1672,36 @@ index 55bd735..fc70481 100644
          }
          batch
      }
-@@ -10701,6 +10747,8 @@ impl<'a> Game<'a> {
+@@ -10262,6 +10316,28 @@ impl Game<'_> {
+                     horizon_client::spans::time("recover_device", || self.recover_device())?;
+                     self.observe_fullscreen();
+                     self.sync_ime();
++                    #[cfg(target_os = "ios")]
++                    {
++                        let attached = crate::entry::ios_hardware_input();
++                        if attached != self.ios_hardware_input {
++                            self.ios_hardware_input = attached;
++                            if attached {
++                                self.touch.clear();
++                                self.pad.inject_state(Default::default());
++                            }
++                        }
++                        let mouse = crate::entry::ios_hardware_mouse();
++                        if self.ios_hardware_mouse && !mouse {
++                            self.captured = false;
++                        }
++                        self.ios_hardware_mouse = mouse;
++                        if self.ios_hardware_mouse
++                            && self.screen == Screen::Playing
++                            && self.title.is_none()
++                        {
++                            self.captured = true;
++                        }
++                    }
+                     let now = Instant::now();
+                     horizon_threads::work::tick_start();
+                     let elapsed = now.duration_since(self.previous);
+@@ -10701,6 +10777,8 @@ impl<'a> Game<'a> {
              unclaimed_modifiers: None,
              focus_after_run: None,
              ime_allowed: false,
@@ -1642,7 +1710,7 @@ index 55bd735..fc70481 100644
              ime_area: None,
              focus_lost: None,
              modifiers: winit::keyboard::ModifiersState::empty(),
-@@ -10741,6 +10789,17 @@ impl<'a> Game<'a> {
+@@ -10741,6 +10819,20 @@ impl<'a> Game<'a> {
              previous: now,
              last_input: now,
              pad: Default::default(),
@@ -1656,6 +1724,9 @@ index 55bd735..fc70481 100644
 +                touch
 +            },
 +            touch_attack_down: false,
++            ios_hardware_input: false,
++            #[cfg(target_os = "ios")]
++            ios_hardware_mouse: false,
 +            menu_escape_touch: None,
              frames: 0,
              glint_frame: Default::default(),
@@ -1762,16 +1833,31 @@ index 026382e..9289a31 100644
                  if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
              {
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..88d90ab 100644
+index 16664ff..5684db9 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
-@@ -55,6 +55,197 @@ impl Game<'_> {
+@@ -7,6 +7,11 @@ fn studio_suppresses_focus_pause(replay_active: bool, freecam_active: bool) -> b
+ }
+ 
+ impl Game<'_> {
++    /// Whether the iOS shell reports a hardware keyboard or mouse.
++    pub(super) fn hardware_input_attached(&self) -> bool {
++        self.ios_hardware_input
++    }
++
+     /// The options `MouseHandler.turnPlayer` reads.
+     pub(super) fn look_options(&self) -> LookOptions {
+         LookOptions {
+@@ -55,6 +60,200 @@ impl Game<'_> {
          let zoom = self.zoom_turn_scale();
          self.turn_player(x * zoom, y * zoom);
      }
 +    /// One finger on the on-screen controls: the joystick and buttons feed the
 +    /// virtual pad; a drag on the world turns the camera.
 +    pub(super) fn touch_event(&mut self, touch: &winit::event::Touch) {
++        if self.hardware_input_attached() {
++            return;
++        }
 +        // The renderer, the HUD and the touch controls all use the surface
 +        // size. winit's `inner_size` is the safe area and is smaller than the
 +        // surface on a notched device, so it must not be used here.
@@ -1964,7 +2050,7 @@ index 16664ff..88d90ab 100644
      pub(super) fn pauses_game(&self) -> bool {
          self.has_singleplayer_server()
 diff --git a/crates/horizon-client/src/game/runtime/loading_screen.rs b/crates/horizon-client/src/game/runtime/loading_screen.rs
-index 2511aa2..0f8bc2d 100644
+index 2511aa2..12bec62 100644
 --- a/crates/horizon-client/src/game/runtime/loading_screen.rs
 +++ b/crates/horizon-client/src/game/runtime/loading_screen.rs
 @@ -3,6 +3,11 @@
@@ -2063,7 +2149,7 @@ index 2511aa2..0f8bc2d 100644
  impl ApplicationHandler for App {
      fn resumed(&mut self, event_loop: &ActiveEventLoop) {
          match self {
-@@ -427,6 +488,153 @@ impl ApplicationHandler for App {
+@@ -427,6 +488,164 @@ impl ApplicationHandler for App {
          }
      }
      fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -2149,7 +2235,9 @@ index 2511aa2..0f8bc2d 100644
 +                    Screen::Paused => Some(1),
 +                    _ => None,
 +                };
-+                if let Some(menu_screen) = menu_screen {
++                if let Some(menu_screen) = menu_screen
++                    && !game.host.hardware_input_attached()
++                {
 +                    game.host.touch.viewport(size[0].max(1), size[1].max(1));
 +                    let point = [x / gui.width.max(1.0), y / gui.height.max(1.0)];
 +                    if let Some(index) = game.host.touch.menu_button_at(menu_screen, point) {
@@ -2189,24 +2277,33 @@ index 2511aa2..0f8bc2d 100644
 +                        }
 +                    }
 +                }
-+                let menu_inventory = matches!(game.host.screen, Screen::Inventory | Screen::Creative);
-+                let [left, top, width, height] = game.host.touch.settings.menu_escape_rect(
-+                    menu_inventory, gui.width, gui.height,
-+                );
-+                if x >= left && x < left + width && y >= top && y < top + height {
-+                    game.host.menu_escape_touch = Some(touch.id as u64);
-+                    let _ = game.host.key_pressed(KeyCode::Escape, KeyCode::Escape);
-+                    return;
-+                }
-+                let [kx, ky, kw, kh] = game.host.touch.settings.menu_keyboard_rect(
-+                    menu_inventory, gui.width, gui.height,
-+                );
-+                if x >= kx && x < kx + kw && y >= ky && y < ky + kh {
-+                    game.host.menu_escape_touch = Some(touch.id as u64);
-+                    game.host.toggle_keyboard_input();
-+                    return;
++                if !game.host.hardware_input_attached() {
++                    let menu_inventory =
++                        matches!(game.host.screen, Screen::Inventory | Screen::Creative);
++                    let [left, top, width, height] = game.host.touch.settings.menu_escape_rect(
++                        menu_inventory, gui.width, gui.height,
++                    );
++                    if x >= left && x < left + width && y >= top && y < top + height {
++                        game.host.menu_escape_touch = Some(touch.id as u64);
++                        let _ = game.host.key_pressed(KeyCode::Escape, KeyCode::Escape);
++                        return;
++                    }
++                    let [kx, ky, kw, kh] = game.host.touch.settings.menu_keyboard_rect(
++                        menu_inventory, gui.width, gui.height,
++                    );
++                    if x >= kx && x < kx + kw && y >= ky && y < ky + kh {
++                        game.host.menu_escape_touch = Some(touch.id as u64);
++                        game.host.toggle_keyboard_input();
++                        return;
++                    }
 +                }
 +            }
++        }
++        if matches!(&event, WindowEvent::Touch(_))
++            && let App::Ready(game) = self
++            && game.host.hardware_input_attached()
++        {
++            return;
 +        }
 +        if let Some(events) = touch_as_mouse(&event, offset) {
 +            for event in events {
@@ -2329,10 +2426,10 @@ index ee73abf..3704fed 100644
      pub(super) fn facts(&self) -> &BlockFacts {
          &self.core.facts
 diff --git a/crates/horizon-client/src/game/runtime/window_handler.rs b/crates/horizon-client/src/game/runtime/window_handler.rs
-index 6a86a75..2ea4334 100644
+index 6a86a75..8388ee5 100644
 --- a/crates/horizon-client/src/game/runtime/window_handler.rs
 +++ b/crates/horizon-client/src/game/runtime/window_handler.rs
-@@ -312,9 +312,31 @@ impl Game<'_> {
+@@ -312,9 +312,34 @@ impl Game<'_> {
          }
          horizon_client::spans::time("server_packs", || self.tick_server_packs());
          horizon_client::spans::time("control", || self.poll_control(event_loop));
@@ -2344,7 +2441,10 @@ index 6a86a75..2ea4334 100644
 +        let mut touch_attack = false;
 +        if self.screen == Screen::Playing && self.focused {
 +            #[cfg(target_os = "ios")]
-+            if self.title.is_none() && (gyro_x != 0.0 || gyro_y != 0.0) {
++            if self.title.is_none()
++                && (gyro_x != 0.0 || gyro_y != 0.0)
++                && !self.touch.look_dragging()
++            {
 +                self.look_turn(gyro_x, gyro_y);
 +            }
 +            let mut touch = self.touch.poll_state();
@@ -2364,7 +2464,7 @@ index 6a86a75..2ea4334 100644
          horizon_client::spans::time("pads", || self.poll_pads(event_loop));
          self.settle_after_run(event_loop);
          self.pause_if_inactive();
-@@ -326,9 +348,13 @@ impl Game<'_> {
+@@ -326,9 +351,13 @@ impl Game<'_> {
              return;
          }
          if let Some(w) = &self.window {
@@ -2379,7 +2479,7 @@ index 6a86a75..2ea4334 100644
                  let id = w.id();
                  self.handle_window_event(
                      event_loop,
-@@ -351,11 +377,21 @@ impl Game<'_> {
+@@ -351,11 +380,21 @@ impl Game<'_> {
          }
          // Consume the last frame's result: a hidden compositor may stop sending
          // redraws altogether, leaving a successful result stale indefinitely.
@@ -2403,7 +2503,7 @@ index 6a86a75..2ea4334 100644
      }
  }
  
-@@ -417,6 +453,8 @@ impl ApplicationHandler for Game<'_> {
+@@ -417,6 +456,8 @@ impl ApplicationHandler for Game<'_> {
          self.resize_state = Some(self.resize_state_of(window.inner_size()));
          self.window = Some(window);
          self.ime_allowed = false;
@@ -2412,7 +2512,7 @@ index 6a86a75..2ea4334 100644
          self.ime_area = None;
          self.apply_settings();
          self.previous = Instant::now();
-@@ -437,14 +475,13 @@ impl ApplicationHandler for Game<'_> {
+@@ -437,14 +478,13 @@ impl ApplicationHandler for Game<'_> {
          };
          self.handle_window_event(event_loop, id, event, input_trace::InputOrigin::User);
          if let Some((event, modifiers)) = key {

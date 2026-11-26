@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMotion/CoreMotion.h>
+#import <GameController/GameController.h>
 #import <SceneKit/SceneKit.h>
 #import <objc/runtime.h>
 #import <Security/Security.h>
@@ -10,9 +11,14 @@
 #import <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdint.h>
 
 extern int horizon_ios_run(const char *resources, const char *game_dir);
 extern void horizon_ios_add_motion(double dx, double dy);
+extern void horizon_ios_set_hardware_input(int attached, int mouse);
+extern void horizon_ios_hardware_key(uint16_t usage, int pressed, int repeat, uint8_t modifiers);
+extern void horizon_ios_hardware_mouse_motion(double dx, double dy, double x, double y);
+extern void horizon_ios_hardware_mouse_button(int button, int pressed);
 @class NCLRResourcePreparer;
 static NSString *const NCLRPrepareProgressNotification = @"NCLRPrepareProgress";
 static NSString *const NCLRPrepareFinishedNotification = @"NCLRPrepareFinished";
@@ -299,40 +305,271 @@ static NSString *NCLRModIdentifier(NSString *path) {
 }
 @end
 
-// Runs on the main queue. Rates are integrated using hardware timestamps.
+// Runs on the main queue. Device motion is fused and low-pass filtered, then
+// integrated with hardware timestamps so frame drops do not change the turn.
 static CMMotionManager *NCLRStartGyro(UIWindowScene *scene, CGFloat sensitivity,
                                        BOOL invertX, BOOL invertY) {
     CMMotionManager *motion = [CMMotionManager new];
-    if (!motion.gyroAvailable) return nil;
-    motion.gyroUpdateInterval = 1.0 / 120.0;
+    if (!motion.deviceMotionAvailable) return nil;
+    motion.deviceMotionUpdateInterval = 1.0 / 120.0;
     __block NSTimeInterval previous = 0;
+    __block double smoothYaw = 0.0;
+    __block double smoothPitch = 0.0;
+    __block UIInterfaceOrientation lastOrientation = UIInterfaceOrientationUnknown;
     __weak UIWindowScene *gameScene = scene;
-    [motion startGyroUpdatesToQueue:NSOperationQueue.mainQueue
-                        withHandler:^(CMGyroData *sample, NSError *error) {
+    [motion startDeviceMotionUpdatesToQueue:NSOperationQueue.mainQueue
+                                withHandler:^(CMDeviceMotion *sample, NSError *error) {
         if (error || !sample || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
             previous = 0;
+            smoothYaw = smoothPitch = 0.0;
+            lastOrientation = UIInterfaceOrientationUnknown;
+            return;
+        }
+        UIInterfaceOrientation orientation = gameScene.interfaceOrientation;
+        if (!UIInterfaceOrientationIsLandscape(orientation)) return;
+        if (orientation != lastOrientation) {
+            lastOrientation = orientation;
+            previous = 0;
+            smoothYaw = smoothPitch = 0.0;
             return;
         }
         NSTimeInterval elapsed = previous > 0 ? sample.timestamp - previous : 0;
         previous = sample.timestamp;
         if (elapsed <= 0 || elapsed > 0.04 ||
-            NSProcessInfo.processInfo.systemUptime - sample.timestamp > 0.08) return;
-        UIInterfaceOrientation orientation = gameScene.interfaceOrientation;
-        if (!UIInterfaceOrientationIsLandscape(orientation)) return;
+            NSProcessInfo.processInfo.systemUptime - sample.timestamp > 0.08) {
+            previous = 0;
+            smoothYaw = smoothPitch = 0.0;
+            return;
+        }
         double direction = orientation == UIInterfaceOrientationLandscapeLeft ? 1.0 : -1.0;
-        double yaw = sample.rotationRate.x;
-        double pitch = sample.rotationRate.y;
+        double yawRate = sample.rotationRate.x;
+        double pitchRate = sample.rotationRate.y;
+        // Follow quick turns closely, while settling sensor noise when still.
+        double speed = hypot(yawRate, pitchRate);
+        double alpha = fmin(0.82, 0.18 + speed * 0.22);
+        smoothYaw += alpha * (yawRate - smoothYaw);
+        smoothPitch += alpha * (pitchRate - smoothPitch);
+        const double deadzone = 0.006;
+        double yaw = fabs(smoothYaw) < deadzone ? 0.0 : smoothYaw;
+        double pitch = fabs(smoothPitch) < deadzone ? 0.0 : smoothPitch;
         const double radiansToMouseUnits = 180.0 / (M_PI * 0.15);
-        if (fabs(yaw) < 0.012) yaw = 0;
-        if (fabs(pitch) < 0.012) pitch = 0;
         if (yaw || pitch) {
             double scale = direction * elapsed * sensitivity * radiansToMouseUnits;
-            horizon_ios_add_motion((invertX ? -yaw : yaw) * scale,
-                                   (invertY ? -pitch : pitch) * scale);
+            double dx = (invertX ? -yaw : yaw) * scale;
+            double dy = (invertY ? -pitch : pitch) * scale;
+            const double maxStep = 24.0;
+            dx = fmax(-maxStep, fmin(maxStep, dx));
+            dy = fmax(-maxStep, fmin(maxStep, dy));
+            horizon_ios_add_motion(dx, dy);
         }
     }];
     return motion;
 }
+
+static void NCLRRunOnMain(dispatch_block_t block) {
+    if (NSThread.isMainThread) {
+        block();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), block);
+    }
+}
+
+@interface NCLRHardwareInput : NSObject
+@property (nonatomic, strong) GCKeyboard *keyboard;
+@property (nonatomic, strong) GCMouse *mouse;
+@property (nonatomic, strong) NSMutableSet<NSNumber *> *keysDown;
+@property (nonatomic, assign) BOOL capsLock;
+@property (nonatomic, assign) BOOL cursorReady;
+@property (nonatomic, assign) CGPoint cursor;
+@property (nonatomic, assign) CGSize cursorBounds;
+@property (nonatomic, assign) BOOL running;
++ (instancetype)shared;
+- (void)start;
+- (void)stop;
+@end
+
+@implementation NCLRHardwareInput
++ (instancetype)shared {
+    static NCLRHardwareInput *input;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ input = [[NCLRHardwareInput alloc] init]; });
+    return input;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) _keysDown = [NSMutableSet set];
+    return self;
+}
+
+- (void)start {
+    if (self.running) return;
+    self.running = YES;
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    [center addObserver:self selector:@selector(devicesChanged:)
+                   name:GCKeyboardDidConnectNotification object:nil];
+    [center addObserver:self selector:@selector(devicesChanged:)
+                   name:GCKeyboardDidDisconnectNotification object:nil];
+    [center addObserver:self selector:@selector(devicesChanged:)
+                   name:GCMouseDidConnectNotification object:nil];
+    [center addObserver:self selector:@selector(devicesChanged:)
+                   name:GCMouseDidDisconnectNotification object:nil];
+    [center addObserver:self selector:@selector(devicesChanged:)
+                   name:UIApplicationDidBecomeActiveNotification object:nil];
+    [self refreshDevices];
+}
+
+- (void)stop {
+    if (!self.running) return;
+    self.running = NO;
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+    [self detachKeyboard:YES];
+    [self detachMouse];
+    horizon_ios_set_hardware_input(0, 0);
+    self.cursorReady = NO;
+}
+
+- (void)devicesChanged:(NSNotification *)note {
+    (void)note;
+    __weak typeof(self) weakSelf = self;
+    NCLRRunOnMain(^{ [weakSelf refreshDevices]; });
+}
+
+- (void)refreshDevices {
+    GCKeyboard *keyboard = GCKeyboard.coalescedKeyboard;
+    if (keyboard != self.keyboard) {
+        [self detachKeyboard:YES];
+        self.keyboard = keyboard;
+        [self attachKeyboard:keyboard];
+    }
+    GCMouse *mouse = GCMouse.current;
+    if (mouse != self.mouse) {
+        [self detachMouse];
+        self.mouse = mouse;
+        [self attachMouse:mouse];
+    }
+    BOOL hasKeyboard = self.keyboard != nil;
+    BOOL hasMouse = self.mouse != nil;
+    horizon_ios_set_hardware_input((hasKeyboard || hasMouse) ? 1 : 0, hasMouse ? 1 : 0);
+}
+
+- (uint8_t)modifiersForInput:(GCKeyboardInput *)input {
+    GCControllerButtonInput *leftShift = [input buttonForKeyCode:GCKeyCodeLeftShift];
+    GCControllerButtonInput *rightShift = [input buttonForKeyCode:GCKeyCodeRightShift];
+    GCControllerButtonInput *leftControl = [input buttonForKeyCode:GCKeyCodeLeftControl];
+    GCControllerButtonInput *rightControl = [input buttonForKeyCode:GCKeyCodeRightControl];
+    GCControllerButtonInput *leftAlt = [input buttonForKeyCode:GCKeyCodeLeftAlt];
+    GCControllerButtonInput *rightAlt = [input buttonForKeyCode:GCKeyCodeRightAlt];
+    GCControllerButtonInput *leftCommand = [input buttonForKeyCode:GCKeyCodeLeftGUI];
+    GCControllerButtonInput *rightCommand = [input buttonForKeyCode:GCKeyCodeRightGUI];
+    BOOL shift = leftShift.isPressed || rightShift.isPressed;
+    BOOL control = leftControl.isPressed || rightControl.isPressed;
+    BOOL alternate = leftAlt.isPressed || rightAlt.isPressed;
+    BOOL command = leftCommand.isPressed || rightCommand.isPressed;
+    return (shift ? 1 : 0) | (control ? 2 : 0) | (alternate ? 4 : 0) |
+           (command ? 8 : 0) | (self.capsLock ? 16 : 0);
+}
+
+- (void)attachKeyboard:(GCKeyboard *)keyboard {
+    if (!keyboard) return;
+    __weak typeof(self) weakSelf = self;
+    keyboard.keyboardInput.keyChangedHandler =
+        ^(GCKeyboardInput *input, GCControllerButtonInput *key, GCKeyCode keyCode, BOOL pressed) {
+        (void)key;
+        NCLRHardwareInput *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (keyCode == GCKeyCodeCapsLock && pressed) {
+            strongSelf.capsLock = !strongSelf.capsLock;
+        }
+        uint8_t modifiers = [strongSelf modifiersForInput:input];
+        NSNumber *code = @(keyCode);
+        BOOL repeat = pressed && [strongSelf.keysDown containsObject:code];
+        if (pressed) {
+            [strongSelf.keysDown addObject:code];
+        } else {
+            [strongSelf.keysDown removeObject:code];
+        }
+        NCLRRunOnMain(^{
+            horizon_ios_hardware_key((uint16_t)keyCode, pressed ? 1 : 0, repeat ? 1 : 0, modifiers);
+        });
+    };
+}
+
+- (void)detachKeyboard:(BOOL)releaseKeys {
+    GCKeyboard *keyboard = self.keyboard;
+    if (keyboard) {
+        keyboard.keyboardInput.keyChangedHandler = nil;
+    }
+    self.keyboard = nil;
+    if (releaseKeys) {
+        for (NSNumber *code in self.keysDown) {
+            horizon_ios_hardware_key((uint16_t)code.unsignedIntegerValue, 0, 0, 0);
+        }
+    }
+    [self.keysDown removeAllObjects];
+    self.capsLock = NO;
+}
+
+- (void)attachMouse:(GCMouse *)mouse {
+    if (!mouse) return;
+    __weak typeof(self) weakSelf = self;
+    mouse.mouseInput.mouseMovedHandler = ^(GCMouseInput *input, float deltaX, float deltaY) {
+        (void)input;
+        [weakSelf moveMouseX:deltaX y:deltaY];
+    };
+    mouse.mouseInput.leftButton.pressedChangedHandler =
+        ^(GCControllerButtonInput *button, float value, BOOL pressed) {
+        (void)button; (void)value;
+        NCLRRunOnMain(^{ horizon_ios_hardware_mouse_button(0, pressed ? 1 : 0); });
+    };
+    mouse.mouseInput.rightButton.pressedChangedHandler =
+        ^(GCControllerButtonInput *button, float value, BOOL pressed) {
+        (void)button; (void)value;
+        NCLRRunOnMain(^{ horizon_ios_hardware_mouse_button(1, pressed ? 1 : 0); });
+    };
+    mouse.mouseInput.middleButton.pressedChangedHandler =
+        ^(GCControllerButtonInput *button, float value, BOOL pressed) {
+        (void)button; (void)value;
+        NCLRRunOnMain(^{ horizon_ios_hardware_mouse_button(2, pressed ? 1 : 0); });
+    };
+    self.cursorReady = NO;
+    [self moveMouseX:0 y:0];
+}
+
+- (void)detachMouse {
+    GCMouse *mouse = self.mouse;
+    if (mouse) {
+        mouse.mouseInput.mouseMovedHandler = nil;
+        mouse.mouseInput.leftButton.pressedChangedHandler = nil;
+        mouse.mouseInput.rightButton.pressedChangedHandler = nil;
+        mouse.mouseInput.middleButton.pressedChangedHandler = nil;
+    }
+    self.mouse = nil;
+    for (int button = 0; button < 3; button++) {
+        horizon_ios_hardware_mouse_button(button, 0);
+    }
+    self.cursorReady = NO;
+}
+
+- (void)moveMouseX:(float)deltaX y:(float)deltaY {
+    UIWindow *window = UIApplication.sharedApplication.keyWindow;
+    if (!window) return;
+    CGSize size = window.bounds.size;
+    if (size.width < 1.0 || size.height < 1.0) return;
+    if (!self.cursorReady || !CGSizeEqualToSize(self.cursorBounds, size)) {
+        self.cursor = CGPointMake(size.width * 0.5, size.height * 0.5);
+        self.cursorBounds = size;
+        self.cursorReady = YES;
+    }
+    CGFloat x = fmax(0.0, fmin(size.width - 1.0, self.cursor.x + deltaX));
+    CGFloat y = fmax(0.0, fmin(size.height - 1.0, self.cursor.y + deltaY));
+    self.cursor = CGPointMake(x, y);
+    CGFloat scale = window.screen.scale > 0.0 ? window.screen.scale : UIScreen.mainScreen.scale;
+    NCLRRunOnMain(^{
+        horizon_ios_hardware_mouse_motion(deltaX * scale, deltaY * scale, x * scale, y * scale);
+    });
+}
+@end
 
 static NSString *NCLRModSwitchesPath(void) {
     return [NCLRDocuments() stringByAppendingPathComponent:@"horizon-mods.txt"];
@@ -2203,8 +2440,10 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     CMMotionManager *motion = keymap.gyroEnabled
         ? NCLRStartGyro(launcherWindow.windowScene, keymap.gyroSensitivity,
                         keymap.gyroInvertX, keymap.gyroInvertY) : nil;
+    [[NCLRHardwareInput shared] start];
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
-    [motion stopGyroUpdates];
+    [[NCLRHardwareInput shared] stop];
+    [motion stopDeviceMotionUpdates];
     [display invalidate];
     unsetenv("HORIZON_SESSION_FILE");
     [files removeItemAtPath:sessionPath error:nil];
@@ -3098,7 +3337,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.view.backgroundColor = NCLRCanvas();
     self.stack.spacing = 12;
     [self.stack addArrangedSubview:[self headerWithTitle:@"触控编辑"
-                                                subtitle:@"拖动按键调整位置，点按查看设置"
+                                                subtitle:@"拖动按键调整位置，接入键鼠时自动隐藏触控键"
                                              actionTitle:nil action:nil]];
 
     UIView *menu = [self card];

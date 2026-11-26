@@ -259,6 +259,28 @@ impl WindowExtIOS for Window {
     }
 }
 
+/// Sends a hardware keyboard event from the GameController framework into the
+/// running event loop. `usage` is a USB HID keyboard usage code.
+pub fn send_hardware_key(usage: u16, pressed: bool, repeat: bool, modifiers: u8) {
+    crate::platform_impl::hardware_input::send_key(usage, pressed, repeat, modifiers);
+}
+
+/// Sends relative mouse motion and the matching pointer position, in physical
+/// pixels, from the GameController framework into the running event loop.
+pub fn send_hardware_mouse_motion(dx: f64, dy: f64, x: f64, y: f64) {
+    crate::platform_impl::hardware_input::send_mouse_motion(dx, dy, x, y);
+}
+
+/// Sends an external mouse button (0 left, 1 right, 2 middle).
+pub fn send_hardware_mouse_button(button: u8, pressed: bool) {
+    crate::platform_impl::hardware_input::send_mouse_button(button, pressed);
+}
+
+/// Sends a line-based mouse wheel step.
+pub fn send_hardware_mouse_scroll(dx: f64, dy: f64) {
+    crate::platform_impl::hardware_input::send_mouse_scroll(dx, dy);
+}
+
 /// Additional methods on [`WindowAttributes`] that are specific to iOS.
 pub trait WindowAttributesExtIOS {
     /// Sets the [`contentScaleFactor`] of the underlying [`UIWindow`] to `scale_factor`.

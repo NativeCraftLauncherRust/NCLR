@@ -1,6 +1,6 @@
 #![deny(unused_results)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::cell::{RefCell, RefMut};
 use std::collections::HashSet;
 use std::os::raw::c_void;
@@ -96,6 +96,7 @@ impl Event<HandlePendingUserEvents> {
 }
 
 static LATE_START: AtomicBool = AtomicBool::new(false);
+static KEY_WINDOW_ID: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn set_late_start(value: bool) {
     LATE_START.store(value, Ordering::SeqCst);
@@ -443,6 +444,7 @@ impl AppState {
 }
 
 pub(crate) fn set_key_window(mtm: MainThreadMarker, window: &Retained<WinitUIWindow>) {
+    KEY_WINDOW_ID.store(u64::from(window.id()), Ordering::SeqCst);
     let mut this = AppState::get_mut(mtm);
     match this.state_mut() {
         &mut AppStateImpl::NotLaunched { ref mut queued_windows, .. } => {
@@ -460,6 +462,12 @@ pub(crate) fn set_key_window(mtm: MainThreadMarker, window: &Retained<WinitUIWin
     }
     drop(this);
     window.makeKeyAndVisible();
+}
+
+/// The window hardware input events are delivered to, once one exists.
+pub(crate) fn key_window_id() -> Option<RootWindowId> {
+    let id = KEY_WINDOW_ID.load(Ordering::SeqCst);
+    (id != 0).then(|| RootWindowId::from(id))
 }
 
 pub(crate) fn queue_gl_or_metal_redraw(mtm: MainThreadMarker, window: Retained<WinitUIWindow>) {
