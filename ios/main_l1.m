@@ -566,7 +566,9 @@ static void NCLRRunOnMain(dispatch_block_t block) {
     self.cursor = CGPointMake(x, y);
     CGFloat scale = window.screen.scale > 0.0 ? window.screen.scale : UIScreen.mainScreen.scale;
     NCLRRunOnMain(^{
-        horizon_ios_hardware_mouse_motion(deltaX * scale, deltaY * scale, x * scale, y * scale);
+        // Relative motion stays in points so mouse look matches the cursor on
+        // every display scale. The pointer position is a drawable pixel.
+        horizon_ios_hardware_mouse_motion(deltaX, deltaY, x * scale, y * scale);
     });
 }
 @end

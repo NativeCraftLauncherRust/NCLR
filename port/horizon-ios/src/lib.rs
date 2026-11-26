@@ -42,7 +42,7 @@ pub extern "C" fn horizon_ios_hardware_key(
     let _ = (usage, pressed, repeat, modifiers);
 }
 
-/// Relative mouse motion plus the pointer position in physical pixels.
+/// Relative mouse motion in points plus the pointer position in physical pixels.
 #[unsafe(no_mangle)]
 pub extern "C" fn horizon_ios_hardware_mouse_motion(dx: f64, dy: f64, x: f64, y: f64) {
     #[cfg(target_os = "ios")]
