@@ -25,7 +25,7 @@
 //! then swaps it into place, so a failed run never costs the player a working
 //! tree.
 
-mod tables;
+pub mod tables;
 
 use hzr_fetch::{bundle as staging, facts, gameplay, jar, model_states, nbt, worldgen};
 use std::fs;
@@ -430,8 +430,45 @@ pub fn assemble_from_jar(
     }
     fs::create_dir_all(out).map_err(|e| format!("{}: {}", out.display(), explain(&e)))?;
     tables::generate(client_jar, out)?;
+    restore_generated_tables(out)?;
     finish(out, client_jar, index, store, &mut done)?;
     Ok(done)
+}
+
+/// The exporter writes the same split form the shipped bundle used: the four
+/// shape tables and `block-properties` carry a shared `states` trailer, and
+/// `occlusion`/`cached-collision` are the whole tables they embed. Put them
+/// back together exactly as the bundle path does.
+fn restore_generated_tables(out: &Path) -> Result<(), String> {
+    let shared = out.join("_shared");
+    let states = read(&shared.join("states.bin"))?;
+    for table in TRAILER_TABLES {
+        let path = out.join(table);
+        let body = read(&path)?;
+        let whole = nbt::restore(&body, &states)?;
+        write(&path, &whole)?;
+    }
+    let bp = out.join(BLOCK_PROPERTIES);
+    let with_states = nbt::restore(&read(&bp)?, &states)?;
+    let index_bytes = read(&shared.join("occlusion.index"))?;
+    let key_index = u32::from_le_bytes([
+        *index_bytes.first().ok_or("occlusion.index is empty")?,
+        index_bytes[1],
+        index_bytes[2],
+        index_bytes[3],
+    ]) as usize;
+    let occlusion = read(&out.join("occlusion.nbt"))?;
+    let rebuilt = nbt::restore_key(
+        &with_states,
+        &nbt::KeySpan {
+            index: key_index,
+            bytes: nbt::occlusion_key(&occlusion)?,
+        },
+    )?;
+    write(&bp, &rebuilt)?;
+    let collision = read(&out.join("cached-collision.nbt"))?;
+    write(&out.join(staging::DUPLICATE), &collision)?;
+    Ok(())
 }
 
 /// `assemble_from_jar`, staged and verified like [`assemble_clean`].

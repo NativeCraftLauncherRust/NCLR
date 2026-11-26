@@ -65,7 +65,6 @@ fn target(command: &str, out: &Path) -> PathBuf {
         "attributes" => Some("attributes.json"),
         "render-definitions" => Some("render-definitions.json"),
         "entity-models" => Some("entity-models.json"),
-        "commands" => Some("commands.json"),
         "items" => Some("items.json"),
         "gameplay-compact" => Some("_shared/gameplay.compact.json"),
         "block-behaviours" => Some("block-behaviours.json"),
