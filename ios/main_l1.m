@@ -19,6 +19,7 @@ extern void horizon_ios_set_hardware_input(int attached, int mouse);
 extern void horizon_ios_hardware_key(uint16_t usage, int pressed, int repeat, uint8_t modifiers);
 extern void horizon_ios_hardware_mouse_motion(double dx, double dy, double x, double y);
 extern void horizon_ios_hardware_mouse_button(int button, int pressed);
+extern void horizon_ios_hardware_mouse_scroll(double dx, double dy);
 @class NCLRResourcePreparer;
 static NSString *const NCLRPrepareProgressNotification = @"NCLRPrepareProgress";
 static NSString *const NCLRPrepareFinishedNotification = @"NCLRPrepareFinished";
@@ -532,6 +533,17 @@ static void NCLRRunOnMain(dispatch_block_t block) {
         (void)button; (void)value;
         NCLRRunOnMain(^{ horizon_ios_hardware_mouse_button(2, pressed ? 1 : 0); });
     };
+    // The scroll wheel arrives as raw axes: vertical motion rides the first
+    // axis with the sign flipped, horizontal motion the second. The game reads
+    // a positive delta as a scroll up, so negate the vertical axis here.
+    mouse.mouseInput.scroll.valueChangedHandler =
+        ^(GCControllerDirectionPad *pad, float xValue, float yValue) {
+        (void)pad;
+        float horizontal = yValue;
+        float vertical = -xValue;
+        if (horizontal == 0.0f && vertical == 0.0f) return;
+        NCLRRunOnMain(^{ horizon_ios_hardware_mouse_scroll(horizontal, vertical); });
+    };
     self.cursorReady = NO;
     [self moveMouseX:0 y:0];
 }
@@ -543,6 +555,7 @@ static void NCLRRunOnMain(dispatch_block_t block) {
         mouse.mouseInput.leftButton.pressedChangedHandler = nil;
         mouse.mouseInput.rightButton.pressedChangedHandler = nil;
         mouse.mouseInput.middleButton.pressedChangedHandler = nil;
+        mouse.mouseInput.scroll.valueChangedHandler = nil;
     }
     self.mouse = nil;
     for (int button = 0; button < 3; button++) {
