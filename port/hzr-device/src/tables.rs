@@ -5,7 +5,7 @@
 //! the wiring needs. The commands are the ones `hzr-export` documents; the
 //! group crates are the library form of the exporter's helper binaries.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Commands that produce one of the 38 tables, in the order they run.
 pub const COMMANDS: [&str; 28] = [
@@ -41,10 +41,44 @@ pub const COMMANDS: [&str; 28] = [
 
 /// Run every table command with `out` as the resource root.
 pub fn generate(client_jar: &Path, out: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     for command in COMMANDS {
-        run(command, client_jar, out)?;
+        let target = target(command, out);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        run(command, client_jar, &target)?;
     }
     Ok(())
+}
+
+/// File-writing commands take their own path; the rest take the resource root
+/// and write their fixed relative names into it.
+fn target(command: &str, out: &Path) -> PathBuf {
+    let file = match command {
+        "block-tags" => Some("block-tags.json"),
+        "damage-tags" => Some("damage-tags.json"),
+        "damage-types" => Some("damage-types.json"),
+        "damage-catalog" => Some("damage-catalog.json"),
+        "player-float-ids" => Some("player-float-ids.json"),
+        "entity-types" => Some("entity-types.json"),
+        "attributes" => Some("attributes.json"),
+        "render-definitions" => Some("render-definitions.json"),
+        "entity-models" => Some("entity-models.json"),
+        "commands" => Some("commands.json"),
+        "items" => Some("items.json"),
+        "gameplay-compact" => Some("_shared/gameplay.compact.json"),
+        "block-behaviours" => Some("block-behaviours.json"),
+        "creative-inventory" => Some("creative-inventory.json"),
+        "mob-data" => Some("mob-data.json"),
+        "occlusion-index" => Some("_shared/occlusion.index"),
+        "prepare-stamp" => Some("horizon-prepare.json"),
+        _ => None,
+    };
+    match file {
+        Some(rel) => out.join(rel),
+        None => out.to_path_buf(),
+    }
 }
 
 fn run(command: &str, client_jar: &Path, out: &Path) -> Result<(), String> {
