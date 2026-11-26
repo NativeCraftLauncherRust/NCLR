@@ -98,8 +98,8 @@ static void NCLRLoadRemoteAvatar(NSString *url, UIImageView *imageView, UILabel 
 @property (atomic, strong) NSURLSession *downloadSession;
 - (void)cancel;
 @end
-extern const char *horizon_ios_assemble(const char *bundle, const char *client_jar,
-                                        const char *index, const char *store, const char *out);
+extern const char *horizon_ios_assemble_from_jar(const char *client_jar, const char *index,
+                                                 const char *store, const char *out);
 
 
 static NSString *const kNCLRService = @"dev.zrxmaxlnx.nclr.launcher";
@@ -5207,9 +5207,9 @@ static NSString *NCLRSHA1Hex(NSData *data) {
         dispatch_sync(dispatch_get_main_queue(), ^{ self.cancellable = NO; });
         if (self.cancelRequested) { finish(@"下载已取消"); return; }
 
-        NSString *bundle = [[NSBundle mainBundle] pathForResource:@"ship" ofType:@"hzr3"];
-        if (bundle.length == 0) { finish(@"IPA 内缺少 ship.hzr3"); return; }
-        report(@"组装游戏资源…", 0.93);
+        // Every table is generated from the player's own client.jar, so the
+        // app ships no Mojang-derived data.
+        report(@"生成并组装游戏资源…", 0.90);
         NSString *destination = out;
         out = [out stringByAppendingString:@".preparing"];
         NSFileManager *files = NSFileManager.defaultManager;
@@ -5219,9 +5219,10 @@ static NSString *NCLRSHA1Hex(NSData *data) {
             return;
         }
         NCLRCreateDirectory([out stringByDeletingLastPathComponent]);
-        const char *message = horizon_ios_assemble(bundle.UTF8String, jarPath.UTF8String,
-                                                   indexPath.UTF8String, objects.UTF8String,
-                                                   out.UTF8String);
+        const char *message = horizon_ios_assemble_from_jar(jarPath.UTF8String,
+                                                           indexPath.UTF8String,
+                                                           objects.UTF8String,
+                                                           out.UTF8String);
         if (message != NULL) {
             finish([NSString stringWithUTF8String:message]);
             return;

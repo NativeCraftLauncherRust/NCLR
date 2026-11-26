@@ -1,0 +1,11 @@
+﻿[package]
+name = "hzr-bytecode"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Read the block constants out of the player's own client.jar (route3)"
+
+[dependencies]
+serde_json = "1"
+
+[workspace]

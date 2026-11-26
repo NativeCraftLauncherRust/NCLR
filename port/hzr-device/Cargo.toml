@@ -9,5 +9,20 @@ description = "Assembles a runnable resource tree on device from a shipped bundl
 serde_json = "1"
 hzr-pack = { path = "../hzr-pack" }
 hzr-fetch = { path = "../hzr-fetch" }
+hzr-export = { path = "../hzr-export" }
+hzr-export-behaviour = { path = "../hzr-export-behaviour" }
+hzr-export-blocks = { path = "../hzr-export-blocks" }
+hzr-export-commands = { path = "../hzr-export-commands" }
+hzr-export-creative = { path = "../hzr-export-creative" }
+hzr-export-entity = { path = "../hzr-export-entity" }
+hzr-export-gameplay = { path = "../hzr-export-gameplay" }
+hzr-export-items = { path = "../hzr-export-items" }
+hzr-export-mob = { path = "../hzr-export-mob" }
+hzr-export-models = { path = "../hzr-export-models" }
+hzr-export-registries = { path = "../hzr-export-registries" }
+hzr-export-render = { path = "../hzr-export-render" }
+hzr-export-shapes = { path = "../hzr-export-shapes" }
+hzr-export-structure = { path = "../hzr-export-structure" }
+hzr-export-world = { path = "../hzr-export-world" }
 
 [workspace]
