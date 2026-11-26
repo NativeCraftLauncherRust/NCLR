@@ -829,7 +829,7 @@ index 9e8d8e4..1eb61e2 100644
  fn mining_radius(radius: f32, progress: f32) -> f32 {
      if progress.is_finite() {
 diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
-index e57f2d8..490d623 100644
+index e57f2d8..66f2338 100644
 --- a/crates/horizon-client-render/src/touch/layout.rs
 +++ b/crates/horizon-client-render/src/touch/layout.rs
 @@ -58,13 +58,14 @@ pub enum Control {
@@ -909,7 +909,7 @@ index e57f2d8..490d623 100644
  /// The player's touch layout, saved as JSON. Missing fields take their
  /// defaults, so later options can be added without resetting a saved file.
  #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-@@ -170,6 +211,19 @@ pub struct Settings {
+@@ -170,6 +211,20 @@ pub struct Settings {
      pub layouts: [[Placement; CONTROLS]; 3],
      /// Camera turn speed for look drags; scales both axes.
      pub sensitivity: f32,
@@ -926,10 +926,11 @@ index e57f2d8..490d623 100644
 +    pub launcher_trigger_modes: bool,
 +    #[serde(default)]
 +    pub extra_buttons: Vec<ExtraButton>,
++    pub menu_escape: [Placement; 2],
      /// Extra scale on the yaw (left and right) turn.
      pub sensitivity_horizontal: f32,
      /// Extra scale on the pitch (up and down) turn.
-@@ -214,6 +268,7 @@ impl Default for Settings {
+@@ -214,6 +269,7 @@ impl Default for Settings {
              Placement::new(0.58, 0.055, 0.075), // Perspective
              Placement::new(0.80, 0.96, 0.075),  // Offhand
              Placement::new(0.92, 0.36, 0.12),   // Shield
@@ -937,7 +938,7 @@ index e57f2d8..490d623 100644
          ];
          let mut layouts = [row; 3];
          // The D-pad sits where the joystick does; sneak becomes its centre.
-@@ -231,6 +286,12 @@ impl Default for Settings {
+@@ -231,6 +287,13 @@ impl Default for Settings {
              button_visibility: [FOLLOW_SCHEME; CONTROLS],
              layouts,
              sensitivity: 1.0,
@@ -947,10 +948,11 @@ index e57f2d8..490d623 100644
 +            toggle_buttons: Vec::new(),
 +            launcher_trigger_modes: false,
 +            extra_buttons: Vec::new(),
++            menu_escape: [Placement { center: [0.057, 0.066], size: 0.092, opacity: 1.0 }; 2],
              sensitivity_horizontal: 1.0,
              sensitivity_vertical: 1.0,
              sprint_toggle: false,
-@@ -264,6 +325,132 @@ impl Settings {
+@@ -264,6 +327,152 @@ impl Settings {
          std::fs::rename(temp, path)
      }
  
@@ -1026,6 +1028,26 @@ index e57f2d8..490d623 100644
 +        let deleted_key = |id: &str| deleted.is_some_and(|keys| keys.iter().any(|key| key.as_str() == Some(id)));
 +        self.extra_buttons.clear();
 +        for (id, value) in layout {
++            if let Some(index) = match id.as_str() {
++                "inventoryEscape" => Some(0),
++                "pauseEscape" => Some(1),
++                _ => None,
++            } {
++                if let Some(value) = value.as_object() {
++                    let mut placement = self.menu_escape[index];
++                    for (axis, key) in ["x", "y"].into_iter().enumerate() {
++                        if let Some(v) = value.get(key).and_then(|v| v.as_f64()) {
++                            placement.center[axis] = v as f32;
++                        }
++                    }
++                    if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
++                        placement.size = v as f32;
++                    }
++                    placement.sanitize();
++                    self.menu_escape[index] = placement;
++                }
++                continue;
++            }
 +            if deleted_key(id) {
 +                continue;
 +            }
@@ -1083,7 +1105,7 @@ index e57f2d8..490d623 100644
      pub fn sanitize(&mut self) {
          // Only the D-pad has a split variant (see `Mode::SCHEMES`).
          if self.mode != Mode::Dpad {
-@@ -284,7 +471,9 @@ impl Settings {
+@@ -284,7 +493,9 @@ impl Settings {
          ] {
              *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
          }
@@ -1094,6 +1116,23 @@ index e57f2d8..490d623 100644
          self.circle_size = finite_or(self.circle_size, 32.0).clamp(16.0, 64.0);
          self.dynamic_area_x = finite_or(self.dynamic_area_x, 0.25).clamp(0.0, 1.0);
          self.dynamic_area_y = finite_or(self.dynamic_area_y, 1.0).clamp(0.0, 1.0);
+@@ -312,6 +523,16 @@ impl Settings {
+         }
+     }
+ 
++    /// Shared bounds, in GUI units, for drawing and tapping the menu back button.
++    pub fn menu_escape_rect(&self, inventory: bool, width: f32, height: f32) -> [f32; 4] {
++        let placement = self.menu_escape[if inventory { 0 } else { 1 }];
++        let h = (placement.size * height).min(width / 2.2);
++        let w = h * 2.2;
++        let [x, y] = placement.center;
++        [(x * width - w / 2.0).clamp(0.0, (width - w).max(0.0)),
++         (y * height - h / 2.0).clamp(0.0, (height - h).max(0.0)), w, h]
++    }
++
+     /// The layout slot a control is drawn in (jump and sneak may trade places).
+     pub fn slot(&self, c: Control) -> usize {
+         let swap = self.mode == Mode::Dpad && self.swap_jump_sneak;
 diff --git a/crates/horizon-client/Cargo.toml b/crates/horizon-client/Cargo.toml
 index 7b7a557..8b097d7 100644
 --- a/crates/horizon-client/Cargo.toml
@@ -1201,7 +1240,7 @@ index 78cfdee..c257073 100644
  /// Cells cannot roll back: each copy merges all requesting rows, so stopping the whole
  /// start is how we ensure none of a refused mod's rows run.
 diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.rs
-index 55bd735..7e0abaf 100644
+index 55bd735..7d22cbb 100644
 --- a/crates/horizon-client/src/game.rs
 +++ b/crates/horizon-client/src/game.rs
 @@ -1113,6 +1113,8 @@ struct Game<'a> {
@@ -1213,7 +1252,7 @@ index 55bd735..7e0abaf 100644
      /// The candidate window's area last given to the window, in pixels.
      ime_area: Option<[i32; 4]>,
      /// When the window lost focus, while it is still without
-@@ -1189,6 +1191,10 @@ struct Game<'a> {
+@@ -1189,6 +1191,11 @@ struct Game<'a> {
      last_input: Instant,
      /// Controllers (Horizon's own).
      pad: pad::Pads,
@@ -1221,10 +1260,11 @@ index 55bd735..7e0abaf 100644
 +    touch: horizon_client_render::touch::TouchControls,
 +    /// The touch attack trigger was down at the last frame.
 +    touch_attack_down: bool,
++    menu_escape_touch: Option<u64>,
      frames: u64,
      /// The glint clock and options, read once per frame (game/interface/item_draw.rs).
      glint_frame: horizon_client::item_render::GlintFrame,
-@@ -5306,6 +5312,21 @@ impl Game<'_> {
+@@ -5306,6 +5313,26 @@ impl Game<'_> {
          self.draw_studio_bars(&mut batch);
          if show_hud {
              self.draw_pad_guide(&mut batch, guide_from);
@@ -1237,16 +1277,21 @@ index 55bd735..7e0abaf 100644
 +        // the cursor, a lift clicks where it sits, and the top-left ESC box
 +        // leaves an inventory or pause screen.
 +        if self.screen != Screen::Playing {
-+            batch.fill(&self.gui.atlas, 4.0, 4.0, 52.0, 24.0, rgba(0, 0, 0, 210));
-+            batch.fill(&self.gui.atlas, 5.0, 5.0, 50.0, 22.0, rgba(90, 90, 90, 230));
-+            self.native_text(&mut batch, "ESC", [10.0, 11.0], 0xFFFFFFFF, true);
++            let [x, y, w, h] = self.touch.settings.menu_escape_rect(
++                matches!(self.screen, Screen::Inventory | Screen::Creative), batch.width, batch.height,
++            );
++            batch.fill(&self.gui.atlas, x, y, w, h, rgba(0, 0, 0, 210));
++            if w > 2.0 && h > 2.0 {
++                batch.fill(&self.gui.atlas, x + 1.0, y + 1.0, w - 2.0, h - 2.0, rgba(90, 90, 90, 230));
++            }
++            self.native_text(&mut batch, "ESC", [x + w * 0.12, y + (h - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
 +            let (x, y) = self.cursor;
 +            batch.fill(&self.gui.atlas, x - 3.0, y - 3.0, 6.0, 6.0, rgba(0, 0, 0, 190));
 +            batch.fill(&self.gui.atlas, x - 2.0, y - 2.0, 4.0, 4.0, rgba(255, 255, 255, 230));
          }
          batch
      }
-@@ -10701,6 +10722,7 @@ impl<'a> Game<'a> {
+@@ -10701,6 +10728,7 @@ impl<'a> Game<'a> {
              unclaimed_modifiers: None,
              focus_after_run: None,
              ime_allowed: false,
@@ -1254,7 +1299,7 @@ index 55bd735..7e0abaf 100644
              ime_area: None,
              focus_lost: None,
              modifiers: winit::keyboard::ModifiersState::empty(),
-@@ -10741,6 +10763,16 @@ impl<'a> Game<'a> {
+@@ -10741,6 +10769,17 @@ impl<'a> Game<'a> {
              previous: now,
              last_input: now,
              pad: Default::default(),
@@ -1268,6 +1313,7 @@ index 55bd735..7e0abaf 100644
 +                touch
 +            },
 +            touch_attack_down: false,
++            menu_escape_touch: None,
              frames: 0,
              glint_frame: Default::default(),
              kept_block_entities: Default::default(),
@@ -1545,7 +1591,7 @@ index 16664ff..c595ff6 100644
      pub(super) fn pauses_game(&self) -> bool {
          self.has_singleplayer_server()
 diff --git a/crates/horizon-client/src/game/runtime/loading_screen.rs b/crates/horizon-client/src/game/runtime/loading_screen.rs
-index 2511aa2..05af76b 100644
+index 2511aa2..cb359d5 100644
 --- a/crates/horizon-client/src/game/runtime/loading_screen.rs
 +++ b/crates/horizon-client/src/game/runtime/loading_screen.rs
 @@ -3,6 +3,11 @@
@@ -1644,7 +1690,7 @@ index 2511aa2..05af76b 100644
  impl ApplicationHandler for App {
      fn resumed(&mut self, event_loop: &ActiveEventLoop) {
          match self {
-@@ -427,6 +488,86 @@ impl ApplicationHandler for App {
+@@ -427,6 +488,99 @@ impl ApplicationHandler for App {
          }
      }
      fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -1666,6 +1712,15 @@ index 2511aa2..05af76b 100644
 +                );
 +            }
 +            if let App::Ready(game) = self {
++                if game.host.menu_escape_touch == Some(touch.id as u64) {
++                    if matches!(touch.phase, winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled) {
++                        game.host.menu_escape_touch = None;
++                    }
++                    if touch.phase != winit::event::TouchPhase::Started {
++                        return;
++                    }
++                    game.host.menu_escape_touch = None;
++                }
 +                if game.host.screen == Screen::Playing && game.host.title.is_none() {
 +                    game.host.touch_event(touch);
 +                    return;
@@ -1705,6 +1760,7 @@ index 2511aa2..05af76b 100644
 +        };
 +        if let App::Ready(game) = self {
 +            if let WindowEvent::Touch(touch) = &event
++                && game.host.screen != Screen::Playing
 +                && touch.phase == winit::event::TouchPhase::Started
 +            {
 +                let size = game
@@ -1712,11 +1768,14 @@ index 2511aa2..05af76b 100644
 +                    .renderer
 +                    .as_ref()
 +                    .map_or([1, 1], |r| [r.config.width, r.config.height]);
-+                let x = (touch.location.x - offset.0) / size[0] as f64;
-+                let y = (touch.location.y - offset.1) / size[1] as f64;
-+                if x < 0.10 && y < 0.12 {
-+                    // The on-screen back button in a menu, so a touch player
-+                    // can leave an inventory or a pause screen.
++                let gui = horizon_client_render::hud::HudBatch::new(size, game.host.settings.gui_scale_inputs());
++                let x = ((touch.location.x - offset.0) / f64::from(size[0].max(1))) as f32 * gui.width;
++                let y = ((touch.location.y - offset.1) / f64::from(size[1].max(1))) as f32 * gui.height;
++                let [left, top, width, height] = game.host.touch.settings.menu_escape_rect(
++                    matches!(game.host.screen, Screen::Inventory | Screen::Creative), gui.width, gui.height,
++                );
++                if x >= left && x < left + width && y >= top && y < top + height {
++                    game.host.menu_escape_touch = Some(touch.id as u64);
 +                    let _ = game.host.key_pressed(KeyCode::Escape, KeyCode::Escape);
 +                    return;
 +                }

@@ -382,6 +382,13 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 
 #pragma mark - Keymap
 
+static NSString *const NCLRInventoryEscape = @"inventoryEscape";
+static NSString *const NCLRPauseEscape = @"pauseEscape";
+
+static BOOL NCLRIsMenuKey(NSString *key) {
+    return [key isEqualToString:NCLRInventoryEscape] || [key isEqualToString:NCLRPauseEscape];
+}
+
 @interface NCLRKeymap : NSObject
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *bindings;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *positions;
@@ -451,6 +458,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
         @"offhand" : @"F",
         @"shield" : @"MouseRight",
         @"move" : @"移动",
+        NCLRInventoryEscape : @"ESC",
+        NCLRPauseEscape : @"ESC",
     } mutableCopy];
     self.opacity = 0.55;
     self.layoutVersion = 2;
@@ -470,6 +479,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
     self.touchMode = @"crosshair";
     self.dynamicJoystick = NO;
     self.positions = [@{
+        NCLRInventoryEscape : @{@"x": @0.057, @"y": @0.066, @"size": @0.092},
+        NCLRPauseEscape : @{@"x": @0.057, @"y": @0.066, @"size": @0.092},
         @"forward" : @{ @"x" : @0.10, @"y" : @0.80, @"size" : @0.10 },
         @"back" : @{ @"x" : @0.16, @"y" : @0.88, @"size" : @0.08 },
         @"left" : @{ @"x" : @0.07, @"y" : @0.88, @"size" : @0.08 },
@@ -613,6 +624,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 - (void)resetLayout {
     [self.deletedKeys removeAllObjects];
     self.positions = [@{
+        NCLRInventoryEscape : @{@"x": @0.057, @"y": @0.066, @"size": @0.092},
+        NCLRPauseEscape : @{@"x": @0.057, @"y": @0.066, @"size": @0.092},
         @"forward" : @{ @"x" : @0.10, @"y" : @0.80, @"size" : @0.10 },
         @"back" : @{ @"x" : @0.16, @"y" : @0.88, @"size" : @0.08 },
         @"left" : @{ @"x" : @0.07, @"y" : @0.88, @"size" : @0.08 },
@@ -650,6 +663,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 }
 
 - (void)applyPreset:(NSString *)preset {
+    NSDictionary *inventoryEscape = self.positions[NCLRInventoryEscape];
+    NSDictionary *pauseEscape = self.positions[NCLRPauseEscape];
     if ([preset isEqualToString:@"classic"]) {
         self.positions = [@{
             @"forward" : @{ @"x" : @0.13, @"y" : @0.76, @"size" : @0.16 },
@@ -679,6 +694,8 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
             [self.hiddenKeys addObjectsFromArray:@[@"chat", @"inventory"]];
         }
     }
+    if (inventoryEscape) self.positions[NCLRInventoryEscape] = inventoryEscape;
+    if (pauseEscape) self.positions[NCLRPauseEscape] = pauseEscape;
 }
 
 - (void)save {
@@ -2789,6 +2806,10 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @property (nonatomic, strong) UISlider *keySizeSlider;
 @property (nonatomic, strong) UISegmentedControl *triggerControl;
 @property (nonatomic, strong) UIButton *deleteKeyButton;
+@property (nonatomic, strong) UISegmentedControl *layoutScreenControl;
+@property (nonatomic, strong) UISlider *keyXSlider;
+@property (nonatomic, strong) UISlider *keyYSlider;
+@property (nonatomic, strong) UILabel *keyCoordinates;
 @property (nonatomic, strong) UILabel *keySizeValue;
 @property (nonatomic, strong) UISwitch *keyVisibleSwitch;
 @end
@@ -3205,7 +3226,14 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.preview.layer.borderWidth = 1.0;
     self.preview.layer.borderColor = NCLRBorder().CGColor;
     self.preview.clipsToBounds = YES;
+    self.layoutScreenControl = [[UISegmentedControl alloc] initWithItems:@[@"游戏内", @"背包", @"暂停"]];
+    self.layoutScreenControl.translatesAutoresizingMaskIntoConstraints = NO;
+    self.layoutScreenControl.selectedSegmentIndex = 0;
+    self.layoutScreenControl.accessibilityLabel = @"选择触控布局界面";
+    [self.layoutScreenControl addTarget:self action:@selector(layoutScreenChanged)
+                       forControlEvents:UIControlEventValueChanged];
     [previewCard addSubview:toolbar];
+    [previewCard addSubview:self.layoutScreenControl];
     [previewCard addSubview:self.preview];
     self.previewCard = previewCard;
     self.previewHeight = [self.preview.heightAnchor constraintEqualToConstant:200.0];
@@ -3214,7 +3242,10 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [toolbar.trailingAnchor constraintEqualToAnchor:previewCard.trailingAnchor constant:-8],
         [toolbar.topAnchor constraintEqualToAnchor:previewCard.topAnchor constant:4],
         [self.preview.centerXAnchor constraintEqualToAnchor:previewCard.centerXAnchor],
-        [self.preview.topAnchor constraintEqualToAnchor:toolbar.bottomAnchor constant:4.0],
+        [self.layoutScreenControl.leadingAnchor constraintEqualToAnchor:toolbar.leadingAnchor],
+        [self.layoutScreenControl.trailingAnchor constraintEqualToAnchor:toolbar.trailingAnchor],
+        [self.layoutScreenControl.topAnchor constraintEqualToAnchor:toolbar.bottomAnchor constant:2],
+        [self.preview.topAnchor constraintEqualToAnchor:self.layoutScreenControl.bottomAnchor constant:8],
         [self.preview.widthAnchor constraintLessThanOrEqualToAnchor:previewCard.widthAnchor constant:-24.0],
         [self.preview.bottomAnchor constraintEqualToAnchor:previewCard.bottomAnchor constant:-10.0],
         self.previewHeight,
@@ -3304,8 +3335,29 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [self.deleteKeyButton setTitleColor:NCLRDarkMode ? [UIColor colorWithRed:1 green:0.57 blue:0.57 alpha:1]
                                                    : [UIColor colorWithRed:0.62 green:0.12 blue:0.17 alpha:1]
                                forState:UIControlStateNormal];
-    UIStackView *keyStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[inspectorTitle, self.keyEditTitle, keySizeRow, keyVisibleRow, self.triggerControl, self.deleteKeyButton]];
+    self.keyCoordinates = [self label:@"X —   Y —" size:12 weight:UIFontWeightMedium color:NCLRAccent()];
+    self.keyCoordinates.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightMedium];
+    NSMutableArray<UIView *> *inspector = [@[inspectorTitle, self.keyEditTitle, self.keyCoordinates] mutableCopy];
+    for (NSString *axis in @[@"X", @"Y"]) {
+        UISlider *slider = [[UISlider alloc] init];
+        slider.minimumValue = 0.025;
+        slider.maximumValue = 0.975;
+        slider.enabled = NO;
+        slider.accessibilityLabel = [axis stringByAppendingString:@" 坐标"];
+        slider.minimumTrackTintColor = NCLRAccent();
+        [slider addTarget:self action:@selector(keySizeEditingStarted) forControlEvents:UIControlEventTouchDown];
+        [slider addTarget:self action:@selector(keySizeEditingFinished)
+         forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+        [slider addTarget:self action:@selector(keyCoordinateChanged:) forControlEvents:UIControlEventValueChanged];
+        if ([axis isEqualToString:@"X"]) self.keyXSlider = slider; else self.keyYSlider = slider;
+        UILabel *axisLabel = [self label:axis size:12 weight:UIFontWeightSemibold color:NCLRAccent()];
+        UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[axisLabel, slider]];
+        row.alignment = UIStackViewAlignmentCenter;
+        row.spacing = 10;
+        [inspector addObject:row];
+    }
+    [inspector addObjectsFromArray:@[keySizeRow, keyVisibleRow, self.triggerControl, self.deleteKeyButton]];
+    UIStackView *keyStack = [[UIStackView alloc] initWithArrangedSubviews:inspector];
     keyStack.axis = UILayoutConstraintAxisVertical;
     keyStack.spacing = 9.0;
     keyStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -3543,6 +3595,48 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [self.preview setNeedsLayout];
 }
 
+- (BOOL)showsKeyOnCanvas:(NSString *)key {
+    NSInteger screen = self.layoutScreenControl.selectedSegmentIndex;
+    if (screen == 1) return [key isEqualToString:NCLRInventoryEscape];
+    if (screen == 2) return [key isEqualToString:NCLRPauseEscape];
+    return !NCLRIsMenuKey(key);
+}
+
+- (void)layoutScreenChanged {
+    NSInteger screen = self.layoutScreenControl.selectedSegmentIndex;
+    NSString *key = screen == 1 ? NCLRInventoryEscape : screen == 2 ? NCLRPauseEscape : nil;
+    [self selectKey:key];
+}
+
+- (void)updateCoordinateReadout {
+    NSDictionary *position = self.selectedKey ? NCLRKeymap.shared.positions[self.selectedKey] : nil;
+    self.keyXSlider.enabled = position != nil;
+    self.keyYSlider.enabled = position != nil;
+    if (!position) {
+        self.keyCoordinates.text = @"X —   Y —";
+        return;
+    }
+    self.keyXSlider.value = [position[@"x"] doubleValue];
+    self.keyYSlider.value = [position[@"y"] doubleValue];
+    self.keyCoordinates.text = [NSString stringWithFormat:@"X %.1f%%   Y %.1f%%",
+        100 * [position[@"x"] doubleValue], 100 * [position[@"y"] doubleValue]];
+}
+
+- (void)keyCoordinateChanged:(UISlider *)sender {
+    if (!self.selectedKey.length) return;
+    NSMutableDictionary *position = [NCLRKeymap.shared.positions[self.selectedKey] mutableCopy];
+    if (!position) return;
+    NSDictionary *before = sender.isTracking ? nil : [self keyLayoutSnapshot];
+    position[sender == self.keyXSlider ? @"x" : @"y"] = @(sender.value);
+    NCLRKeymap.shared.positions[self.selectedKey] = position;
+    if (before) {
+        [self pushUndo:before];
+        [NCLRKeymap.shared save];
+    }
+    [self updateCoordinateReadout];
+    [self.preview setNeedsLayout];
+}
+
 - (void)layoutPreviewKeys {
     if (self.preview.bounds.size.width <= 0.0 || self.preview.bounds.size.height <= 0.0) {
         return;
@@ -3550,23 +3644,27 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.grid.frame = self.preview.bounds;
     for (NSString *key in self.previewButtons) {
         UIButton *button = self.previewButtons[key];
-        button.hidden = [NCLRKeymap.shared.deletedKeys containsObject:key] || !NCLRKeymap.shared.bindings[key];
+        button.hidden = ![self showsKeyOnCanvas:key] ||
+            [NCLRKeymap.shared.deletedKeys containsObject:key] || !NCLRKeymap.shared.bindings[key];
         if (button.hidden) continue;
         NSDictionary *position = key.length ? NCLRKeymap.shared.positions[key] : nil;
         if (position == nil) position = @{ @"x" : @0.5, @"y" : @0.5, @"size" : @0.08 };
         CGFloat x = [position[@"x"] doubleValue];
         CGFloat y = [position[@"y"] doubleValue];
         CGRect area = [self previewContentRect];
+        BOOL menuKey = NCLRIsMenuKey(key);
         CGFloat size = [position[@"size"] doubleValue] * area.size.height *
-            NCLRKeymap.shared.buttonSize;
-        size = MIN(MIN(area.size.width, area.size.height), MAX(26.0, size));
+            (menuKey ? 1.0 : NCLRKeymap.shared.buttonSize);
+        CGFloat ratio = menuKey ? 2.2 : 1.0;
+        size = MIN(MIN(area.size.width / ratio, area.size.height), MAX(menuKey ? 1.0 : 26.0, size));
+        CGFloat width = size * ratio;
         CGFloat centerX = area.origin.x + x * area.size.width;
         CGFloat centerY = area.origin.y + y * area.size.height;
-        centerX = MAX(CGRectGetMinX(area) + size / 2.0,
-                      MIN(CGRectGetMaxX(area) - size / 2.0, centerX));
+        centerX = MAX(CGRectGetMinX(area) + width / 2.0,
+                      MIN(CGRectGetMaxX(area) - width / 2.0, centerX));
         centerY = MAX(CGRectGetMinY(area) + size / 2.0,
                       MIN(CGRectGetMaxY(area) - size / 2.0, centerY));
-        button.frame = CGRectMake(centerX - size / 2.0, centerY - size / 2.0, size, size);
+        button.frame = CGRectMake(centerX - width / 2.0, centerY - size / 2.0, width, size);
         button.titleLabel.font = [UIFont monospacedSystemFontOfSize:MAX(9.0, 11.0 * NCLRKeymap.shared.buttonSize)
                                                               weight:UIFontWeightBold];
         BOOL move = [key isEqualToString:@"move"];
@@ -3598,12 +3696,12 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 - (void)selectKey:(NSString *)key {
     if (key && ([NCLRKeymap.shared.deletedKeys containsObject:key] || !NCLRKeymap.shared.bindings[key])) key = nil;
     self.selectedKey = key;
-    self.deleteKeyButton.enabled = key.length > 0;
-    self.triggerControl.enabled = key.length > 0 && ![key isEqualToString:@"move"];
+    self.deleteKeyButton.enabled = key.length > 0 && !NCLRIsMenuKey(key);
+    self.triggerControl.enabled = key.length > 0 && !NCLRIsMenuKey(key) && ![key isEqualToString:@"move"];
     self.triggerControl.selectedSegmentIndex = key.length > 0 &&
         [NCLRKeymap.shared.triggerModes[key] isEqualToString:@"toggle"] ? 1 : 0;
     self.keySizeSlider.enabled = key.length > 0;
-    self.keyVisibleSwitch.enabled = key.length > 0;
+    self.keyVisibleSwitch.enabled = key.length > 0 && !NCLRIsMenuKey(key);
     NSDictionary *position = key.length ? NCLRKeymap.shared.positions[key] : nil;
     CGFloat size = [position[@"size"] doubleValue];
     if (size <= 0.0) size = 0.12;
@@ -3613,6 +3711,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NSString *caption = key.length ? [self.previewButtons[key] titleForState:UIControlStateNormal] : nil;
     self.keyEditTitle.text = key.length > 0 ? (caption ?: @"移动摇杆") : @"选择画布上的按键";
     self.canvasStatus.text = caption ?: @"触控布局";
+    [self updateCoordinateReadout];
     [self updateCanvasTools];
     [self.preview setNeedsLayout];
 }
@@ -3626,7 +3725,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 
 - (void)deleteSelectedKey {
     NSString *key = self.selectedKey;
-    if (!key.length) return;
+    if (!key.length || NCLRIsMenuKey(key)) return;
     NSDictionary *before = [self keyLayoutSnapshot];
     [NCLRKeymap.shared.deletedKeys addObject:key];
     [self pushUndo:before];
@@ -3743,7 +3842,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     if (y < 0.043) y = 0.025;
     if (y > 0.957) y = 0.975;
     for (NSString *other in NCLRKeymap.shared.positions) {
-        if ([other isEqualToString:key] || [NCLRKeymap.shared.deletedKeys containsObject:other]) continue;
+        if (![self showsKeyOnCanvas:other] || [other isEqualToString:key] || [NCLRKeymap.shared.deletedKeys containsObject:other]) continue;
         NSDictionary *p = NCLRKeymap.shared.positions[other];
         CGFloat ox = [p[@"x"] doubleValue], oy = [p[@"y"] doubleValue];
         if (fabs(x - ox) < 0.018) x = ox;
@@ -3755,8 +3854,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         @"y" : @(y),
         @"size" : old[@"size"] ?: @0.12,
     };
-    button.center = CGPointMake(area.origin.x + x * area.size.width,
-                                area.origin.y + y * area.size.height);
+    [self updateCoordinateReadout];
+    [self.preview setNeedsLayout];
+    [self.preview layoutIfNeeded];
     if (sender.state == UIGestureRecognizerStateEnded ||
         sender.state == UIGestureRecognizerStateCancelled) {
         [self pushUndo:self.gestureStartPositions];
@@ -3779,10 +3879,11 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         return;
     }
     CGPoint point = [sender locationInView:self.preview];
-    CGFloat distance = hypot(point.x - button.center.x, point.y - button.center.y);
-    CGFloat size = MAX(28.0, distance * 2.0);
+    CGFloat distance = NCLRIsMenuKey(self.selectedKey) ? fabs(point.y - button.center.y)
+        : hypot(point.x - button.center.x, point.y - button.center.y);
+    CGFloat size = MAX(NCLRIsMenuKey(self.selectedKey) ? 1.0 : 28.0, distance * 2.0);
     CGRect area = [self previewContentRect];
-    CGFloat normalized = size / MAX(1.0, area.size.height * NCLRKeymap.shared.buttonSize);
+    CGFloat normalized = size / MAX(1.0, area.size.height * (NCLRIsMenuKey(self.selectedKey) ? 1.0 : NCLRKeymap.shared.buttonSize));
     normalized = MAX(0.045, MIN(0.45, normalized));
     NSDictionary *old = NCLRKeymap.shared.positions[self.selectedKey];
     NCLRKeymap.shared.positions[self.selectedKey] = @{
@@ -3964,6 +4065,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [self pushUndo:before];
         [NCLRKeymap.shared save];
         [self refreshPreviewButtons];
+        self.layoutScreenControl.selectedSegmentIndex = 0;
         [self selectKey:picked];
     }];
 }
@@ -3988,7 +4090,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [super viewDidAppear:animated];
     [UIView performWithoutAnimation:^{
         CGFloat height = self.view.bounds.size.height;
-        self.previewHeight.constant = self.canvasFullscreen ? MAX(150.0, self.scroll.bounds.size.height - 78.0)
+        self.previewHeight.constant = self.canvasFullscreen ? MAX(150.0, self.scroll.bounds.size.height - 110.0)
                                                             : MAX(170.0, MIN(410.0, height * 0.58));
         [self.view layoutIfNeeded];
     }];
@@ -4032,7 +4134,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         self.preview.layer.borderWidth = 0.0;
         self.stackLeading.constant = 0.0;
         self.stackTrailing.constant = 0.0;
-        self.previewHeight.constant = MAX(150.0, self.scroll.bounds.size.height - 78.0);
+        self.previewHeight.constant = MAX(150.0, self.scroll.bounds.size.height - 110.0);
     } else {
         self.previewCard.backgroundColor = NCLRSurface();
         self.previewCard.layer.cornerRadius = 16.0;
