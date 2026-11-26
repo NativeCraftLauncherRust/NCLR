@@ -420,6 +420,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
 @property (nonatomic, assign) NSInteger buttonStyle;
 @property (nonatomic, assign) BOOL iconLabels;
 @property (nonatomic, strong) NSMutableSet<NSString *> *hiddenKeys;
+@property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *menuKeys;
 + (instancetype)shared;
 - (BOOL)isHidden:(NSString *)key;
 - (void)setHidden:(BOOL)hidden forKey:(NSString *)key;
@@ -428,6 +429,9 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
 - (void)save;
 - (NSString *)path;
 - (void)addKey:(NSString *)key label:(NSString *)label;
+- (NSString *)addMenuKey:(NSString *)key label:(NSString *)label screen:(NSInteger)screen;
+- (NSString *)labelForCanvasKey:(NSString *)key;
+- (BOOL)isMenuCanvasKey:(NSString *)key;
 - (void)resetLayout;
 @end
 
@@ -473,6 +477,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     self.opacity = 0.55;
     self.layoutVersion = 2;
     self.deletedKeys = [NSMutableSet set];
+    self.menuKeys = [NSMutableArray array];
     self.leftHanded = NO;
     self.joystickSprint = NO;
     self.sensitivity = 1.0;
@@ -601,6 +606,24 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
 
         }
     }
+    NSArray *menuKeys = json[@"menuKeys"];
+    if ([menuKeys isKindOfClass:NSArray.class]) {
+        [self.menuKeys removeAllObjects];
+        for (id raw in menuKeys) {
+            if (![raw isKindOfClass:NSDictionary.class]) continue;
+            NSString *identifier = NCLRString(raw[@"id"]);
+            NSString *screen = NCLRString(raw[@"screen"]);
+            NSString *label = NCLRString(raw[@"label"]);
+            BOOL validScreen = [screen isEqualToString:@"inventory"] || [screen isEqualToString:@"pause"];
+            if (identifier.length == 0 || !validScreen ||
+                ![label isKindOfClass:NSString.class] || label.length == 0) continue;
+            [self.menuKeys addObject:[@{@"id": identifier, @"screen": screen, @"label": label} mutableCopy]];
+            if (self.positions[identifier] == nil) {
+                self.positions[identifier] = @{@"x": @0.5, @"y": @0.5,
+                                               @"size": @0.12, @"width": @0.12};
+            }
+        }
+    }
     NSArray *deleted = json[@"deletedKeys"];
     if ([deleted isKindOfClass:NSArray.class]) {
         for (id key in deleted) {
@@ -623,19 +646,63 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
 }
 
 - (void)addKey:(NSString *)key label:(NSString *)label {
+    if (key.length == 0) {
+        return;
+    }
+    if ([key isEqualToString:@"keyboard"]) {
+        // The keyboard control ships hidden by default; adding it from the
+        // picker means making that control visible and placing it.
+        self.bindings[key] = label.length > 0 ? label : @"系统键盘";
+        [self.deletedKeys removeObject:key];
+        [self.hiddenKeys removeObject:key];
+        if (self.positions[key] == nil) {
+            self.positions[key] = @{ @"x" : @0.50, @"y" : @0.50,
+                                      @"size" : @0.075, @"width" : @0.075 };
+        }
+        return;
+    }
     if ([self.deletedKeys containsObject:key]) {
         [self.deletedKeys removeObject:key];
         return;
     }
-    if (key.length == 0 || self.bindings[key] != nil) {
+    if (self.bindings[key] != nil) {
         return;
     }
     self.bindings[key] = label.length > 0 ? label : key;
     self.positions[key] = @{ @"x" : @0.50, @"y" : @0.50, @"size" : @0.12, @"width" : @0.12 };
 }
 
+- (NSString *)addMenuKey:(NSString *)key label:(NSString *)label screen:(NSInteger)screen {
+    NSString *screenName = screen == 1 ? @"inventory" : @"pause";
+    NSString *identifier = [NSString stringWithFormat:@"menu.%@.%@",
+                            screenName, NSUUID.UUID.UUIDString.lowercaseString];
+    NSDictionary *item = @{@"id": identifier, @"screen": screenName,
+                           @"label": label.length > 0 ? label : key,
+                           @"x": @0.50, @"y": @0.30,
+                           @"size": @0.12, @"width": @0.12};
+    [self.menuKeys addObject:[item mutableCopy]];
+    self.positions[identifier] = @{@"x": @0.50, @"y": @0.30,
+                                   @"size": @0.12, @"width": @0.12};
+    return identifier;
+}
+
+- (BOOL)isMenuCanvasKey:(NSString *)key {
+    for (NSDictionary *item in self.menuKeys) {
+        if ([item[@"id"] isEqual:key]) return YES;
+    }
+    return NO;
+}
+
+- (NSString *)labelForCanvasKey:(NSString *)key {
+    for (NSDictionary *item in self.menuKeys) {
+        if ([item[@"id"] isEqual:key]) return item[@"label"];
+    }
+    return self.bindings[key] ?: key;
+}
+
 - (void)resetLayout {
     [self.deletedKeys removeAllObjects];
+    [self.menuKeys removeAllObjects];
     self.positions = [@{
         NCLRInventoryEscape : @{@"x": @0.057, @"y": @0.066, @"size": @0.092},
         NCLRPauseEscape : @{@"x": @0.057, @"y": @0.066, @"size": @0.092},
@@ -731,6 +798,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         @"iconLabels" : @(self.iconLabels),
         @"hidden" : self.hiddenKeys.allObjects ?: @[],
         @"deletedKeys" : self.deletedKeys.allObjects ?: @[],
+        @"menuKeys" : self.menuKeys ?: @[],
         @"bindings" : self.bindings ?: @{},
         @"layout" : self.positions ?: @{},
         @"triggerModes" : self.triggerModes ?: @{},
@@ -2720,7 +2788,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         @[@"Tab", @"Q", @"W", @"E", @"R", @"T", @"Y", @"U", @"I", @"O", @"P"],
         @[@"Shift", @"A", @"S", @"D", @"F", @"G", @"H", @"J", @"K", @"L"],
         @[@"Ctrl", @"Z", @"X", @"C", @"V", @"B", @"N", @"M"],
-        @[@"Space", @"F1", @"F3", @"F5", @"F"],
+        @[@"键盘", @"Space", @"F1", @"F3", @"F5", @"F"],
         @[@"MouseLeft", @"MouseRight", @"MouseMiddle"],
     ];
     UIStackView *stack = [[UIStackView alloc] init];
@@ -3425,7 +3493,12 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 }
 
 - (void)refreshPreviewButtons {
-    for (NSString *key in NCLRKeymap.shared.bindings) {
+    NSMutableArray<NSString *> *canvasKeys = [NCLRKeymap.shared.bindings.allKeys mutableCopy];
+    for (NSDictionary *item in NCLRKeymap.shared.menuKeys) {
+        NSString *identifier = item[@"id"];
+        if (identifier.length > 0) [canvasKeys addObject:identifier];
+    }
+    for (NSString *key in canvasKeys) {
         if (self.previewButtons[key] || [key isEqualToString:@"forward"] || [key isEqualToString:@"back"] ||
             [key isEqualToString:@"left"] || [key isEqualToString:@"right"]) {
             continue;
@@ -3452,7 +3525,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
             caption.translatesAutoresizingMaskIntoConstraints = YES;
             [button addSubview:caption];
         } else {
-            NSString *binding = NCLRKeymap.shared.bindings[key];
+            NSString *binding = [NCLRKeymap.shared labelForCanvasKey:key];
             button.accessibilityLabel = binding;
             NSString *caption = [binding isEqualToString:@"MouseLeft"] ? @"左键"
                 : [binding isEqualToString:@"MouseRight"] ? @"右键"
@@ -3635,9 +3708,15 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 
 - (BOOL)showsKeyOnCanvas:(NSString *)key {
     NSInteger screen = self.layoutScreenControl.selectedSegmentIndex;
-    if (screen == 1) return [key isEqualToString:NCLRInventoryEscape];
-    if (screen == 2) return [key isEqualToString:NCLRPauseEscape];
-    return !NCLRIsMenuKey(key);
+    if (screen == 1 || screen == 2) {
+        NSString *screenName = screen == 1 ? @"inventory" : @"pause";
+        for (NSDictionary *item in NCLRKeymap.shared.menuKeys) {
+            if ([item[@"id"] isEqual:key] && [item[@"screen"] isEqual:screenName]) return YES;
+        }
+        return screen == 1 ? [key isEqualToString:NCLRInventoryEscape]
+                           : [key isEqualToString:NCLRPauseEscape];
+    }
+    return !NCLRIsMenuKey(key) && ![NCLRKeymap.shared isMenuCanvasKey:key];
 }
 
 - (void)layoutScreenChanged {
@@ -3732,14 +3811,16 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 }
 
 - (void)selectKey:(NSString *)key {
-    if (key && ([NCLRKeymap.shared.deletedKeys containsObject:key] || !NCLRKeymap.shared.bindings[key])) key = nil;
+    BOOL menuCanvasKey = [NCLRKeymap.shared isMenuCanvasKey:key];
+    if (key && ([NCLRKeymap.shared.deletedKeys containsObject:key] ||
+                (!NCLRKeymap.shared.bindings[key] && !menuCanvasKey))) key = nil;
     self.selectedKey = key;
-    self.deleteKeyButton.enabled = key.length > 0 && !NCLRIsMenuKey(key);
-    self.triggerControl.enabled = key.length > 0 && !NCLRIsMenuKey(key) && ![key isEqualToString:@"move"];
+    self.deleteKeyButton.enabled = key.length > 0 && (!NCLRIsMenuKey(key));
+    self.triggerControl.enabled = key.length > 0 && !NCLRIsMenuKey(key) && !menuCanvasKey && ![key isEqualToString:@"move"];
     self.triggerControl.selectedSegmentIndex = key.length > 0 &&
         [NCLRKeymap.shared.triggerModes[key] isEqualToString:@"toggle"] ? 1 : 0;
     self.keySizeSlider.enabled = key.length > 0;
-    self.keyVisibleSwitch.enabled = key.length > 0 && !NCLRIsMenuKey(key);
+    self.keyVisibleSwitch.enabled = key.length > 0 && !NCLRIsMenuKey(key) && !menuCanvasKey;
     NSDictionary *position = key.length ? NCLRKeymap.shared.positions[key] : nil;
     CGFloat size = [position[@"size"] doubleValue];
     if (size <= 0.0) size = 0.12;
@@ -3762,6 +3843,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NCLRKeymap *keymap = NCLRKeymap.shared;
     return @{@"positions": [keymap.positions copy], @"hidden": [keymap.hiddenKeys copy],
              @"bindings": [keymap.bindings copy], @"deletedKeys": [keymap.deletedKeys copy],
+             @"menuKeys": [keymap.menuKeys mutableCopy],
              @"triggerModes": [keymap.triggerModes copy] ?: @{}};
 }
 
@@ -3769,7 +3851,16 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NSString *key = self.selectedKey;
     if (!key.length || NCLRIsMenuKey(key)) return;
     NSDictionary *before = [self keyLayoutSnapshot];
-    [NCLRKeymap.shared.deletedKeys addObject:key];
+    if ([NCLRKeymap.shared isMenuCanvasKey:key]) {
+        NSMutableArray *kept = [NSMutableArray array];
+        for (NSDictionary *item in NCLRKeymap.shared.menuKeys) {
+            if (![item[@"id"] isEqual:key]) [kept addObject:item];
+        }
+        NCLRKeymap.shared.menuKeys = kept;
+        [NCLRKeymap.shared.positions removeObjectForKey:key];
+    } else {
+        [NCLRKeymap.shared.deletedKeys addObject:key];
+    }
     [self pushUndo:before];
     [NCLRKeymap.shared save];
     [self selectKey:nil];
@@ -3781,6 +3872,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     keys.hiddenKeys = [snapshot[@"hidden"] mutableCopy];
     keys.bindings = [snapshot[@"bindings"] mutableCopy];
     keys.deletedKeys = [snapshot[@"deletedKeys"] mutableCopy];
+    keys.menuKeys = [snapshot[@"menuKeys"] mutableCopy] ?: [NSMutableArray array];
     keys.triggerModes = [snapshot[@"triggerModes"] mutableCopy];
     [keys save];
     [self refreshPreviewButtons];
@@ -4123,13 +4215,20 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 
 - (void)addKeyTapped {
     [NCLRKeyPickerController presentFrom:self title:@"添加触控键" onPick:^(NSString *picked) {
+        NSString *keyId = [picked isEqualToString:@"键盘"] ? @"keyboard" : picked;
+        NSString *label = [keyId isEqualToString:@"keyboard"] ? @"系统键盘" : picked;
         NSDictionary *before = [self keyLayoutSnapshot];
-        [NCLRKeymap.shared addKey:picked label:picked];
+        NSInteger screen = self.layoutScreenControl.selectedSegmentIndex;
+        NSString *selected = keyId;
+        if (screen == 1 || screen == 2) {
+            selected = [NCLRKeymap.shared addMenuKey:keyId label:label screen:screen];
+        } else {
+            [NCLRKeymap.shared addKey:keyId label:label];
+        }
         [self pushUndo:before];
         [NCLRKeymap.shared save];
         [self refreshPreviewButtons];
-        self.layoutScreenControl.selectedSegmentIndex = 0;
-        [self selectKey:picked];
+        [self selectKey:selected];
     }];
 }
 - (void)editKey:(UIButton *)sender {

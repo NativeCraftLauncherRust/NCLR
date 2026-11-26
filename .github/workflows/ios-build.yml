@@ -22,8 +22,6 @@ jobs:
         env:
           HORIZON_DIR: ${{ runner.temp }}/horizon
         run: bash scripts/prepare-horizon.sh
-      - name: Check launcher against the iOS SDK
-        run: xcrun --sdk iphoneos clang -arch arm64 -mios-version-min=15.0 -fobjc-arc -fsyntax-only ios/main_l1.m
       - name: Build iOS static library
         env:
           HORIZON_DIR: ${{ runner.temp }}/horizon
@@ -47,7 +45,7 @@ jobs:
             MAIN_SOURCE="$PWD/ios/main_l1.m" \
             INFO_PLIST="$PWD/ios/Info-launcher.plist" \
             BUNDLE_ID=dev.zrxmaxlnx.nclr \
-            IPA_NAME=NCLR-L8.2-unsigned.ipa \
+            IPA_NAME=NCLR-L8.3-unsigned.ipa \
             ICON_DIR="$PWD/ios/icons" \
             RESOURCE_DIR="" SHIP_BUNDLE="$PWD/ios/ship.hzr3" \
             WASM_STD_DIR="$PWD/ios/wasm-std" \
