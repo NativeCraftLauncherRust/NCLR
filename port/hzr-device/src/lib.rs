@@ -430,7 +430,6 @@ pub fn assemble_from_jar(
     }
     fs::create_dir_all(out).map_err(|e| format!("{}: {}", out.display(), explain(&e)))?;
     tables::generate(client_jar, out)?;
-    restore_generated_tables(out)?;
     finish(out, client_jar, index, store, &mut done)?;
     Ok(done)
 }
@@ -439,7 +438,7 @@ pub fn assemble_from_jar(
 /// shape tables and `block-properties` carry a shared `states` trailer, and
 /// `occlusion`/`cached-collision` are the whole tables they embed. Put them
 /// back together exactly as the bundle path does.
-fn restore_generated_tables(out: &Path) -> Result<(), String> {
+pub fn restore_generated_tables(out: &Path) -> Result<(), String> {
     let shared = out.join("_shared");
     let states = read(&shared.join("states.bin"))?;
     for table in TRAILER_TABLES {
