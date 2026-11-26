@@ -1,5 +1,4 @@
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use objc2::rc::Retained;
 use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
@@ -12,15 +11,6 @@ use objc2_ui_kit::{
 use super::app_state::{self};
 use crate::platform::ios::{ScreenEdge, StatusBarStyle, ValidOrientations};
 use crate::window::WindowAttributes;
-
-/// The iOS shell asks for the pointer to be locked while a hardware mouse
-/// plays the game, so the system cursor never leaves the window and the
-/// relative deltas keep arriving. UIKit asks the view controller for it.
-static PREFERS_POINTER_LOCKED: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn set_prefers_pointer_locked(value: bool) {
-    PREFERS_POINTER_LOCKED.store(value, Ordering::Relaxed);
-}
 
 pub struct ViewControllerState {
     prefers_status_bar_hidden: Cell<bool>,
@@ -77,10 +67,6 @@ declare_class!(
                 .get()
         }
 
-        #[method(prefersPointerLocked)]
-        fn prefers_pointer_locked(&self) -> bool {
-            PREFERS_POINTER_LOCKED.load(Ordering::Relaxed)
-        }
     }
 );
 

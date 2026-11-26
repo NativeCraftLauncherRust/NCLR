@@ -4,7 +4,7 @@ use crate::window::Fullscreen as RootFullscreen;
 #[cfg(android_platform)]
 mod android;
 #[cfg(ios_platform)]
-pub(crate) mod ios;
+mod ios;
 #[cfg(any(x11_platform, wayland_platform))]
 mod linux;
 #[cfg(macos_platform)]

@@ -21,7 +21,6 @@ extern void horizon_ios_hardware_key(uint16_t usage, int pressed, int repeat, ui
 extern void horizon_ios_hardware_mouse_motion(double dx, double dy, double x, double y);
 extern void horizon_ios_hardware_mouse_button(int button, int pressed);
 extern void horizon_ios_hardware_mouse_scroll(double dx, double dy);
-extern void horizon_ios_set_pointer_locked(int locked);
 @class NCLRResourcePreparer;
 static NSString *const NCLRPrepareProgressNotification = @"NCLRPrepareProgress";
 static NSString *const NCLRPrepareFinishedNotification = @"NCLRPrepareFinished";
@@ -383,12 +382,32 @@ static void NCLRRunOnMain(dispatch_block_t block) {
 static os_unfair_lock NCLRMotionLock = OS_UNFAIR_LOCK_INIT;
 static float NCLRMotionDX = 0.0f;
 static float NCLRMotionDY = 0.0f;
-static BOOL NCLRGameRunning = NO;
+static bool NCLRMotionFlushScheduled = false;
 // Mirrors of the keymap settings the motion path needs before NCLRKeymap is
 // declared in this file. NCLRKeymap keeps them in step on load and on change.
 static BOOL NCLRMouseInvertX = NO;
 static BOOL NCLRMouseInvertY = NO;
 static BOOL NCLRMouseSwapAxes = NO;
+
+/// A window that resigned key stops the engine's mouse-look events until it
+/// becomes key again. iOS can leave the game window resigned with nothing
+/// taking its place after system UI or returning from the background, so a
+/// visible window is made key when no window holds the key.
+static void NCLRRestoreVisibleKeyWindow(void) {
+    UIWindow *candidate = nil;
+    BOOL anyKey = NO;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if (window.hidden || window.alpha < 0.01) continue;
+            if (window.isKeyWindow) anyKey = YES;
+            if (!candidate) candidate = window;
+        }
+    }
+    if (!anyKey && candidate) {
+        [candidate makeKeyWindow];
+    }
+}
 
 @interface NCLRHardwareInput : NSObject
 @property (nonatomic, strong) GCKeyboard *keyboard;
@@ -399,14 +418,10 @@ static BOOL NCLRMouseSwapAxes = NO;
 @property (nonatomic, assign) CGPoint cursor;
 @property (nonatomic, assign) CGSize cursorBounds;
 @property (nonatomic, assign) BOOL running;
-@property (nonatomic, strong) CADisplayLink *motionLink;
 @property (nonatomic, strong) NSTimer *watchdog;
 + (instancetype)shared;
 - (void)start;
 - (void)stop;
-- (void)updatePointerLock;
-- (void)startMotionLink;
-- (void)flushMotion:(CADisplayLink *)link;
 - (void)applyMotionDX:(float)deltaX dy:(float)deltaY;
 @end
 
@@ -459,13 +474,10 @@ static BOOL NCLRMouseSwapAxes = NO;
     self.running = NO;
     [self.watchdog invalidate];
     self.watchdog = nil;
-    [self.motionLink invalidate];
-    self.motionLink = nil;
     [NSNotificationCenter.defaultCenter removeObserver:self];
     [self detachKeyboard:YES];
     [self detachMouse];
     horizon_ios_set_hardware_input(0, 0);
-    [self updatePointerLock];
     self.cursorReady = NO;
 }
 
@@ -481,6 +493,7 @@ static BOOL NCLRMouseSwapAxes = NO;
 }
 
 - (void)refreshDevices {
+    NCLRRestoreVisibleKeyWindow();
     GCKeyboard *keyboard = GCKeyboard.coalescedKeyboard;
     if (keyboard != self.keyboard || (keyboard && keyboard.keyboardInput.keyChangedHandler == nil)) {
         [self detachKeyboard:YES];
@@ -496,25 +509,6 @@ static BOOL NCLRMouseSwapAxes = NO;
     BOOL hasKeyboard = self.keyboard != nil;
     BOOL hasMouse = self.mouse != nil;
     horizon_ios_set_hardware_input((hasKeyboard || hasMouse) ? 1 : 0, hasMouse ? 1 : 0);
-    [self updatePointerLock];
-}
-
-/// Locks the system pointer into the game window while a mouse plays, so the
-/// cursor cannot wander onto another window (Stage Manager) and take the
-/// events with it. The game draws its own cursor.
-- (void)updatePointerLock {
-    BOOL active = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
-    BOOL want = NCLRGameRunning && self.mouse != nil && active;
-    horizon_ios_set_pointer_locked(want ? 1 : 0);
-    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if (![scene isKindOfClass:UIWindowScene.class]) continue;
-        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
-            UIViewController *controller = window.rootViewController;
-            if ([controller respondsToSelector:@selector(setNeedsUpdateOfPrefersPointerLocked)]) {
-                [controller setNeedsUpdateOfPrefersPointerLocked];
-            }
-        }
-    }
 }
 
 - (uint8_t)modifiersForInput:(GCKeyboardInput *)input {
@@ -582,7 +576,22 @@ static BOOL NCLRMouseSwapAxes = NO;
         os_unfair_lock_lock(&NCLRMotionLock);
         NCLRMotionDX += deltaX;
         NCLRMotionDY += deltaY;
+        bool schedule = !NCLRMotionFlushScheduled;
+        NCLRMotionFlushScheduled = schedule;
         os_unfair_lock_unlock(&NCLRMotionLock);
+        if (schedule) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                os_unfair_lock_lock(&NCLRMotionLock);
+                NCLRMotionFlushScheduled = false;
+                float dx = NCLRMotionDX;
+                float dy = NCLRMotionDY;
+                NCLRMotionDX = 0.0f;
+                NCLRMotionDY = 0.0f;
+                os_unfair_lock_unlock(&NCLRMotionLock);
+                if (dx == 0.0f && dy == 0.0f) return;
+                [NCLRHardwareInput.shared applyMotionDX:dx dy:dy];
+            });
+        }
     };
     mouse.mouseInput.leftButton.pressedChangedHandler =
         ^(GCControllerButtonInput *button, float value, BOOL pressed) {
@@ -611,7 +620,6 @@ static BOOL NCLRMouseSwapAxes = NO;
         NCLRRunOnMain(^{ horizon_ios_hardware_mouse_scroll(horizontal, vertical); });
     };
     self.cursorReady = NO;
-    [self startMotionLink];
     [self applyMotionDX:0.0f dy:0.0f];
 }
 
@@ -624,38 +632,16 @@ static BOOL NCLRMouseSwapAxes = NO;
         mouse.mouseInput.middleButton.pressedChangedHandler = nil;
         mouse.mouseInput.scroll.valueChangedHandler = nil;
     }
-    [self.motionLink invalidate];
-    self.motionLink = nil;
     os_unfair_lock_lock(&NCLRMotionLock);
     NCLRMotionDX = 0.0f;
     NCLRMotionDY = 0.0f;
+    NCLRMotionFlushScheduled = false;
     os_unfair_lock_unlock(&NCLRMotionLock);
     self.mouse = nil;
     for (int button = 0; button < 3; button++) {
         horizon_ios_hardware_mouse_button(button, 0);
     }
     self.cursorReady = NO;
-}
-
-- (void)startMotionLink {
-    if (self.motionLink) return;
-    CADisplayLink *link = [CADisplayLink displayLinkWithTarget:self selector:@selector(flushMotion:)];
-    link.preferredFrameRateRange = CAFrameRateRangeMake(60.0, 120.0, 120.0);
-    [link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
-    self.motionLink = link;
-}
-
-- (void)flushMotion:(CADisplayLink *)link {
-    (void)link;
-    os_unfair_lock_lock(&NCLRMotionLock);
-    float dx = NCLRMotionDX;
-    float dy = NCLRMotionDY;
-    NCLRMotionDX = 0.0f;
-    NCLRMotionDY = 0.0f;
-    os_unfair_lock_unlock(&NCLRMotionLock);
-    if (dx == 0.0f && dy == 0.0f) return;
-    if (self.mouse == nil) return;
-    [self applyMotionDX:dx dy:dy];
 }
 
 - (void)applyMotionDX:(float)deltaX dy:(float)deltaY {
@@ -672,8 +658,8 @@ static BOOL NCLRMouseSwapAxes = NO;
             if (window) break;
         }
     }
-    if (!window) return;
-    CGSize size = window.bounds.size;
+    UIScreen *screen = window.screen ?: UIScreen.mainScreen;
+    CGSize size = window ? window.bounds.size : screen.bounds.size;
     if (size.width < 1.0 || size.height < 1.0) return;
     if (!self.cursorReady || !CGSizeEqualToSize(self.cursorBounds, size)) {
         self.cursor = CGPointMake(size.width * 0.5, size.height * 0.5);
@@ -683,7 +669,7 @@ static BOOL NCLRMouseSwapAxes = NO;
     CGFloat x = fmax(0.0, fmin(size.width - 1.0, self.cursor.x + deltaX));
     CGFloat y = fmax(0.0, fmin(size.height - 1.0, self.cursor.y + deltaY));
     self.cursor = CGPointMake(x, y);
-    CGFloat scale = window.screen.scale > 0.0 ? window.screen.scale : UIScreen.mainScreen.scale;
+    CGFloat scale = screen.scale > 0.0 ? screen.scale : 1.0;
     float dx = NCLRMouseSwapAxes ? deltaY : deltaX;
     float dy = NCLRMouseSwapAxes ? deltaX : deltaY;
     if (NCLRMouseInvertX) dx = -dx;
@@ -2584,10 +2570,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         ? NCLRStartGyro(launcherWindow.windowScene, keymap.gyroSensitivity,
                         keymap.gyroInvertX, keymap.gyroInvertY) : nil;
     [[NCLRHardwareInput shared] start];
-    NCLRGameRunning = YES;
-    [[NCLRHardwareInput shared] updatePointerLock];
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
-    NCLRGameRunning = NO;
     [[NCLRHardwareInput shared] stop];
     [motion stopDeviceMotionUpdates];
     [display invalidate];
