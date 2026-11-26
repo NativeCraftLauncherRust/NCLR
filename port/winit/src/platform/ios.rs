@@ -281,6 +281,12 @@ pub fn send_hardware_mouse_scroll(dx: f64, dy: f64) {
     crate::platform_impl::hardware_input::send_mouse_scroll(dx, dy);
 }
 
+/// Asks UIKit to lock the pointer into the game window while a hardware mouse
+/// plays. The shell re-sends the request whenever the device set changes.
+pub fn set_prefers_pointer_locked(locked: bool) {
+    crate::platform_impl::ios::view_controller::set_prefers_pointer_locked(locked);
+}
+
 /// Additional methods on [`WindowAttributes`] that are specific to iOS.
 pub trait WindowAttributesExtIOS {
     /// Sets the [`contentScaleFactor`] of the underlying [`UIWindow`] to `scale_factor`.

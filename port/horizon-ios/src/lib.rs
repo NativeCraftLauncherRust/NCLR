@@ -68,6 +68,15 @@ pub extern "C" fn horizon_ios_hardware_mouse_scroll(dx: f64, dy: f64) {
     let _ = (dx, dy);
 }
 
+/// Asks UIKit to lock the pointer into the game window while a mouse plays.
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_set_pointer_locked(locked: i32) {
+    #[cfg(target_os = "ios")]
+    winit::platform::ios::set_prefers_pointer_locked(locked != 0);
+    #[cfg(not(target_os = "ios"))]
+    let _ = locked;
+}
+
 /// Returns a NUL-terminated UTF-8 diagnostics string owned by this library.
 ///
 /// The pointer stays valid for the lifetime of the process.

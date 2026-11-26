@@ -6,7 +6,7 @@ pub(crate) mod hardware_input;
 mod monitor;
 mod notification_center;
 mod view;
-mod view_controller;
+pub(crate) mod view_controller;
 mod window;
 
 use std::fmt;

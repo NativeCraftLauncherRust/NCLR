@@ -9,6 +9,7 @@
 #import <AuthenticationServices/AuthenticationServices.h>
 #import <SafariServices/SafariServices.h>
 #import <stdlib.h>
+#import <os/lock.h>
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
@@ -20,6 +21,7 @@ extern void horizon_ios_hardware_key(uint16_t usage, int pressed, int repeat, ui
 extern void horizon_ios_hardware_mouse_motion(double dx, double dy, double x, double y);
 extern void horizon_ios_hardware_mouse_button(int button, int pressed);
 extern void horizon_ios_hardware_mouse_scroll(double dx, double dy);
+extern void horizon_ios_set_pointer_locked(int locked);
 @class NCLRResourcePreparer;
 static NSString *const NCLRPrepareProgressNotification = @"NCLRPrepareProgress";
 static NSString *const NCLRPrepareFinishedNotification = @"NCLRPrepareFinished";
@@ -375,6 +377,19 @@ static void NCLRRunOnMain(dispatch_block_t block) {
     }
 }
 
+// Raw reports can arrive at the mouse's polling rate (up to 1 kHz). They are
+// merged here and sent to the engine once per displayed frame, so the main
+// queue is not flooded and the view turns evenly.
+static os_unfair_lock NCLRMotionLock = OS_UNFAIR_LOCK_INIT;
+static float NCLRMotionDX = 0.0f;
+static float NCLRMotionDY = 0.0f;
+static BOOL NCLRGameRunning = NO;
+// Mirrors of the keymap settings the motion path needs before NCLRKeymap is
+// declared in this file. NCLRKeymap keeps them in step on load and on change.
+static BOOL NCLRMouseInvertX = NO;
+static BOOL NCLRMouseInvertY = NO;
+static BOOL NCLRMouseSwapAxes = NO;
+
 @interface NCLRHardwareInput : NSObject
 @property (nonatomic, strong) GCKeyboard *keyboard;
 @property (nonatomic, strong) GCMouse *mouse;
@@ -384,9 +399,15 @@ static void NCLRRunOnMain(dispatch_block_t block) {
 @property (nonatomic, assign) CGPoint cursor;
 @property (nonatomic, assign) CGSize cursorBounds;
 @property (nonatomic, assign) BOOL running;
+@property (nonatomic, strong) CADisplayLink *motionLink;
+@property (nonatomic, strong) NSTimer *watchdog;
 + (instancetype)shared;
 - (void)start;
 - (void)stop;
+- (void)updatePointerLock;
+- (void)startMotionLink;
+- (void)flushMotion:(CADisplayLink *)link;
+- (void)applyMotionDX:(float)deltaX dy:(float)deltaY;
 @end
 
 @implementation NCLRHardwareInput
@@ -417,16 +438,34 @@ static void NCLRRunOnMain(dispatch_block_t block) {
                    name:GCMouseDidDisconnectNotification object:nil];
     [center addObserver:self selector:@selector(devicesChanged:)
                    name:UIApplicationDidBecomeActiveNotification object:nil];
+    [center addObserver:self selector:@selector(devicesChanged:)
+                   name:UIApplicationWillResignActiveNotification object:nil];
+    [center addObserver:self selector:@selector(devicesChanged:)
+                   name:UIApplicationDidEnterBackgroundNotification object:nil];
+    // UIKit can drop a device's handlers while the app is in the background or
+    // while the system keyboard takes over. A slow tick reinstalls them even
+    // when no connect notification arrives.
+    self.watchdog = [NSTimer timerWithTimeInterval:1.0
+                                            target:self
+                                          selector:@selector(watchdogTick:)
+                                          userInfo:nil
+                                           repeats:YES];
+    [NSRunLoop.mainRunLoop addTimer:self.watchdog forMode:NSRunLoopCommonModes];
     [self refreshDevices];
 }
 
 - (void)stop {
     if (!self.running) return;
     self.running = NO;
+    [self.watchdog invalidate];
+    self.watchdog = nil;
+    [self.motionLink invalidate];
+    self.motionLink = nil;
     [NSNotificationCenter.defaultCenter removeObserver:self];
     [self detachKeyboard:YES];
     [self detachMouse];
     horizon_ios_set_hardware_input(0, 0);
+    [self updatePointerLock];
     self.cursorReady = NO;
 }
 
@@ -436,15 +475,20 @@ static void NCLRRunOnMain(dispatch_block_t block) {
     NCLRRunOnMain(^{ [weakSelf refreshDevices]; });
 }
 
+- (void)watchdogTick:(NSTimer *)timer {
+    (void)timer;
+    [self refreshDevices];
+}
+
 - (void)refreshDevices {
     GCKeyboard *keyboard = GCKeyboard.coalescedKeyboard;
-    if (keyboard != self.keyboard) {
+    if (keyboard != self.keyboard || (keyboard && keyboard.keyboardInput.keyChangedHandler == nil)) {
         [self detachKeyboard:YES];
         self.keyboard = keyboard;
         [self attachKeyboard:keyboard];
     }
     GCMouse *mouse = GCMouse.current;
-    if (mouse != self.mouse) {
+    if (mouse != self.mouse || (mouse && mouse.mouseInput.mouseMovedHandler == nil)) {
         [self detachMouse];
         self.mouse = mouse;
         [self attachMouse:mouse];
@@ -452,6 +496,25 @@ static void NCLRRunOnMain(dispatch_block_t block) {
     BOOL hasKeyboard = self.keyboard != nil;
     BOOL hasMouse = self.mouse != nil;
     horizon_ios_set_hardware_input((hasKeyboard || hasMouse) ? 1 : 0, hasMouse ? 1 : 0);
+    [self updatePointerLock];
+}
+
+/// Locks the system pointer into the game window while a mouse plays, so the
+/// cursor cannot wander onto another window (Stage Manager) and take the
+/// events with it. The game draws its own cursor.
+- (void)updatePointerLock {
+    BOOL active = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+    BOOL want = NCLRGameRunning && self.mouse != nil && active;
+    horizon_ios_set_pointer_locked(want ? 1 : 0);
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            UIViewController *controller = window.rootViewController;
+            if ([controller respondsToSelector:@selector(setNeedsUpdateOfPrefersPointerLocked)]) {
+                [controller setNeedsUpdateOfPrefersPointerLocked];
+            }
+        }
+    }
 }
 
 - (uint8_t)modifiersForInput:(GCKeyboardInput *)input {
@@ -513,10 +576,13 @@ static void NCLRRunOnMain(dispatch_block_t block) {
 
 - (void)attachMouse:(GCMouse *)mouse {
     if (!mouse) return;
-    __weak typeof(self) weakSelf = self;
+    mouse.handlerQueue = dispatch_get_main_queue();
     mouse.mouseInput.mouseMovedHandler = ^(GCMouseInput *input, float deltaX, float deltaY) {
         (void)input;
-        NCLRRunOnMain(^{ [weakSelf moveMouseX:deltaX y:deltaY]; });
+        os_unfair_lock_lock(&NCLRMotionLock);
+        NCLRMotionDX += deltaX;
+        NCLRMotionDY += deltaY;
+        os_unfair_lock_unlock(&NCLRMotionLock);
     };
     mouse.mouseInput.leftButton.pressedChangedHandler =
         ^(GCControllerButtonInput *button, float value, BOOL pressed) {
@@ -545,7 +611,8 @@ static void NCLRRunOnMain(dispatch_block_t block) {
         NCLRRunOnMain(^{ horizon_ios_hardware_mouse_scroll(horizontal, vertical); });
     };
     self.cursorReady = NO;
-    [self moveMouseX:0 y:0];
+    [self startMotionLink];
+    [self applyMotionDX:0.0f dy:0.0f];
 }
 
 - (void)detachMouse {
@@ -557,6 +624,12 @@ static void NCLRRunOnMain(dispatch_block_t block) {
         mouse.mouseInput.middleButton.pressedChangedHandler = nil;
         mouse.mouseInput.scroll.valueChangedHandler = nil;
     }
+    [self.motionLink invalidate];
+    self.motionLink = nil;
+    os_unfair_lock_lock(&NCLRMotionLock);
+    NCLRMotionDX = 0.0f;
+    NCLRMotionDY = 0.0f;
+    os_unfair_lock_unlock(&NCLRMotionLock);
     self.mouse = nil;
     for (int button = 0; button < 3; button++) {
         horizon_ios_hardware_mouse_button(button, 0);
@@ -564,8 +637,41 @@ static void NCLRRunOnMain(dispatch_block_t block) {
     self.cursorReady = NO;
 }
 
-- (void)moveMouseX:(float)deltaX y:(float)deltaY {
+- (void)startMotionLink {
+    if (self.motionLink) return;
+    CADisplayLink *link = [CADisplayLink displayLinkWithTarget:self selector:@selector(flushMotion:)];
+    link.preferredFrameRateRange = CAFrameRateRangeMake(60.0, 120.0, 120.0);
+    [link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    self.motionLink = link;
+}
+
+- (void)flushMotion:(CADisplayLink *)link {
+    (void)link;
+    os_unfair_lock_lock(&NCLRMotionLock);
+    float dx = NCLRMotionDX;
+    float dy = NCLRMotionDY;
+    NCLRMotionDX = 0.0f;
+    NCLRMotionDY = 0.0f;
+    os_unfair_lock_unlock(&NCLRMotionLock);
+    if (dx == 0.0f && dy == 0.0f) return;
+    if (self.mouse == nil) return;
+    [self applyMotionDX:dx dy:dy];
+}
+
+- (void)applyMotionDX:(float)deltaX dy:(float)deltaY {
     UIWindow *window = UIApplication.sharedApplication.keyWindow;
+    if (!window) {
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
+                if (!candidate.hidden) {
+                    window = candidate;
+                    break;
+                }
+            }
+            if (window) break;
+        }
+    }
     if (!window) return;
     CGSize size = window.bounds.size;
     if (size.width < 1.0 || size.height < 1.0) return;
@@ -578,11 +684,15 @@ static void NCLRRunOnMain(dispatch_block_t block) {
     CGFloat y = fmax(0.0, fmin(size.height - 1.0, self.cursor.y + deltaY));
     self.cursor = CGPointMake(x, y);
     CGFloat scale = window.screen.scale > 0.0 ? window.screen.scale : UIScreen.mainScreen.scale;
-    NCLRRunOnMain(^{
-        // Relative motion stays in points so mouse look matches the cursor on
-        // every display scale. The pointer position is a drawable pixel.
-        horizon_ios_hardware_mouse_motion(deltaX, deltaY, x * scale, y * scale);
-    });
+    float dx = NCLRMouseSwapAxes ? deltaY : deltaX;
+    float dy = NCLRMouseSwapAxes ? deltaX : deltaY;
+    if (NCLRMouseInvertX) dx = -dx;
+    if (NCLRMouseInvertY) dy = -dy;
+    // GameController reports pointer deltas in screen points, where y grows
+    // downward. The camera takes winit deltas, where a positive y looks up.
+    // Relative motion stays in points so the turn matches the cursor on every
+    // display scale; the pointer position is a drawable pixel.
+    horizon_ios_hardware_mouse_motion(dx, -dy, x * scale, y * scale);
 }
 @end
 
@@ -670,6 +780,9 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
 @property (nonatomic, assign) CGFloat gyroSensitivity;
 @property (nonatomic, assign) BOOL gyroInvertX;
 @property (nonatomic, assign) BOOL gyroInvertY;
+@property (nonatomic, assign) BOOL mouseInvertX;
+@property (nonatomic, assign) BOOL mouseInvertY;
+@property (nonatomic, assign) BOOL mouseSwapAxes;
 @property (nonatomic, assign) CGFloat joystickDeadzone;
 @property (nonatomic, assign) BOOL sprintButton;
 @property (nonatomic, assign) NSInteger buttonStyle;
@@ -742,6 +855,9 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     self.gyroSensitivity = 1.0;
     self.gyroInvertX = NO;
     self.gyroInvertY = NO;
+    self.mouseInvertX = NO;
+    self.mouseInvertY = NO;
+    self.mouseSwapAxes = NO;
     self.joystickDeadzone = 0.16;
     self.sprintButton = YES;
     self.buttonStyle = 0;
@@ -813,6 +929,15 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     if ([gyroSensitivity isKindOfClass:NSNumber.class] && isfinite(gyroSensitivity.doubleValue)) {
         self.gyroSensitivity = MAX(0.25, MIN(2.5, gyroSensitivity.doubleValue));
     }
+    NSNumber *mouseInvertX = json[@"mouseInvertX"];
+    NSNumber *mouseInvertY = json[@"mouseInvertY"];
+    NSNumber *mouseSwapAxes = json[@"mouseSwapAxes"];
+    if ([mouseInvertX isKindOfClass:NSNumber.class]) self.mouseInvertX = mouseInvertX.boolValue;
+    if ([mouseInvertY isKindOfClass:NSNumber.class]) self.mouseInvertY = mouseInvertY.boolValue;
+    if ([mouseSwapAxes isKindOfClass:NSNumber.class]) self.mouseSwapAxes = mouseSwapAxes.boolValue;
+    NCLRMouseInvertX = self.mouseInvertX;
+    NCLRMouseInvertY = self.mouseInvertY;
+    NCLRMouseSwapAxes = self.mouseSwapAxes;
     NSNumber *sensitivity = json[@"sensitivity"];
     if ([sensitivity isKindOfClass:[NSNumber class]]) {
         self.sensitivity = MAX(0.3, MIN(2.5, sensitivity.doubleValue));
@@ -1057,6 +1182,9 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         @"gyroSensitivity" : @(self.gyroSensitivity),
         @"gyroInvertX" : @(self.gyroInvertX),
         @"gyroInvertY" : @(self.gyroInvertY),
+        @"mouseInvertX" : @(self.mouseInvertX),
+        @"mouseInvertY" : @(self.mouseInvertY),
+        @"mouseSwapAxes" : @(self.mouseSwapAxes),
         @"joystickDeadzone" : @(self.joystickDeadzone),
         @"sprintButton" : @(self.sprintButton),
         @"buttonStyle" : @(self.buttonStyle),
@@ -2456,7 +2584,10 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         ? NCLRStartGyro(launcherWindow.windowScene, keymap.gyroSensitivity,
                         keymap.gyroInvertX, keymap.gyroInvertY) : nil;
     [[NCLRHardwareInput shared] start];
+    NCLRGameRunning = YES;
+    [[NCLRHardwareInput shared] updatePointerLock];
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
+    NCLRGameRunning = NO;
     [[NCLRHardwareInput shared] stop];
     [motion stopDeviceMotionUpdates];
     [display invalidate];
@@ -3144,6 +3275,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @property (nonatomic, strong) UISlider *gyroSlider;
 @property (nonatomic, strong) UISwitch *gyroInvertXSwitch;
 @property (nonatomic, strong) UISwitch *gyroInvertYSwitch;
+@property (nonatomic, strong) UISwitch *mouseInvertXSwitch;
+@property (nonatomic, strong) UISwitch *mouseInvertYSwitch;
+@property (nonatomic, strong) UISwitch *mouseSwapAxesSwitch;
 @property (nonatomic, strong) UILabel *gyroValue;
 @property (nonatomic, strong) UILabel *canvasStatus;
 @property (nonatomic, assign) BOOL canvasFullscreen;
@@ -3748,6 +3882,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.editorWorkspace.spacing = 12;
     [self.stack addArrangedSubview:self.editorWorkspace];
     [self.stack addArrangedSubview:[self gyroCard]];
+    [self.stack addArrangedSubview:[self mouseCard]];
     [self.stack addArrangedSubview:menu];
 
     UIButton *save = [self button:@"保存" action:@selector(saveKeymap) primary:YES];
@@ -3902,6 +4037,79 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NCLRKeymap *keymap = NCLRKeymap.shared;
     keymap.gyroInvertX = self.gyroInvertXSwitch.on;
     keymap.gyroInvertY = self.gyroInvertYSwitch.on;
+    [keymap save];
+}
+
+- (UIView *)mouseCard {
+    UIView *card = [self card];
+    UILabel *title = [self label:@"外接鼠标" size:15 weight:UIFontWeightSemibold
+                            color:NCLRColor(0.94, 0.94, 0.94, 1)];
+    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"computermouse"]];
+    icon.tintColor = NCLRAccent();
+    icon.contentMode = UIViewContentModeScaleAspectFit;
+    UIView *spacer = [UIView new];
+    UIStackView *header = [[UIStackView alloc] initWithArrangedSubviews:@[icon, title, spacer]];
+    header.alignment = UIStackViewAlignmentCenter;
+    header.spacing = 10;
+    UILabel *hint = [self label:@"键鼠接入时触控键自动隐藏。视角方向不合适时在这里校正，设置会保存。"
+                            size:11 weight:UIFontWeightRegular
+                           color:NCLRColor(0.66, 0.66, 0.66, 1)];
+    hint.numberOfLines = 0;
+    self.mouseInvertXSwitch = [self mouseAxisSwitch:NCLRKeymap.shared.mouseInvertX
+                                             label:@"反转 X 轴（左右）"];
+    self.mouseInvertYSwitch = [self mouseAxisSwitch:NCLRKeymap.shared.mouseInvertY
+                                             label:@"反转 Y 轴（上下）"];
+    self.mouseSwapAxesSwitch = [self mouseAxisSwitch:NCLRKeymap.shared.mouseSwapAxes
+                                              label:@"交换 X / Y 轴"];
+    UIStackView *content = [[UIStackView alloc] initWithArrangedSubviews:@[
+        header,
+        hint,
+        [self mouseAxisRow:self.mouseInvertXSwitch],
+        [self mouseAxisRow:self.mouseInvertYSwitch],
+        [self mouseAxisRow:self.mouseSwapAxesSwitch],
+    ]];
+    content.axis = UILayoutConstraintAxisVertical;
+    content.spacing = 5;
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:content];
+    [NSLayoutConstraint activateConstraints:@[
+        [icon.widthAnchor constraintEqualToConstant:22],
+        [icon.heightAnchor constraintEqualToConstant:22],
+        [content.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:14],
+        [content.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-14],
+        [content.topAnchor constraintEqualToAnchor:card.topAnchor constant:10],
+        [content.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-10],
+    ]];
+    return card;
+}
+
+- (UISwitch *)mouseAxisSwitch:(BOOL)on label:(NSString *)label {
+    UISwitch *toggle = [[UISwitch alloc] init];
+    toggle.on = on;
+    toggle.onTintColor = NCLRAccent();
+    toggle.accessibilityLabel = label;
+    [toggle addTarget:self action:@selector(mouseAxesChanged) forControlEvents:UIControlEventValueChanged];
+    return toggle;
+}
+
+- (UIStackView *)mouseAxisRow:(UISwitch *)toggle {
+    UILabel *label = [self label:toggle.accessibilityLabel size:12 weight:UIFontWeightMedium
+                            color:NCLRColor(0.76, 0.76, 0.76, 1)];
+    label.isAccessibilityElement = NO;
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[label, [UIView new], toggle]];
+    row.alignment = UIStackViewAlignmentCenter;
+    row.spacing = 10;
+    return row;
+}
+
+- (void)mouseAxesChanged {
+    NCLRKeymap *keymap = NCLRKeymap.shared;
+    keymap.mouseInvertX = self.mouseInvertXSwitch.on;
+    keymap.mouseInvertY = self.mouseInvertYSwitch.on;
+    keymap.mouseSwapAxes = self.mouseSwapAxesSwitch.on;
+    NCLRMouseInvertX = keymap.mouseInvertX;
+    NCLRMouseInvertY = keymap.mouseInvertY;
+    NCLRMouseSwapAxes = keymap.mouseSwapAxes;
     [keymap save];
 }
 
