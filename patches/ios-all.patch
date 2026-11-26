@@ -326,7 +326,7 @@ index 550d63c..7c07782 100644
          let emote = settings.extras.emote_key.clone();
          settings.keys.set("key.emote", &emote);
 diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-render/src/touch.rs
-index b38a955..3a04b08 100644
+index b38a955..6b41924 100644
 --- a/crates/horizon-client-render/src/touch.rs
 +++ b/crates/horizon-client-render/src/touch.rs
 @@ -59,6 +59,17 @@ enum Role {
@@ -382,7 +382,36 @@ index b38a955..3a04b08 100644
          })
      }
  
-@@ -324,10 +338,10 @@ impl TouchControls {
+@@ -287,9 +301,9 @@ impl TouchControls {
+             // so it never covers the jump, sneak or sprint buttons.
+             let inventory = self.placement(Control::Inventory);
+             let side = if self.settings.left_handed { -1.0 } else { 1.0 };
+-            let half = p.size / aspect / 2.0;
++            let half = p.effective_width() / aspect / 2.0;
+             p.center[0] = (inventory.center[0]
+-                + side * ((inventory.size + p.size) / 2.0 + 0.015) / aspect)
++                + side * ((inventory.effective_width() + p.effective_width()) / 2.0 + 0.015) / aspect)
+                 .clamp(half, 1.0 - half);
+         }
+         p
+@@ -298,8 +312,15 @@ impl TouchControls {
+     /// Scales a placement by `button_scale` and keeps it inside the surface.
+     fn fit(&self, mut p: Placement) -> Placement {
+         let aspect = self.aspect();
++        let scale = self.settings.button_scale;
++        let width = if p.width.is_finite() && p.width > 0.0 {
++            p.width * scale
++        } else {
++            p.size * scale
++        };
+         p.size = (p.size * self.settings.button_scale).min(aspect).min(1.0);
+-        let half = [p.size / aspect / 2.0, p.size / 2.0];
++        p.width = width.min(1.0);
++        let half = [p.width / aspect / 2.0, p.size / 2.0];
+         for (c, half) in p.center.iter_mut().zip(half) {
+             *c = c.clamp(half, 1.0 - half);
+         }
+@@ -324,10 +345,10 @@ impl TouchControls {
      pub fn shield_held(&self) -> bool {
          self.settings.shield_button
              && self.shield_available
@@ -395,7 +424,7 @@ index b38a955..3a04b08 100644
      }
  
      /// Where the touch marker goes in the tap schemes: under a look finger, or
-@@ -392,6 +406,7 @@ impl TouchControls {
+@@ -392,6 +413,7 @@ impl TouchControls {
              }
              // In the crosshair schemes the attack button can steer while it mines.
              Role::Button(Button::RightTrigger) => attack_look,
@@ -403,7 +432,7 @@ index b38a955..3a04b08 100644
              _ => false,
          };
          let delta = [point[0] - previous[0], point[1] - previous[1]];
-@@ -400,6 +415,12 @@ impl TouchControls {
+@@ -400,6 +422,12 @@ impl TouchControls {
      }
  
      fn lift(&mut self, id: u64) {
@@ -416,7 +445,7 @@ index b38a955..3a04b08 100644
          let Some((
              Role::Look {
                  start,
-@@ -420,8 +441,64 @@ impl TouchControls {
+@@ -420,8 +448,62 @@ impl TouchControls {
          }
      }
  
@@ -438,9 +467,7 @@ index b38a955..3a04b08 100644
 +    }
 +
 +    fn extra_placement(&self, index: usize) -> Placement {
-+        let mut placement = self.settings.extra_buttons[index].placement;
-+        placement.size *= self.settings.button_scale;
-+        self.fit(placement)
++        self.fit(self.settings.extra_buttons[index].placement)
 +    }
 +
      fn land(&mut self, id: u64, point: [f32; 2]) {
@@ -482,7 +509,7 @@ index b38a955..3a04b08 100644
              Some(Control::Move) if !self.moving() => Role::Move(if self.dynamic_joystick() {
                  point
              } else {
-@@ -454,8 +531,14 @@ impl TouchControls {
+@@ -454,8 +536,14 @@ impl TouchControls {
                  self.perspective_requested = true;
                  Role::Ignore
              }
@@ -498,7 +525,7 @@ index b38a955..3a04b08 100644
                      && !self.vertical_movement
                      && !self.swimming
                      && !self.mounted =>
-@@ -486,7 +569,7 @@ impl TouchControls {
+@@ -486,7 +574,7 @@ impl TouchControls {
                  committed: false,
              },
          };
@@ -507,7 +534,7 @@ index b38a955..3a04b08 100644
          // Latch the press so a tap shorter than a tick still reaches the game.
          match role {
              Role::Button(Button::LeftTrigger) => self.pending.triggers[0] = 1.0,
-@@ -498,7 +581,17 @@ impl TouchControls {
+@@ -498,7 +586,17 @@ impl TouchControls {
  
      /// Lets go of everything: fingers, latched presses, requests.
      pub fn clear(&mut self) {
@@ -525,7 +552,7 @@ index b38a955..3a04b08 100644
          self.last_sneak_tap = None;
          self.sprint_latched = false;
          self.pending = PadState::default();
-@@ -509,6 +602,7 @@ impl TouchControls {
+@@ -509,6 +607,7 @@ impl TouchControls {
          self.holding_use = false;
          self.holding = false;
          self.chat_requested = false;
@@ -533,7 +560,7 @@ index b38a955..3a04b08 100644
          self.settings_requested = false;
          self.debug_requested = false;
          self.perspective_requested = false;
-@@ -517,11 +611,25 @@ impl TouchControls {
+@@ -517,11 +616,25 @@ impl TouchControls {
      /// A short world tap since the last call, and whether it uses the item.
      /// A tap never holds attack or use into the next tick: the game acts once
      /// at [`Self::aim`].
@@ -559,7 +586,7 @@ index b38a955..3a04b08 100644
      pub fn key_events(&mut self) -> Vec<(String, bool)> {
          std::mem::take(&mut self.key_events)
      }
-@@ -588,6 +696,17 @@ impl TouchControls {
+@@ -588,6 +701,17 @@ impl TouchControls {
      /// The controller state the fingers hold right now.
      pub fn state(&self) -> PadState {
          let mut state = PadState::default();
@@ -577,7 +604,7 @@ index b38a955..3a04b08 100644
          if self.settings.sprint_toggle && self.settings.sprint_button && self.sprint_latched {
              state.set(Button::LeftStick, true);
          }
-@@ -595,21 +714,37 @@ impl TouchControls {
+@@ -595,21 +719,37 @@ impl TouchControls {
              match role {
                  Role::Move(anchor) => {
                      let radius = self.placement(Control::Move).size / 2.0;
@@ -622,7 +649,7 @@ index b38a955..3a04b08 100644
                      {
                          state.set(Button::LeftStick, true);
                      }
-@@ -617,7 +752,7 @@ impl TouchControls {
+@@ -617,7 +757,7 @@ impl TouchControls {
                  Role::Button(Button::LeftTrigger) | Role::Shield => state.triggers[0] = 1.0,
                  Role::Button(Button::RightTrigger) => state.triggers[1] = 1.0,
                  Role::Button(b) => state.set(*b, true),
@@ -632,7 +659,7 @@ index b38a955..3a04b08 100644
          }
          state
 diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-client-render/src/touch/draw.rs
-index 9e8d8e4..1eb61e2 100644
+index 9e8d8e4..5f743ed 100644
 --- a/crates/horizon-client-render/src/touch/draw.rs
 +++ b/crates/horizon-client-render/src/touch/draw.rs
 @@ -10,7 +10,6 @@
@@ -643,7 +670,15 @@ index 9e8d8e4..1eb61e2 100644
  
  const BUTTON: &str = "gui/sprites/widget/button";
  const BUTTON_HELD: &str = "gui/sprites/widget/button_highlighted";
-@@ -36,7 +35,17 @@ impl TouchControls {
+@@ -29,14 +28,24 @@ impl TouchControls {
+                 self.draw_move(b, a, p, &state, color);
+                 continue;
+             }
+-            let bounds = square(b, p.center, p.size);
++            let bounds = control_bounds(b, p.center, p.effective_width(), p.size);
+             let rect = p.rect(self.aspect());
+             let pressed = self.held(control, &state)
+                 || self
                      .fingers
                      .values()
                      .any(|(_, point)| layout::contains(rect, *point));
@@ -655,7 +690,7 @@ index 9e8d8e4..1eb61e2 100644
 +                let p = self.extra_placement(index);
 +                let pressed = self.extra_latched.contains(&index)
 +                    || self.fingers.values().any(|(role, _)| matches!(role, super::Role::Extra(i) if *i == index));
-+                let bounds = square(b, p.center, p.size);
++                let bounds = control_bounds(b, p.center, p.effective_width(), p.size);
 +                button(b, a, bounds, &extra.label, pressed,
 +                       rgba(255, 255, 255, alpha(p.opacity)), self.settings.button_style);
 +            }
@@ -730,16 +765,54 @@ index 9e8d8e4..1eb61e2 100644
      }
  
      /// The joystick (a rim and a knob) or the D-pad (four arrow buttons).
-@@ -114,7 +140,7 @@ impl TouchControls {
-             let cell = size / 3.0;
+@@ -109,16 +135,17 @@ impl TouchControls {
+             None if self.dynamic_joystick() => return,
+             _ => p.center,
+         };
+-        let [x, y, size, _] = square(b, center, p.size);
++        let [x, y, width, height] = control_bounds(b, center, p.effective_width(), p.size);
++        let size = width.min(height);
+         if self.settings.mode == Mode::Dpad {
+-            let cell = size / 3.0;
++            let cell = [width / 3.0, height / 3.0];
              for ([dx, dy], label, pressed) in dpad(state.left) {
-                 let bounds = [x + cell * dx, y + cell * dy, cell, cell];
+-                let bounds = [x + cell * dx, y + cell * dy, cell, cell];
 -                button(b, a, bounds, label, pressed, color);
++                let bounds = [x + cell[0] * dx, y + cell[1] * dy, cell[0], cell[1]];
 +                button(b, a, bounds, label, pressed, color, self.settings.button_style);
              }
              return;
          }
-@@ -171,42 +197,36 @@ fn button(
+-        let middle = [x + size / 2.0, y + size / 2.0];
++        let middle = [x + width / 2.0, y + height / 2.0];
+         let [r, g, blue, opacity] = color.to_le_bytes();
+         ring(b, a, middle, size / 2.0, color);
+         disc(b, a, middle, size / 2.0, rgba(0, 0, 0, opacity / 3));
+@@ -147,14 +174,16 @@ fn knob(middle: [f32; 2], left: [f32; 2], size: f32) -> [f32; 2] {
+     ]
+ }
+ 
+-/// A placement's square in GUI pixels, `[x, y, size, size]`.
+-fn square(b: &HudBatch, center: [f32; 2], size: f32) -> [f32; 4] {
+-    let size = size * b.height;
++/// A placement's bounds in GUI pixels, `[x, y, width, height]`. Width and
++/// height are both normalized to the surface height.
++fn control_bounds(b: &HudBatch, center: [f32; 2], width: f32, height: f32) -> [f32; 4] {
++    let width = width * b.height;
++    let height = height * b.height;
+     [
+-        center[0] * b.width - size / 2.0,
+-        center[1] * b.height - size / 2.0,
+-        size,
+-        size,
++        center[0] * b.width - width / 2.0,
++        center[1] * b.height - height / 2.0,
++        width,
++        height,
+     ]
+ }
+ 
+@@ -171,42 +200,36 @@ fn button(
      label: &str,
      pressed: bool,
      color: u32,
@@ -801,7 +874,7 @@ index 9e8d8e4..1eb61e2 100644
      };
      let drop = if pressed { (h / 18.0).min(2.0) } else { 0.0 };
      let width = HudBatch::text_width(a, label);
-@@ -219,15 +239,23 @@ fn button(
+@@ -219,15 +242,23 @@ fn button(
          text,
          true,
      );
@@ -829,7 +902,7 @@ index 9e8d8e4..1eb61e2 100644
  fn mining_radius(radius: f32, progress: f32) -> f32 {
      if progress.is_finite() {
 diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
-index e57f2d8..66f2338 100644
+index e57f2d8..b49c286 100644
 --- a/crates/horizon-client-render/src/touch/layout.rs
 +++ b/crates/horizon-client-render/src/touch/layout.rs
 @@ -58,13 +58,14 @@ pub enum Control {
@@ -856,7 +929,7 @@ index e57f2d8..66f2338 100644
      ];
  
      /// The name the layout editor shows.
-@@ -98,6 +100,31 @@ impl Control {
+@@ -98,16 +100,45 @@ impl Control {
              Self::Perspective => "Camera perspective (F5)",
              Self::Offhand => "Swap hands",
              Self::Shield => "Raise shield",
@@ -888,7 +961,64 @@ index e57f2d8..66f2338 100644
          }
      }
  }
-@@ -147,6 +174,20 @@ pub const FOLLOW_SCHEME: u8 = 0;
+ 
+-/// Where one control sits: its centre (0..1 of the surface), its size (a
+-/// fraction of the surface height) and its opacity.
++/// Where one control sits: its centre (0..1 of the surface), its height
++/// (a fraction of the surface height), its width in the same height units,
++/// and its opacity. A width of zero means a square control, so layouts saved
++/// before independent width was supported keep their original shape.
+ #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+ pub struct Placement {
+     pub center: [f32; 2],
+     pub size: f32,
++    #[serde(default)]
++    pub width: f32,
+     pub opacity: f32,
+ }
+ 
+@@ -116,14 +147,25 @@ impl Placement {
+         Self {
+             center: [x, y],
+             size,
++            width: size,
+             opacity: 0.65,
+         }
+     }
+ 
+-    /// The square control as `[x, y, w, h]` in normalized surface coordinates,
+-    /// for a surface `aspect` (width / height) wide.
++    /// Width as a fraction of the surface height. Older layouts have no width
++    /// field, so they remain square.
++    pub fn effective_width(self) -> f32 {
++        if self.width.is_finite() && self.width > 0.0 {
++            self.width
++        } else {
++            self.size
++        }
++    }
++
++    /// The control as `[x, y, w, h]` in normalized surface coordinates, for a
++    /// surface `aspect` (width / height) wide.
+     pub fn rect(self, aspect: f32) -> [f32; 4] {
+-        let w = self.size / aspect.max(0.1);
++        let w = self.effective_width() / aspect.max(0.1);
+         [
+             self.center[0] - w / 2.0,
+             self.center[1] - self.size / 2.0,
+@@ -135,6 +177,11 @@ impl Placement {
+     /// Brings a value read from disk back on screen and into range.
+     pub fn sanitize(&mut self) {
+         self.size = finite_or(self.size, 0.15).clamp(0.045, 0.45);
++        self.width = if self.width.is_finite() && self.width > 0.0 {
++            self.width.clamp(0.045, 1.0)
++        } else {
++            self.size
++        };
+         self.opacity = finite_or(self.opacity, 0.65).clamp(0.0, 1.0);
+         for c in &mut self.center {
+             *c = finite_or(*c, 0.5).clamp(0.025, 0.975);
+@@ -147,6 +194,20 @@ pub const FOLLOW_SCHEME: u8 = 0;
  pub const SHOWN: u8 = 1;
  pub const HIDDEN: u8 = 2;
  
@@ -909,7 +1039,7 @@ index e57f2d8..66f2338 100644
  /// The player's touch layout, saved as JSON. Missing fields take their
  /// defaults, so later options can be added without resetting a saved file.
  #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-@@ -170,6 +211,20 @@ pub struct Settings {
+@@ -170,6 +231,20 @@ pub struct Settings {
      pub layouts: [[Placement; CONTROLS]; 3],
      /// Camera turn speed for look drags; scales both axes.
      pub sensitivity: f32,
@@ -930,7 +1060,7 @@ index e57f2d8..66f2338 100644
      /// Extra scale on the yaw (left and right) turn.
      pub sensitivity_horizontal: f32,
      /// Extra scale on the pitch (up and down) turn.
-@@ -214,6 +269,7 @@ impl Default for Settings {
+@@ -214,6 +289,7 @@ impl Default for Settings {
              Placement::new(0.58, 0.055, 0.075), // Perspective
              Placement::new(0.80, 0.96, 0.075),  // Offhand
              Placement::new(0.92, 0.36, 0.12),   // Shield
@@ -938,7 +1068,7 @@ index e57f2d8..66f2338 100644
          ];
          let mut layouts = [row; 3];
          // The D-pad sits where the joystick does; sneak becomes its centre.
-@@ -231,6 +287,13 @@ impl Default for Settings {
+@@ -231,6 +307,13 @@ impl Default for Settings {
              button_visibility: [FOLLOW_SCHEME; CONTROLS],
              layouts,
              sensitivity: 1.0,
@@ -948,11 +1078,11 @@ index e57f2d8..66f2338 100644
 +            toggle_buttons: Vec::new(),
 +            launcher_trigger_modes: false,
 +            extra_buttons: Vec::new(),
-+            menu_escape: [Placement { center: [0.057, 0.066], size: 0.092, opacity: 1.0 }; 2],
++            menu_escape: [Placement { center: [0.057, 0.066], size: 0.092, width: 0.2024, opacity: 1.0 }; 2],
              sensitivity_horizontal: 1.0,
              sensitivity_vertical: 1.0,
              sprint_toggle: false,
-@@ -264,6 +327,152 @@ impl Settings {
+@@ -264,6 +347,160 @@ impl Settings {
          std::fs::rename(temp, path)
      }
  
@@ -1043,6 +1173,12 @@ index e57f2d8..66f2338 100644
 +                    if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
 +                        placement.size = v as f32;
 +                    }
++                    if let Some(v) = value.get("width").and_then(|v| v.as_f64()) {
++                        placement.width = v as f32;
++                    } else if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
++                        // Old menu layouts were wide by 2.2; preserve that shape.
++                        placement.width = (v as f32) * 2.2;
++                    }
 +                    placement.sanitize();
 +                    self.menu_escape[index] = placement;
 +                }
@@ -1061,9 +1197,11 @@ index e57f2d8..66f2338 100644
 +            let x = value.get("x").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
 +            let y = value.get("y").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
 +            let size = value.get("size").and_then(|v| v.as_f64()).unwrap_or(0.12) as f32;
++            let width = value.get("width").and_then(|v| v.as_f64()).unwrap_or(size as f64) as f32;
 +            let placement = Placement {
 +                center: [x, y],
 +                size,
++                width,
 +                opacity,
 +            };
 +            if let Some(control) = control {
@@ -1105,7 +1243,7 @@ index e57f2d8..66f2338 100644
      pub fn sanitize(&mut self) {
          // Only the D-pad has a split variant (see `Mode::SCHEMES`).
          if self.mode != Mode::Dpad {
-@@ -284,7 +493,9 @@ impl Settings {
+@@ -284,7 +521,9 @@ impl Settings {
          ] {
              *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
          }
@@ -1116,15 +1254,15 @@ index e57f2d8..66f2338 100644
          self.circle_size = finite_or(self.circle_size, 32.0).clamp(16.0, 64.0);
          self.dynamic_area_x = finite_or(self.dynamic_area_x, 0.25).clamp(0.0, 1.0);
          self.dynamic_area_y = finite_or(self.dynamic_area_y, 1.0).clamp(0.0, 1.0);
-@@ -312,6 +523,16 @@ impl Settings {
+@@ -312,6 +551,16 @@ impl Settings {
          }
      }
  
 +    /// Shared bounds, in GUI units, for drawing and tapping the menu back button.
 +    pub fn menu_escape_rect(&self, inventory: bool, width: f32, height: f32) -> [f32; 4] {
 +        let placement = self.menu_escape[if inventory { 0 } else { 1 }];
-+        let h = (placement.size * height).min(width / 2.2);
-+        let w = h * 2.2;
++        let h = (placement.size * height).min(height);
++        let w = (placement.effective_width() * height).min(width);
 +        let [x, y] = placement.center;
 +        [(x * width - w / 2.0).clamp(0.0, (width - w).max(0.0)),
 +         (y * height - h / 2.0).clamp(0.0, (height - h).max(0.0)), w, h]
@@ -1133,6 +1271,14 @@ index e57f2d8..66f2338 100644
      /// The layout slot a control is drawn in (jump and sneak may trade places).
      pub fn slot(&self, c: Control) -> usize {
          let swap = self.mode == Mode::Dpad && self.swap_jump_sneak;
+@@ -424,6 +673,7 @@ mod tests {
+         s.layouts[0][0] = Placement {
+             center: [f32::NAN, 7.0],
+             size: 0.0,
++            width: 0.0,
+             opacity: f32::INFINITY,
+         };
+         s.sanitize();
 diff --git a/crates/horizon-client/Cargo.toml b/crates/horizon-client/Cargo.toml
 index 7b7a557..8b097d7 100644
 --- a/crates/horizon-client/Cargo.toml
