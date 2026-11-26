@@ -951,7 +951,7 @@ index 9e8d8e4..9d1d8ef 100644
  fn mining_radius(radius: f32, progress: f32) -> f32 {
      if progress.is_finite() {
 diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
-index e57f2d8..bdf00d6 100644
+index e57f2d8..af4d16d 100644
 --- a/crates/horizon-client-render/src/touch/layout.rs
 +++ b/crates/horizon-client-render/src/touch/layout.rs
 @@ -58,13 +58,14 @@ pub enum Control {
@@ -1119,7 +1119,7 @@ index e57f2d8..bdf00d6 100644
 +    pub menu_buttons: Vec<MenuButton>,
 +    pub menu_escape: [Placement; 2],
 +    /// The keyboard toggle shown beside the back button in every menu.
-+    pub menu_keyboard: Placement,
++    pub menu_keyboard: [Placement; 2],
      /// Extra scale on the yaw (left and right) turn.
      pub sensitivity_horizontal: f32,
      /// Extra scale on the pitch (up and down) turn.
@@ -1143,11 +1143,11 @@ index e57f2d8..bdf00d6 100644
 +            extra_buttons: Vec::new(),
 +            menu_buttons: Vec::new(),
 +            menu_escape: [Placement { center: [0.057, 0.066], size: 0.092, width: 0.2024, opacity: 1.0 }; 2],
-+            menu_keyboard: Placement { center: [0.18, 0.066], size: 0.092, width: 0.2024, opacity: 1.0 },
++            menu_keyboard: [Placement { center: [0.18, 0.066], size: 0.092, width: 0.2024, opacity: 1.0 }; 2],
              sensitivity_horizontal: 1.0,
              sensitivity_vertical: 1.0,
              sprint_toggle: false,
-@@ -264,6 +363,201 @@ impl Settings {
+@@ -264,6 +363,226 @@ impl Settings {
          std::fs::rename(temp, path)
      }
  
@@ -1290,6 +1290,31 @@ index e57f2d8..bdf00d6 100644
 +                }
 +                continue;
 +            }
++            if let Some(index) = match id.as_str() {
++                "inventoryKeyboard" => Some(0),
++                "pauseKeyboard" => Some(1),
++                _ => None,
++            } {
++                if let Some(value) = value.as_object() {
++                    let mut placement = self.menu_keyboard[index];
++                    for (axis, key) in ["x", "y"].into_iter().enumerate() {
++                        if let Some(v) = value.get(key).and_then(|v| v.as_f64()) {
++                            placement.center[axis] = v as f32;
++                        }
++                    }
++                    if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
++                        placement.size = v as f32;
++                    }
++                    if let Some(v) = value.get("width").and_then(|v| v.as_f64()) {
++                        placement.width = v as f32;
++                    } else if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
++                        placement.width = (v as f32) * 2.2;
++                    }
++                    placement.sanitize();
++                    self.menu_keyboard[index] = placement;
++                }
++                continue;
++            }
 +            if deleted_key(id) {
 +                continue;
 +            }
@@ -1349,7 +1374,7 @@ index e57f2d8..bdf00d6 100644
      pub fn sanitize(&mut self) {
          // Only the D-pad has a split variant (see `Mode::SCHEMES`).
          if self.mode != Mode::Dpad {
-@@ -284,7 +578,9 @@ impl Settings {
+@@ -284,7 +603,9 @@ impl Settings {
          ] {
              *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
          }
@@ -1360,7 +1385,7 @@ index e57f2d8..bdf00d6 100644
          self.circle_size = finite_or(self.circle_size, 32.0).clamp(16.0, 64.0);
          self.dynamic_area_x = finite_or(self.dynamic_area_x, 0.25).clamp(0.0, 1.0);
          self.dynamic_area_y = finite_or(self.dynamic_area_y, 1.0).clamp(0.0, 1.0);
-@@ -312,6 +608,26 @@ impl Settings {
+@@ -312,6 +633,26 @@ impl Settings {
          }
      }
  
@@ -1375,8 +1400,8 @@ index e57f2d8..bdf00d6 100644
 +    }
 +
 +    /// Shared bounds for the keyboard toggle in a menu.
-+    pub fn menu_keyboard_rect(&self, width: f32, height: f32) -> [f32; 4] {
-+        let placement = self.menu_keyboard;
++    pub fn menu_keyboard_rect(&self, inventory: bool, width: f32, height: f32) -> [f32; 4] {
++        let placement = self.menu_keyboard[if inventory { 0 } else { 1 }];
 +        let h = (placement.size * height).min(height);
 +        let w = (placement.effective_width() * height).min(width);
 +        let [x, y] = placement.center;
@@ -1387,7 +1412,34 @@ index e57f2d8..bdf00d6 100644
      /// The layout slot a control is drawn in (jump and sneak may trade places).
      pub fn slot(&self, c: Control) -> usize {
          let swap = self.mode == Mode::Dpad && self.swap_jump_sneak;
-@@ -424,6 +740,7 @@ mod tests {
+@@ -399,6 +740,26 @@ mod tests {
+         assert_eq!(read, s);
+     }
+ 
++    #[test]
++    fn menu_keyboard_positions_are_edited_per_screen() {
++        let file = temp_file("menu-keyboard");
++        std::fs::write(
++            &file,
++            br#"{"layout":{"inventoryKeyboard":{"x":0.25,"y":0.1,"size":0.08,"width":0.3},"pauseKeyboard":{"x":0.7,"y":0.2,"size":0.1}}}"#,
++        )
++        .unwrap();
++        let mut s = Settings::default();
++        s.apply_launcher_keymap(&file);
++        std::fs::remove_file(&file).unwrap();
++        assert_eq!(s.menu_keyboard[0].center, [0.25, 0.1]);
++        assert!((s.menu_keyboard[0].width - 0.3).abs() < 0.0001);
++        assert_eq!(s.menu_keyboard[1].center, [0.7, 0.2]);
++        assert!((s.menu_keyboard[1].width - 0.22).abs() < 0.0001);
++        let [x, y, w, h] = s.menu_keyboard_rect(true, 1600.0, 900.0);
++        assert!((x + w / 2.0 - 400.0).abs() < 0.1);
++        assert!((y + h / 2.0 - 90.0).abs() < 0.1);
++    }
++
+     #[test]
+     fn missing_bad_or_partial_files_fall_back_to_defaults() {
+         assert_eq!(Settings::load(&temp_file("absent")), Settings::default());
+@@ -424,6 +785,7 @@ mod tests {
          s.layouts[0][0] = Placement {
              center: [f32::NAN, 7.0],
              size: 0.0,
@@ -1395,6 +1447,15 @@ index e57f2d8..bdf00d6 100644
              opacity: f32::INFINITY,
          };
          s.sanitize();
+@@ -475,7 +837,7 @@ mod tests {
+         );
+         s.button_scale = 9.0;
+         s.sanitize();
+-        assert_eq!(s.button_scale, 2.0);
++        assert_eq!(s.button_scale, 2.5);
+     }
+ 
+     #[test]
 diff --git a/crates/horizon-client/Cargo.toml b/crates/horizon-client/Cargo.toml
 index 7b7a557..8b097d7 100644
 --- a/crates/horizon-client/Cargo.toml
@@ -1502,7 +1563,7 @@ index 78cfdee..c257073 100644
  /// Cells cannot roll back: each copy merges all requesting rows, so stopping the whole
  /// start is how we ensure none of a refused mod's rows run.
 diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.rs
-index 55bd735..58d5c90 100644
+index 55bd735..fc70481 100644
 --- a/crates/horizon-client/src/game.rs
 +++ b/crates/horizon-client/src/game.rs
 @@ -1113,6 +1113,10 @@ struct Game<'a> {
@@ -1528,7 +1589,7 @@ index 55bd735..58d5c90 100644
      frames: u64,
      /// The glint clock and options, read once per frame (game/interface/item_draw.rs).
      glint_frame: horizon_client::item_render::GlintFrame,
-@@ -5306,6 +5315,40 @@ impl Game<'_> {
+@@ -5306,6 +5315,43 @@ impl Game<'_> {
          self.draw_studio_bars(&mut batch);
          if show_hud {
              self.draw_pad_guide(&mut batch, guide_from);
@@ -1541,20 +1602,23 @@ index 55bd735..58d5c90 100644
 +        // the cursor, a lift clicks where it sits, and the top-left ESC box
 +        // leaves an inventory or pause screen.
 +        if self.screen != Screen::Playing {
++            let menu_inventory = matches!(self.screen, Screen::Inventory | Screen::Creative);
 +            let [x, y, w, h] = self.touch.settings.menu_escape_rect(
-+                matches!(self.screen, Screen::Inventory | Screen::Creative), batch.width, batch.height,
++                menu_inventory, batch.width, batch.height,
 +            );
 +            batch.fill(&self.gui.atlas, x, y, w, h, rgba(0, 0, 0, 210));
 +            if w > 2.0 && h > 2.0 {
 +                batch.fill(&self.gui.atlas, x + 1.0, y + 1.0, w - 2.0, h - 2.0, rgba(90, 90, 90, 230));
 +            }
 +            self.native_text(&mut batch, "ESC", [x + w * 0.12, y + (h - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
-+            let [kx, ky, kw, kh] = self.touch.settings.menu_keyboard_rect(batch.width, batch.height);
++            let [kx, ky, kw, kh] = self.touch.settings.menu_keyboard_rect(
++                menu_inventory, batch.width, batch.height,
++            );
 +            batch.fill(&self.gui.atlas, kx, ky, kw, kh, rgba(0, 0, 0, 210));
 +            if kw > 2.0 && kh > 2.0 {
 +                batch.fill(&self.gui.atlas, kx + 1.0, ky + 1.0, kw - 2.0, kh - 2.0, rgba(90, 90, 90, 230));
 +            }
-+            self.native_text(&mut batch, "KB", [kx + kw * 0.12, ky + (kh - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
++            self.native_text(&mut batch, "键盘", [kx + kw * 0.12, ky + (kh - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
 +            let menu_screen = match self.screen {
 +                Screen::Inventory | Screen::Creative => Some(0),
 +                Screen::Paused => Some(1),
@@ -1569,7 +1633,7 @@ index 55bd735..58d5c90 100644
          }
          batch
      }
-@@ -10701,6 +10744,8 @@ impl<'a> Game<'a> {
+@@ -10701,6 +10747,8 @@ impl<'a> Game<'a> {
              unclaimed_modifiers: None,
              focus_after_run: None,
              ime_allowed: false,
@@ -1578,7 +1642,7 @@ index 55bd735..58d5c90 100644
              ime_area: None,
              focus_lost: None,
              modifiers: winit::keyboard::ModifiersState::empty(),
-@@ -10741,6 +10786,17 @@ impl<'a> Game<'a> {
+@@ -10741,6 +10789,17 @@ impl<'a> Game<'a> {
              previous: now,
              last_input: now,
              pad: Default::default(),
@@ -1900,7 +1964,7 @@ index 16664ff..88d90ab 100644
      pub(super) fn pauses_game(&self) -> bool {
          self.has_singleplayer_server()
 diff --git a/crates/horizon-client/src/game/runtime/loading_screen.rs b/crates/horizon-client/src/game/runtime/loading_screen.rs
-index 2511aa2..845151b 100644
+index 2511aa2..0f8bc2d 100644
 --- a/crates/horizon-client/src/game/runtime/loading_screen.rs
 +++ b/crates/horizon-client/src/game/runtime/loading_screen.rs
 @@ -3,6 +3,11 @@
@@ -1999,7 +2063,7 @@ index 2511aa2..845151b 100644
  impl ApplicationHandler for App {
      fn resumed(&mut self, event_loop: &ActiveEventLoop) {
          match self {
-@@ -427,6 +488,150 @@ impl ApplicationHandler for App {
+@@ -427,6 +488,153 @@ impl ApplicationHandler for App {
          }
      }
      fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -2125,15 +2189,18 @@ index 2511aa2..845151b 100644
 +                        }
 +                    }
 +                }
++                let menu_inventory = matches!(game.host.screen, Screen::Inventory | Screen::Creative);
 +                let [left, top, width, height] = game.host.touch.settings.menu_escape_rect(
-+                    matches!(game.host.screen, Screen::Inventory | Screen::Creative), gui.width, gui.height,
++                    menu_inventory, gui.width, gui.height,
 +                );
 +                if x >= left && x < left + width && y >= top && y < top + height {
 +                    game.host.menu_escape_touch = Some(touch.id as u64);
 +                    let _ = game.host.key_pressed(KeyCode::Escape, KeyCode::Escape);
 +                    return;
 +                }
-+                let [kx, ky, kw, kh] = game.host.touch.settings.menu_keyboard_rect(gui.width, gui.height);
++                let [kx, ky, kw, kh] = game.host.touch.settings.menu_keyboard_rect(
++                    menu_inventory, gui.width, gui.height,
++                );
 +                if x >= kx && x < kx + kw && y >= ky && y < ky + kh {
 +                    game.host.menu_escape_touch = Some(touch.id as u64);
 +                    game.host.toggle_keyboard_input();

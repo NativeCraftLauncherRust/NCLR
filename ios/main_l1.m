@@ -384,9 +384,12 @@ static void NCLRWriteModSwitch(NSString *identifier, BOOL enabled, BOOL remove) 
 
 static NSString *const NCLRInventoryEscape = @"inventoryEscape";
 static NSString *const NCLRPauseEscape = @"pauseEscape";
+static NSString *const NCLRInventoryKeyboard = @"inventoryKeyboard";
+static NSString *const NCLRPauseKeyboard = @"pauseKeyboard";
 
 static BOOL NCLRIsMenuKey(NSString *key) {
-    return [key isEqualToString:NCLRInventoryEscape] || [key isEqualToString:NCLRPauseEscape];
+    return [key isEqualToString:NCLRInventoryEscape] || [key isEqualToString:NCLRPauseEscape] ||
+        [key isEqualToString:NCLRInventoryKeyboard] || [key isEqualToString:NCLRPauseKeyboard];
 }
 
 static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
@@ -473,6 +476,8 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         @"move" : @"移动",
         NCLRInventoryEscape : @"ESC",
         NCLRPauseEscape : @"ESC",
+        NCLRInventoryKeyboard : @"键盘",
+        NCLRPauseKeyboard : @"键盘",
     } mutableCopy];
     self.opacity = 0.55;
     self.layoutVersion = 2;
@@ -495,6 +500,8 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     self.positions = [@{
         NCLRInventoryEscape : @{@"x": @0.057, @"y": @0.066, @"size": @0.092},
         NCLRPauseEscape : @{@"x": @0.057, @"y": @0.066, @"size": @0.092},
+        NCLRInventoryKeyboard : @{@"x": @0.18, @"y": @0.066, @"size": @0.092},
+        NCLRPauseKeyboard : @{@"x": @0.18, @"y": @0.066, @"size": @0.092},
         @"forward" : @{ @"x" : @0.10, @"y" : @0.80, @"size" : @0.10 },
         @"back" : @{ @"x" : @0.16, @"y" : @0.88, @"size" : @0.08 },
         @"left" : @{ @"x" : @0.07, @"y" : @0.88, @"size" : @0.08 },
@@ -706,6 +713,8 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     self.positions = [@{
         NCLRInventoryEscape : @{@"x": @0.057, @"y": @0.066, @"size": @0.092},
         NCLRPauseEscape : @{@"x": @0.057, @"y": @0.066, @"size": @0.092},
+        NCLRInventoryKeyboard : @{@"x": @0.18, @"y": @0.066, @"size": @0.092},
+        NCLRPauseKeyboard : @{@"x": @0.18, @"y": @0.066, @"size": @0.092},
         @"forward" : @{ @"x" : @0.10, @"y" : @0.80, @"size" : @0.10 },
         @"back" : @{ @"x" : @0.16, @"y" : @0.88, @"size" : @0.08 },
         @"left" : @{ @"x" : @0.07, @"y" : @0.88, @"size" : @0.08 },
@@ -745,6 +754,8 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
 - (void)applyPreset:(NSString *)preset {
     NSDictionary *inventoryEscape = self.positions[NCLRInventoryEscape];
     NSDictionary *pauseEscape = self.positions[NCLRPauseEscape];
+    NSDictionary *inventoryKeyboard = self.positions[NCLRInventoryKeyboard];
+    NSDictionary *pauseKeyboard = self.positions[NCLRPauseKeyboard];
     if ([preset isEqualToString:@"classic"]) {
         self.positions = [@{
             @"forward" : @{ @"x" : @0.13, @"y" : @0.76, @"size" : @0.16 },
@@ -776,6 +787,8 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     }
     if (inventoryEscape) self.positions[NCLRInventoryEscape] = inventoryEscape;
     if (pauseEscape) self.positions[NCLRPauseEscape] = pauseEscape;
+    if (inventoryKeyboard) self.positions[NCLRInventoryKeyboard] = inventoryKeyboard;
+    if (pauseKeyboard) self.positions[NCLRPauseKeyboard] = pauseKeyboard;
 }
 
 - (void)save {
@@ -3713,8 +3726,12 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         for (NSDictionary *item in NCLRKeymap.shared.menuKeys) {
             if ([item[@"id"] isEqual:key] && [item[@"screen"] isEqual:screenName]) return YES;
         }
-        return screen == 1 ? [key isEqualToString:NCLRInventoryEscape]
-                           : [key isEqualToString:NCLRPauseEscape];
+        if (screen == 1) {
+            return [key isEqualToString:NCLRInventoryEscape] ||
+                   [key isEqualToString:NCLRInventoryKeyboard];
+        }
+        return [key isEqualToString:NCLRPauseEscape] ||
+               [key isEqualToString:NCLRPauseKeyboard];
     }
     return !NCLRIsMenuKey(key) && ![NCLRKeymap.shared isMenuCanvasKey:key];
 }
