@@ -610,12 +610,16 @@ static NSString *NCLRModIdentifier(NSString *path) {
             return;
         }
         NSTimeInterval elapsed = previous > 0 ? sample.timestamp - previous : 0;
-        previous = sample.timestamp;
         if (elapsed <= 0 || elapsed > 0.1) {
-            previous = 0;
+            // The first sample only seeds the clock; a long gap resets the
+            // filter. Keeping the timestamp here is what lets the next sample
+            // produce motion: writing 0 back would make every frame look like
+            // a first frame and discard the gyro forever.
+            previous = sample.timestamp;
             smoothYaw = smoothPitch = 0.0;
             return;
         }
+        previous = sample.timestamp;
         double direction = strongSelf.direction;
         double yawRate = sample.rotationRate.x;
         double pitchRate = sample.rotationRate.y;
