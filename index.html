@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#050505">
 <meta name="color-scheme" content="dark light">
-<title>NCLR — Horizon 26.3 的 macOS 启动器</title>
-<meta name="description" content="NCLR 是 Horizon 26.3 的 macOS 启动器：Microsoft 正版登录、本地资源准备、一次性会话，以及 Rust 引擎启动。">
-<meta property="og:title" content="NCLR — Horizon 26.3 的 macOS 启动器">
-<meta property="og:description" content="登录、准备资源，然后用一次性会话启动 Horizon 26.3。">
+<title>NCLR — iOS 上的 Minecraft: Java Edition 启动器</title>
+<meta name="description" content="NCLR 是面向 iOS 的独立 Minecraft 启动器，基于 Horizon 的 Rust 与 wgpu 引擎，负责账号、版本、设备端资源导出与触控适配。">
+<meta property="og:title" content="NCLR — iOS 上的 Minecraft 启动器">
+<meta property="og:description" content="在 iPhone 上登录、在设备端导出资源，然后启动 Horizon 26.3。">
 <meta property="og:type" content="website">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/img/nclr-icon-64.png">
 <link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
@@ -129,21 +129,21 @@
         <div class="intro-copy">
           <p class="overline"><span>01</span> NCLR / HORIZON 26.3 / v0.1.0</p>
           <h1 id="home-title">Horizon 26.3，<br>不经过 Java。</h1>
-          <p class="intro-lede">NCLR 是 Horizon 的 IOS 启动器。它登录 Microsoft 正版账号，准备你自己的 26.3 资源，生成一个 120 秒内有效的一次性会话，然后启动 Rust 引擎。</p>
-          <p class="intro-note">它不打包 Mojang 文件，也不做离线账号。引擎、资源或会话缺一项，都不会启动。</p>
+          <p class="intro-lede">NCLR 是面向 iOS 的独立 Minecraft 启动器，以 Horizon 的 Rust 与 wgpu 客户端为引擎。它负责启动器界面、账号与版本管理、设备端资源导出，以及触控和兼容修复。</p>
+          <p class="intro-note">它不打包 Mojang 游戏文件，也不提供资源镜像；版本资源由设备从官方服务下载。引擎、资源或会话缺一项，都不会启动。</p>
           <div class="intro-links">
             <a href="#/engine">启动路径 <span aria-hidden="true">→</span></a>
-            <a href="#/resources">资源账本 <span aria-hidden="true">→</span></a>
+            <a href="#/resources">设备端资源链 <span aria-hidden="true">→</span></a>
             <a href="#/download">下载最新版本 <span aria-hidden="true">→</span></a>
           </div>
         </div>
         <aside class="intro-facts" aria-label="版本信息">
           <dl>
-            <div><dt>引擎</dt><dd>Horizon 0.1.0</dd></div>
+            <div><dt>引擎</dt><dd>Horizon / Rust</dd></div>
             <div><dt>目标版本</dt><dd>Java Edition 26.3</dd></div>
-            <div><dt>资源包</dt><dd>HZR3 / 1.76 MiB</dd></div>
-            <div><dt>平台</dt><dd>macOS universal</dd></div>
-            <div><dt>版本</dt><dd>v0.1.0 / 2026-11-18</dd></div>
+            <div><dt>平台</dt><dd>iOS 15+ / arm64</dd></div>
+            <div><dt>资源</dt><dd>设备端导出</dd></div>
+            <div><dt>许可</dt><dd>LGPL-3.0</dd></div>
           </dl>
         </aside>
       </div>
@@ -165,22 +165,22 @@
           <li>
             <span class="path-index">01</span>
             <span class="path-icon"><svg class="ico" aria-hidden="true"><use href="#i-key"></use></svg></span>
-            <div><h3>登录</h3><p>Microsoft 设备码 → Xbox Live → XSTS → Minecraft Services。令牌存进 macOS Keychain。</p></div>
+            <div><h3>登录</h3><p>Microsoft 设备码 → Xbox Live → XSTS → Minecraft Services。令牌留在 iOS Keychain 与内存。</p></div>
           </li>
           <li>
             <span class="path-index">02</span>
             <span class="path-icon"><svg class="ico" aria-hidden="true"><use href="#i-scan"></use></svg></span>
-            <div><h3>检查</h3><p>读取官方 .minecraft、horizon-client、horizon-prepare 和 Java 25。缺什么会指出具体路径。</p></div>
+            <div><h3>检查</h3><p>从 Mojang 官方版本清单读取 26.3 的 client.jar 与资源索引，确认运行环境。</p></div>
           </li>
           <li>
             <span class="path-index">03</span>
             <span class="path-icon"><svg class="ico" aria-hidden="true"><use href="#i-layers"></use></svg></span>
-            <div><h3>准备</h3><p>调用 horizon-prepare --check/--complete，只读你自己的 26.3 副本。</p></div>
+            <div><h3>准备</h3><p>hzr-export 在设备上读取 JAR 字节码与数据文件，生成 38 组 Horizon 数据表。</p></div>
           </li>
           <li>
             <span class="path-index">04</span>
             <span class="path-icon"><svg class="ico" aria-hidden="true"><use href="#i-terminal"></use></svg></span>
-            <div><h3>启动</h3><p>生成 0600、随机名、120 秒有效的会话文件，用 --session-file 交给引擎。token 不进 argv。</p></div>
+            <div><h3>启动</h3><p>hzr-device 组装本地资源目录并生成会话文件，然后把一次性会话交给引擎。token 不进 argv。</p></div>
           </li>
         </ol>
         <a class="more" href="#/engine">完整的认证链路与启动日志 →</a>
@@ -190,23 +190,23 @@
         <header class="chapter-head">
           <p class="chapter-num">03</p>
           <h2 id="home-resources">资源</h2>
-          <p class="chapter-aside">238.4 MiB 的准备产物，压成 1.76 MiB 的单包。</p>
+          <p class="chapter-aside">在设备上导出 38 组数据表，不依赖 ship.hzr3。</p>
         </header>
         <div class="number-table" role="list">
-          <div role="listitem"><strong>238.4 MiB</strong><span>准备产物</span></div>
-          <div role="listitem"><strong>32.4 MiB</strong><span>压缩内容</span></div>
-          <div role="listitem"><strong>1.76 MiB</strong><span>HZR3 单包</span></div>
-          <div role="listitem"><strong>115.3 MiB</strong><span>设备端派生</span></div>
+          <div role="listitem"><strong>38/38</strong><span>Horizon 数据表</span></div>
+          <div role="listitem"><strong>1,286</strong><span>方块</span></div>
+          <div role="listitem"><strong>35,723</strong><span>方块状态</span></div>
+          <div role="listitem"><strong>1,658</strong><span>物品</span></div>
         </div>
-        <p class="plain-note">23,150 / 23,179 个文件与桌面产物逐字节一致，剩下 29 个差异在审计清单里。资源不内置、不上传，全部从你自己的 jar 派生。</p>
-        <a class="more" href="#/resources">转移账本与审计样本 →</a>
+        <p class="plain-note">14/14 创造模式分类、1,658/1,658 物品语义一致；原始 client.jar 与生成结果只留在当前设备。</p>
+        <a class="more" href="#/resources">设备端资源链 →</a>
       </section>
 
       <section class="chapter" aria-labelledby="home-security">
         <header class="chapter-head">
           <p class="chapter-num">04</p>
           <h2 id="home-security">边界</h2>
-          <p class="chapter-aside">不包含java</p>
+          <p class="chapter-aside">不打包 Mojang 文件，也不提供资源镜像。</p>
         </header>
         <ul class="principle-list">
           <li>
@@ -232,12 +232,15 @@
         <header class="chapter-head">
           <p class="chapter-num">05</p>
           <h2 id="home-ios">iOS</h2>
+          <p class="chapter-aside">iOS 15+ / arm64 / 横屏；触控、陀螺仪与 Metal 渲染在同一个 App。</p>
         </header>
         <div class="number-table number-table-3" role="list">
-          <div role="listitem"><strong>55.6 MB</strong><span>未签名 arm64 IPA</span></div>
-          <div role="listitem"><strong>173.9 MB</strong><span>主二进制</span></div>
-          <div role="listitem"><strong>M3</strong><span>真机启动引擎</span></div>
+          <div role="listitem"><strong>54.0 MB</strong><span>未签名开发构建</span></div>
+          <div role="listitem"><strong>38/38</strong><span>设备端数据表</span></div>
+          <div role="listitem"><strong>iOS 15+</strong><span>arm64 / 横屏</span></div>
         </div>
+        <p class="plain-note">支持触控布局编辑、陀螺仪视角、外接键盘/鼠标与局域网联机；游戏文件首次准备时从官方服务下载。</p>
+        <a class="more" href="#/ios">iOS 功能与安装 →</a>
       </section>
 
       <section class="chapter chapter-last" aria-labelledby="home-more">
@@ -252,7 +255,7 @@
           <a href="#/security"><span>04</span>边界</a>
           <a href="#/ios"><span>05</span>iOS</a>
           <a href="#/about"><span>06</span>关于</a>
-          <a href="https://github.com/zhangrongxue/horizon-ios" target="_blank" rel="noopener noreferrer"><span>↗</span>horizon-ios</a>
+          <a href="https://github.com/NativeCraftLauncherRust/NCLR" target="_blank" rel="noopener noreferrer"><span>↗</span>NCLR</a>
           <a href="#/download"><span>↓</span>下载 L1.1</a>
         </nav>
       </section>
@@ -266,9 +269,9 @@
         <div class="page-head-copy">
           <p class="overline"><span>02</span> 引擎 <span class="slash">/</span> Horizon 26.3</p>
           <h1 id="engine-title">从登录到引擎。</h1>
-          <p class="lede">Horizon 把 Minecraft: Java Edition 26.3 的客户端重写成 Rust。NCLR 负责登录、准备、校验和启动，把一次性会话交给引擎，然后退到后台。</p>
+          <p class="lede">Horizon 把 Minecraft: Java Edition 26.3 的客户端用 Rust 与 wgpu 重写。NCLR 在 iOS 上负责登录、版本与资源准备、校验和启动，把一次性会话交给引擎。</p>
           <div class="chip-row">
-            <span class="chip">Rust 1.100</span><span class="chip">26.3 引擎</span><span class="chip">无 JVM</span><span class="chip chip-violet">horizon-client</span>
+            <span class="chip">Rust 1.100</span><span class="chip">26.3 引擎</span><span class="chip">wgpu</span><span class="chip chip-violet">iOS / arm64</span>
           </div>
         </div>
         <div class="page-head-visual">
@@ -285,17 +288,17 @@
           <ol class="step-list">
             <li>
               <span class="step-num">01</span>
-              <div><h3>登录</h3><p>Microsoft 设备码，令牌写进 macOS Keychain，不落明文磁盘。</p></div>
+              <div><h3>登录</h3><p>Microsoft 设备码，令牌留在 iOS Keychain 与内存，不落明文磁盘。</p></div>
               <span class="icon-tile icon-tile-sm accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-key"></use></svg></span>
             </li>
             <li>
               <span class="step-num">02</span>
-              <div><h3>检查</h3><p>官方 <code>.minecraft</code>、<code>horizon-client</code>、<code>horizon-prepare</code> 与 Java 25。</p></div>
+              <div><h3>检查</h3><p>从 Mojang 官方版本清单读取 26.3 的 <code>client.jar</code> 与资源索引。</p></div>
               <span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-scan"></use></svg></span>
             </li>
             <li>
               <span class="step-num">03</span>
-              <div><h3>准备</h3><p><code>horizon-prepare --check/--complete</code>，实时日志与缺项诊断。</p></div>
+              <div><h3>准备</h3><p><code>hzr-export</code> 在设备上生成 38 组数据表，<code>hzr-device</code> 组装本地资源目录。</p></div>
               <span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-layers"></use></svg></span>
             </li>
             <li>
@@ -313,12 +316,13 @@
               <span class="term-title">nclr — horizon launch</span>
               <span class="term-badge">RUST</span>
             </div>
-            <div class="term-body" role="img" aria-label="NCLR 启动日志：环境检测、所有权校验、会话文件、引擎启动全部成功">
+            <div class="term-body" role="img" aria-label="NCLR 启动日志：环境检测、所有权校验、资源导出、会话文件、引擎启动全部成功">
               <div class="term-line"><span class="t-prompt">$</span><span class="t-cmd">nclr launch horizon</span><span class="caret"></span></div>
-              <div class="term-line"><span class="t-ok">✓</span><span>环境检测</span><span class="t-dim">.minecraft · horizon-client · Java 25</span></div>
+              <div class="term-line"><span class="t-ok">✓</span><span>环境检测</span><span class="t-dim">iOS 15 · arm64 · 官方版本清单</span></div>
               <div class="term-line"><span class="t-ok">✓</span><span>所有权校验</span><span class="t-dim">Minecraft Services · profile</span></div>
-              <div class="term-line"><span class="t-warn">⟳</span><span>会话文件</span><span class="t-dim">0600 · random name · 120s</span></div>
-              <div class="term-line"><span class="t-ok">✓</span><span>引擎</span><span class="t-dim">Horizon 0.1.0 · Rust</span></div>
+              <div class="term-line"><span class="t-ok">✓</span><span>资源导出</span><span class="t-dim">hzr-export · 38/38 tables</span></div>
+              <div class="term-line"><span class="t-ok">✓</span><span>会话文件</span><span class="t-dim">0600 · random name · 120s</span></div>
+              <div class="term-line"><span class="t-ok">✓</span><span>引擎</span><span class="t-dim">Horizon 0.1.0 · wgpu</span></div>
               <div class="term-line"><span class="t-go">→</span><span>正在进入 26.3</span><span class="t-dim">token 不在 argv</span></div>
             </div>
             <div class="term-foot"><span>SESSION 0600</span><span>ONE-SHOT</span><span>NO JVM</span></div>
@@ -380,8 +384,8 @@
       <section class="media-block" aria-labelledby="engine-ui">
         <div class="media-copy reveal">
           <p class="kicker">03 / 界面</p>
-          <h2 id="engine-ui">准备、账本和诊断，<br>在同一个窗口。</h2>
-          <p>资源管线、传输账本与诊断并排放在同一页。准备完成后，按钮从“准备资源”变成“开始游戏”，不需要猜现在该做什么。</p>
+          <h2 id="engine-ui">导出、清单和诊断，<br>在同一个窗口。</h2>
+          <p>版本清单、资源导出与诊断并排放在同一页。准备完成后，按钮从“准备资源”变成“开始游戏”，不需要猜现在该做什么。</p>
           <div class="metric-row">
             <div><strong>26.3</strong><span>目标版本</span></div>
             <div><strong>0600</strong><span>会话权限</span></div>
@@ -389,8 +393,8 @@
           </div>
         </div>
         <figure class="shot reveal">
-          <div class="shot-frame"><img src="assets/img/engine.png" alt="NCLR 引擎资源页面：资源目录、官方副本、准备器路径、传输账本" width="1180" height="760" decoding="async"></div>
-          <figcaption><span class="shot-dot"></span>引擎资源 · HZR3 传输账本 · 1180×760</figcaption>
+          <div class="shot-frame"><img src="assets/img/engine.png" alt="NCLR 引擎资源页面：版本清单、资源导出与诊断" width="1180" height="760" decoding="async"></div>
+          <figcaption><span class="shot-dot"></span>引擎资源 · 版本清单与导出 · 1180×760</figcaption>
         </figure>
       </section>
     </div>
@@ -401,108 +405,108 @@
     <div class="wrap">
       <header class="page-head">
         <div class="page-head-copy">
-          <p class="overline"><span>03</span> 资源 <span class="slash">/</span> route3</p>
-          <h1 id="resources-title">238.4 MiB 的产物，<br>压成 1.76 MiB。</h1>
-          <p class="lede">route3 不搬运资源，只记录派生规则。设备端从你自己的 jar 算出 115.3 MiB 资源，23,150 / 23,179 个文件与桌面产物逐字节一致。</p>
+          <p class="overline"><span>03</span> 资源 <span class="slash">/</span> 设备端</p>
+          <h1 id="resources-title">38 组数据表，<br>在设备上生成。</h1>
+          <p class="lede">NCLR 不下载 ship.hzr3，也不分发 Mojang 资源。设备从官方清单取 client.jar 与资源索引，用 hzr-export 生成 38 组 Horizon 数据表，再由 hzr-device 组装到本机。</p>
         </div>
         <div class="page-head-visual">
           <span class="icon-orb accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-layers"></use></svg></span>
-          <span class="page-head-caption">LEDGER<em>逐字节对账</em></span>
+          <span class="page-head-caption">EXPORT<em>设备端生成</em></span>
         </div>
       </header>
 
       <div class="ledger-hero">
         <article class="mega-card glass reveal" data-spot>
-          <p class="kicker">01 / 体积</p>
-          <p class="mega"><span>1.76</span><em>MiB</em></p>
-          <p class="mega-sub">单归档 · 35 个文件 · 设备端派生 115.3 MiB</p>
+          <p class="kicker">01 / 覆盖</p>
+          <p class="mega"><span>38</span><em>/38</em></p>
+          <p class="mega-sub">Horizon 数据表 · 方块 / 物品 / 状态全覆盖</p>
           <div class="tag-row">
-            <span class="tag tag-mint">18.3× 压缩</span>
-            <span class="tag tag-blue">-99.3% 体积</span>
-            <span class="tag">只存规则</span>
+            <span class="tag tag-mint">38/38 数据表</span>
+            <span class="tag tag-blue">1,286 方块</span>
+            <span class="tag">1,658 物品</span>
           </div>
           <div class="mega-foot">
-            <span><svg class="ico" aria-hidden="true"><use href="#i-scan"></use></svg>35 文件 / 单包</span>
-            <span><svg class="ico" aria-hidden="true"><use href="#i-check-circle"></use></svg>47% 已审计</span>
+            <span><svg class="ico" aria-hidden="true"><use href="#i-scan"></use></svg>hzr-export / 设备端</span>
+            <span><svg class="ico" aria-hidden="true"><use href="#i-check-circle"></use></svg>38/38 已覆盖</span>
           </div>
         </article>
 
         <article class="bars-card glass reveal" data-spot style="--d:80ms">
           <div class="bars-head">
-            <p class="kicker">02 / 账本</p>
-            <span class="badge badge-mint">实测</span>
+            <p class="kicker">02 / 覆盖</p>
+            <span class="badge badge-mint">设备端</span>
           </div>
           <div class="ledger-row">
-            <div class="ledger-top"><span>原始产物</span><strong>238.4 MiB</strong></div>
+            <div class="ledger-top"><span>Horizon 数据表</span><strong>38/38</strong></div>
             <div class="bar"><span style="--w:100%"></span></div>
           </div>
           <div class="ledger-row">
-            <div class="ledger-top"><span>压缩内容</span><strong>32.4 MiB</strong></div>
-            <div class="bar bar-blue"><span style="--w:13.6%"></span></div>
+            <div class="ledger-top"><span>方块</span><strong>1,286 / 1,286</strong></div>
+            <div class="bar bar-blue"><span style="--w:100%"></span></div>
           </div>
           <div class="ledger-row">
-            <div class="ledger-top"><span>设备端派生</span><strong>115.3 MiB</strong></div>
-            <div class="bar bar-violet"><span style="--w:48.4%"></span></div>
+            <div class="ledger-top"><span>方块状态</span><strong>35,723</strong></div>
+            <div class="bar bar-violet"><span style="--w:100%"></span></div>
           </div>
           <div class="ledger-row">
-            <div class="ledger-top"><span>HZR3 单包</span><strong>1.76 MiB</strong></div>
-            <div class="bar bar-mint"><span style="--w:1.8%"></span></div>
+            <div class="ledger-top"><span>物品</span><strong>1,658 / 1,658</strong></div>
+            <div class="bar bar-mint"><span style="--w:100%"></span></div>
           </div>
-          <p class="fig-note">长度按 238.4 MiB 归一；数值取自 route3 的转移账本与 47% 审计样本。</p>
+          <p class="fig-note">数值来自 hzr-export 的覆盖清单；原始文件与生成结果只留在设备。</p>
         </article>
       </div>
 
       <section class="block two-col" aria-labelledby="resources-why">
         <article class="ring-card glass reveal" data-spot>
-          <div class="ring" style="--p:99.87" role="img" aria-label="23,150 / 23,179 个文件逐字节一致，占 99.87%">
-            <div class="ring-core"><strong>99.87<small>%</small></strong><span>一致</span></div>
+          <div class="ring" style="--p:100" role="img" aria-label="38/38 组 Horizon 数据表，全部在设备端生成">
+            <div class="ring-core"><strong>100<small>%</small></strong><span>覆盖</span></div>
           </div>
-          <h3>23,150 / 23,179</h3>
-          <p>设备端从你的 jar 派生出的文件，与桌面准备产物逐字节一致。剩下 29 个差异在审计清单里逐项标注。</p>
-          <div class="tag-row"><span class="tag">逐字节</span><span class="tag">可复核</span></div>
+          <h3>38 / 38</h3>
+          <p>hzr-export 覆盖 38 组 Horizon 数据表：方块、物品、碰撞、粒子、声音、命令与生物数据。所有转换在设备上完成。</p>
+          <div class="tag-row"><span class="tag">设备端</span><span class="tag">可复核</span></div>
         </article>
 
         <div class="why-copy reveal" style="--d:80ms">
           <p class="kicker">03 / 方法</p>
-          <h2 id="resources-why">为什么只有 1.76 MiB。</h2>
+          <h2 id="resources-why">为什么不再需要 ship.hzr3。</h2>
           <ul class="numbered-list">
-            <li><span>01</span><div><strong>只存规则，不存资源</strong><p>HZR3 记录路径、来源与哈希，不携带 Mojang 的 assets。</p></div></li>
-            <li><span>02</span><div><strong>设备端从 jar 派生</strong><p>资源由你本机的 jar 重算，网络只传表包，不传游戏内容。</p></div></li>
-            <li><span>03</span><div><strong>每个文件对哈希</strong><p>派生结果与桌面产物逐字节比较，差异进入审计清单。</p></div></li>
+            <li><span>01</span><div><strong>官方清单 + client.jar</strong><p>从 Mojang 官方版本清单获取当前版本的 client.jar 与资源索引，文件只保存在本机。</p></div></li>
+            <li><span>02</span><div><strong>hzr-export 在设备上生成</strong><p>读取 JAR 字节码和 Minecraft 数据文件，生成 38 组 Horizon 数据表。</p></div></li>
+            <li><span>03</span><div><strong>hzr-device 组装本地资源</strong><p>写入 horizon-resources.json 与完成标记；原始文件不进入 Git、CI 或发布包。</p></div></li>
           </ul>
           <div class="note note-mint">
             <span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-shield"></use></svg></span>
-            <div><strong>没有离线下载</strong><p>没有云端资源，也没有“内置整合包”。每条分支都从你自己的副本开始。</p></div>
+            <div><strong>没有资源镜像</strong><p>没有云端资源，也没有 ship.hzr3；所有官方文件只从官方服务下载。</p></div>
           </div>
         </div>
       </section>
 
       <section class="block" aria-labelledby="resources-steps">
         <div class="block-head reveal">
-          <div><p class="kicker">04 / 流程</p><h2 id="resources-steps">准备、打包、派生。</h2></div>
-          <p class="block-aside">三个动作，全部发生在你能看到路径的地方。</p>
+          <div><p class="kicker">04 / 流程</p><h2 id="resources-steps">下载、导出、组装。</h2></div>
+          <p class="block-aside">三个动作，全部在设备上完成。</p>
         </div>
         <div class="pipeline-grid">
           <article class="card pipeline-card reveal" data-spot>
             <span class="icon-tile accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-scan"></use></svg></span>
             <span class="step-num">01</span>
-            <h3>准备</h3>
-            <p>在你自己的机器上读 26.3，输出到 <code>horizon-client/26.3</code>；缺项会给出官方副本路径。</p>
-            <code class="code-chip">horizon-prepare --complete</code>
+            <h3>下载</h3>
+            <p>从 Mojang 官方版本清单获取 26.3 的 client.jar 与资源索引，只保存在本机。</p>
+            <code class="code-chip">Mojang manifest → client.jar</code>
           </article>
           <article class="card pipeline-card reveal" data-spot style="--d:70ms">
-            <span class="icon-tile accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-package"></use></svg></span>
+            <span class="icon-tile accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-layers"></use></svg></span>
             <span class="step-num">02</span>
-            <h3>打包</h3>
-            <p><code>hzr-pack</code> 把准备产物固化成 HZR3 表包：35 个文件，一个归档。</p>
-            <code class="code-chip">hzr-pack → ship.hzr3</code>
+            <h3>导出</h3>
+            <p><code>hzr-export</code> 读取 JAR 字节码与数据文件，生成 38 组 Horizon 数据表。</p>
+            <code class="code-chip">hzr-export → 38 tables</code>
           </article>
           <article class="card pipeline-card reveal" data-spot style="--d:140ms">
             <span class="icon-tile accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-route"></use></svg></span>
             <span class="step-num">03</span>
-            <h3>派生</h3>
-            <p>设备端用你的 jar 重算 115.3 MiB 资源，再与桌面产物逐字节对账。</p>
-            <code class="code-chip">derive → 115.3 MiB</code>
+            <h3>组装</h3>
+            <p><code>hzr-device</code> 把数据表组装成本地资源目录与 horizon-resources.json。</p>
+            <code class="code-chip">hzr-device → resources</code>
           </article>
         </div>
       </section>
@@ -516,7 +520,7 @@
         <div class="page-head-copy">
           <p class="overline"><span>04</span> 边界 <span class="slash">/</span> 第一版</p>
           <h1 id="security-title">这个启动器<br>不做什么。</h1>
-          <p class="lede">NCLR 不打包 Mojang 文件，不做离线账号，也不复制别家启动器的代码。下面是第一版实际遵守的边界，以及还没做到的部分。</p>
+          <p class="lede">NCLR 不打包 Mojang 文件，不做离线账号，也不复制别家启动器的代码。下面是这个版本实际遵守的边界。</p>
         </div>
         <div class="page-head-visual">
           <span class="icon-orb accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-shield"></use></svg></span>
@@ -555,7 +559,7 @@
         <div class="token-panel glass reveal">
           <ol class="token-flow">
             <li><span class="icon-tile icon-tile-sm accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-key"></use></svg></span><strong>Microsoft</strong><small>设备码</small></li>
-            <li><span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-lock"></use></svg></span><strong>Keychain</strong><small>macOS</small></li>
+            <li><span class="icon-tile icon-tile-sm accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-lock"></use></svg></span><strong>Keychain</strong><small>iOS</small></li>
             <li><span class="icon-tile icon-tile-sm accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-cpu"></use></svg></span><strong>内存</strong><small>NCLR 进程</small></li>
             <li><span class="icon-tile icon-tile-sm accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-file"></use></svg></span><strong>0600 文件</strong><small>120 秒</small></li>
             <li><span class="icon-tile icon-tile-sm accent-amber"><svg class="ico" aria-hidden="true"><use href="#i-terminal"></use></svg></span><strong>引擎子进程</strong><small>读完即用</small></li>
@@ -569,10 +573,8 @@
         </div>
       </section>
 
-      <section class="block" aria-labelledby="security-honest">
-        <ul class="status-list reveal">
-        </ul>
-        <p class="legal-line"><svg class="ico" aria-hidden="true"><use href="#i-book"></use></svg>NCLR 代码以 MIT 发布，iOS port 与 Horizon 对齐 LGPL-3.0-or-later；Minecraft 是 Mojang Synergies AB 的商标，本项目不是官方产品。</p>
+      <section class="block">
+        <p class="legal-line"><svg class="ico" aria-hidden="true"><use href="#i-book"></use></svg>NCLR 以 LGPL-3.0 发布；Horizon 与第三方组件继续适用各自的许可证。Minecraft 是 Mojang Synergies AB 的商标，本项目不是官方产品。</p>
       </section>
     </div>
   </section>
@@ -584,19 +586,19 @@
         <div class="page-head-copy">
           <p class="overline"><span>05</span> iOS <span class="slash">/</span> M1–M6</p>
           <h1 id="ios-title">Horizon 的<br>iOS 移植。</h1>
-          <p class="lede">Horizon 引擎、route3 的 HZR3 资源包、UIKit 壳和 NCLR 品牌被合进一个 IPA。M3 已经在 iPhone 上启动引擎；现在还不是一个能玩的游戏。</p>
+          <p class="lede">Horizon 引擎、NCLR 启动器与 iOS 集成被合进一个未签名开发构建。当前版本已经能在 iPhone 上启动引擎，重点是把账号、设备端资源导出和触控流程走通。</p>
         </div>
         <div class="page-head-visual">
           <span class="icon-orb accent-amber"><svg class="ico" aria-hidden="true"><use href="#i-phone"></use></svg></span>
-          <span class="page-head-caption">IOS<em>arm64 · 静态库</em></span>
+          <span class="page-head-caption">IOS<em>arm64 · 设备端</em></span>
         </div>
       </header>
 
       <div class="device-strip glass reveal">
-        <div class="device-stat"><span class="stat-icon"><svg class="ico" aria-hidden="true"><use href="#i-package"></use></svg></span><div><strong>55.6 <em>MB</em></strong><small>未签名 arm64 IPA</small></div></div>
-        <div class="device-stat"><span class="stat-icon"><svg class="ico" aria-hidden="true"><use href="#i-cpu"></use></svg></span><div><strong>173.9 <em>MB</em></strong><small>主二进制</small></div></div>
+        <div class="device-stat"><span class="stat-icon"><svg class="ico" aria-hidden="true"><use href="#i-package"></use></svg></span><div><strong>54.0 <em>MB</em></strong><small>未签名开发构建</small></div></div>
+        <div class="device-stat"><span class="stat-icon"><svg class="ico" aria-hidden="true"><use href="#i-cpu"></use></svg></span><div><strong>38/38</strong><small>设备端数据表</small></div></div>
         <div class="device-stat"><span class="stat-icon"><svg class="ico" aria-hidden="true"><use href="#i-shield"></use></svg></span><div><strong>0</strong><small>内置游戏资源</small></div></div>
-        <div class="device-stat"><span class="stat-icon"><svg class="ico" aria-hidden="true"><use href="#i-check-circle"></use></svg></span><div><strong>M3</strong><small>真机启动引擎</small></div></div>
+        <div class="device-stat"><span class="stat-icon"><svg class="ico" aria-hidden="true"><use href="#i-check-circle"></use></svg></span><div><strong>iOS 15+</strong><small>arm64 / 横屏</small></div></div>
       </div>
 
       <section class="block" aria-labelledby="ios-milestones">
@@ -632,25 +634,25 @@
           <li class="t-item is-built reveal" style="--d:180ms">
             <span class="t-node"><svg class="ico" aria-hidden="true"><use href="#i-route"></use></svg></span>
             <div class="t-body">
-              <div class="t-top"><strong>M4</strong><span class="badge badge-blue">已构建 · 待真机重测</span></div>
-              <h3>从 Documents 读取导入资源</h3>
-              <p>优先读取 <code>Documents/horizon-client/26.3</code>，开启文件共享与就地打开。</p>
+              <div class="t-top"><strong>M4</strong><span class="badge badge-mint">已接入</span></div>
+              <h3>设备端资源导出</h3>
+              <p><code>hzr-export</code> 生成 38 组 Horizon 数据表，<code>hzr-device</code> 组装本地资源；不再依赖 <code>ship.hzr3</code>。</p>
             </div>
           </li>
-          <li class="t-item reveal" style="--d:240ms">
+          <li class="t-item is-built reveal" style="--d:240ms">
             <span class="t-node"><svg class="ico" aria-hidden="true"><use href="#i-upload"></use></svg></span>
             <div class="t-body">
-              <div class="t-top"><strong>M5</strong><span class="badge badge-amber">进行中</span></div>
-              <h3>准备并导入你自己的 26.3 资源</h3>
-              <p>资源已在桌面准备，等待导入设备并完成首次可玩验证。</p>
+              <div class="t-top"><strong>M5</strong><span class="badge badge-mint">已支持</span></div>
+              <h3>触控、陀螺仪与外设</h3>
+              <p>支持触控布局编辑、按键大小与位置调整、陀螺仪视角，以及外接键盘和鼠标。</p>
             </div>
           </li>
           <li class="t-item reveal" style="--d:300ms">
             <span class="t-node"><svg class="ico" aria-hidden="true"><use href="#i-play"></use></svg></span>
             <div class="t-body">
-              <div class="t-top"><strong>M6</strong><span class="badge badge-muted">未开始</span></div>
-              <h3>触屏操作、音频、可玩世界</h3>
-              <p>当前版本没有触控，也没有音频；它还不是一款能玩的手游。</p>
+              <div class="t-top"><strong>M6</strong><span class="badge badge-amber">进行中</span></div>
+              <h3>音频、联机与可玩验证</h3>
+              <p>局域网与服务器联机、Metal 高刷新率渲染已在链路里；完整可玩验证仍在推进。</p>
             </div>
           </li>
         </ol>
@@ -659,14 +661,14 @@
       <div class="ios-lower">
         <article class="import-card glass reveal" data-spot>
           <p class="kicker">02 / 导入</p>
-          <h3>资源落在这里</h3>
-          <div class="path-box"><span class="path-root">Documents</span><span class="path-sep">/</span><span>horizon-client</span><span class="path-sep">/</span><strong>26.3</strong></div>
+          <h3>资源在设备上生成</h3>
+          <div class="path-box"><span class="path-root">Documents</span><span class="path-sep">/</span><strong>horizon-resources.json</strong></div>
           <ul class="mini-list">
-            <li><svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg><code>UIFileSharingEnabled</code> 已开启</li>
-            <li><svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg><code>LSSupportsOpeningDocumentsInPlace</code> 已开启</li>
-            <li><svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg>空 bundle 目录只作为回退</li>
+            <li><svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg>官方版本清单与 <code>client.jar</code></li>
+            <li><svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg><code>hzr-export</code> 生成 38 组数据表</li>
+            <li><svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg><code>hzr-device</code> 组装本地资源</li>
           </ul>
-          <p class="fig-note">IPA 不含任何 Minecraft 资源；可玩构建需要你导入自己准备的 26.3。</p>
+          <p class="fig-note">IPA 不含任何 Minecraft 资源；首次准备时从官方服务下载。</p>
         </article>
       </div>
     </div>
@@ -679,7 +681,7 @@
         <div class="page-head-copy">
           <p class="overline"><span>06</span> 关于 <span class="slash">/</span> v0.1.0</p>
           <h1 id="about-title">这个版本<br>是怎么来的。</h1>
-          <p class="lede">Horizon 提供引擎，route3 提供资源管线，NCLR 把它们接成一条启动路径。作者是 NativeCraftLauncherRust 的 <a class="author-intro-link" href="https://github.com/zhangrongxue" target="_blank" rel="noopener noreferrer">ZRXMAXLNX</a> 与 <a class="author-intro-link" href="https://github.com/kexinOvO" target="_blank" rel="noopener noreferrer">可心</a>，第一版 v0.1.0，2026-11-18。</p>
+          <p class="lede">Horizon 提供 Rust 与 wgpu 的引擎，NCLR 负责 iOS 启动器、账号与版本管理、设备端资源导出和触控适配。作者是 NativeCraftLauncherRust 的 <a class="author-intro-link" href="https://github.com/zhangrongxue" target="_blank" rel="noopener noreferrer">ZRXMAXLNX</a> 与 <a class="author-intro-link" href="https://github.com/kexinOvO" target="_blank" rel="noopener noreferrer">可心</a>，第一版 v0.1.0，2026-11-18。</p>
         </div>
         <div class="page-head-visual">
           <span class="icon-orb accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-sparkle"></use></svg></span>
@@ -692,7 +694,7 @@
           <img class="avatar author-avatar" src="assets/img/avatar-zhangrongxue.png" alt="ZRXMAXLNX 的 GitHub 头像" width="64" height="64">
           <div>
             <h3><a class="author-link" href="https://github.com/zhangrongxue" target="_blank" rel="noopener noreferrer" title="在 GitHub 打开 ZRXMAXLNX">ZRXMAXLNX <span aria-hidden="true">↗</span></a></h3>
-            <p>产品 / Tauri 外壳 / 认证链路 / 视觉 <a class="author-handle" href="https://github.com/zhangrongxue" target="_blank" rel="noopener noreferrer">@zhangrongxue</a></p>
+            <p>产品 / iOS 集成 / 认证链路 / 视觉 <a class="author-handle" href="https://github.com/zhangrongxue" target="_blank" rel="noopener noreferrer">@zhangrongxue</a></p>
           </div>
           <span class="badge badge-mint">作者</span>
         </article>
@@ -700,7 +702,7 @@
           <img class="avatar author-avatar" src="assets/img/avatar-kexinovo.png" alt="可心的 GitHub 头像" width="64" height="64">
           <div>
             <h3><a class="author-link" href="https://github.com/kexinOvO" target="_blank" rel="noopener noreferrer" title="在 GitHub 打开可心">可心 <span aria-hidden="true">↗</span></a></h3>
-            <p>产品 / 引擎对接 / 资源管线 / 验证 <a class="author-handle" href="https://github.com/kexinOvO" target="_blank" rel="noopener noreferrer">@kexinOvO</a></p>
+            <p>产品 / 资源导出 / 设备端组装 / 验证 <a class="author-handle" href="https://github.com/kexinOvO" target="_blank" rel="noopener noreferrer">@kexinOvO</a></p>
           </div>
           <span class="badge badge-mint">作者</span>
         </article>
@@ -708,37 +710,37 @@
 
       <section class="block" aria-labelledby="about-origin">
         <div class="block-head reveal">
-          <div><p class="kicker">01 / 来源</p><h2 id="about-origin">三个来源。</h2></div>
-          <p class="block-aside">源码目录仍叫 <code>zrx-launcher</code>，产品名是 NCLR。</p>
+          <div><p class="kicker">01 / 来源</p><h2 id="about-origin">三个部分。</h2></div>
+          <p class="block-aside">产品名是 NCLR；仓库在 NativeCraftLauncherRust 组织。</p>
         </div>
         <div class="origin-grid">
           <article class="origin-card glass reveal" data-spot>
             <span class="icon-tile accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-cpu"></use></svg></span>
             <p class="kicker">引擎</p>
             <h3>Horizon</h3>
-            <p>Minecraft: Java Edition 26.3 的 Rust 重写客户端，用自己的正版副本准备资源，以 <code>horizon-client</code> 原生运行。</p>
-            <span class="tag-row"><span class="tag">Rust</span><span class="tag">26.3</span></span>
+            <p>Minecraft: Java Edition 26.3 的 Rust 与 wgpu 客户端实现；NCLR 以它为引擎基础。</p>
+            <span class="tag-row"><span class="tag">Rust</span><span class="tag">wgpu</span></span>
           </article>
           <article class="origin-card glass reveal" data-spot style="--d:70ms">
             <span class="icon-tile accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-layers"></use></svg></span>
-            <p class="kicker">资源</p>
-            <h3>route3</h3>
-            <p>把 238.4 MiB 的准备产物压成 1.76 MiB 的 HZR3 表包；设备端从用户自己的 jar 派生资源。</p>
-            <span class="tag-row"><span class="tag">HZR3</span><span class="tag">18.3×</span></span>
+            <p class="kicker">资源链</p>
+            <h3>设备端导出</h3>
+            <p><code>hzr-export</code> 在设备上从官方 <code>client.jar</code> 生成 38 组 Horizon 数据表，<code>hzr-device</code> 组装本地资源，不依赖 <code>ship.hzr3</code>。</p>
+            <span class="tag-row"><span class="tag">38/38</span><span class="tag">设备端</span></span>
           </article>
           <article class="origin-card glass reveal" data-spot style="--d:140ms">
             <span class="icon-tile accent-mint"><svg class="ico" aria-hidden="true"><use href="#i-sparkle"></use></svg></span>
             <p class="kicker">产品</p>
             <h3>NCLR</h3>
-            <p>产品化、正版登录、macOS 外壳、视觉系统，以及把引擎与资源管线接起来的启动器。</p>
-            <span class="tag-row"><span class="tag">Tauri</span><span class="tag">v0.1.0</span></span>
+            <p>面向 iOS 的独立启动器：界面、iOS 集成、账号与版本管理、触控布局和兼容修复。</p>
+            <span class="tag-row"><span class="tag">iOS</span><span class="tag">LGPL-3.0</span></span>
           </article>
         </div>
       </section>
 
       <section class="block" aria-labelledby="about-gallery">
         <div class="block-head reveal">
-          <div><p class="kicker">02 / 界面</p><h2 id="about-gallery">五个工作台。</h2></div>
+          <div><p class="kicker">02 / 界面</p><h2 id="about-gallery">四个工作台。</h2></div>
           <a class="link-more" href="#/download">下载 L1.1<svg class="ico" aria-hidden="true"><use href="#i-download"></use></svg></a>
         </div>
         <div class="gallery">
@@ -766,10 +768,10 @@
           <p class="kicker">03 / 下一版</p>
           <h2 id="about-roadmap">下一版先修这些。</h2>
           <ol class="roadmap-list">
-            <li><span>01</span><p>在 macOS 真机跑一次构建，修签名、公证与 Keychain 权限。</p></li>
-            <li><span>02</span><p>用真实 Azure 应用与已审核 App ID 做完整登录。</p></li>
-            <li><span>03</span><p>解析 <code>--progress json</code>，把近似进度变成真实百分比。</p></li>
-            <li><span>04</span><p>Java 实例 classpath 启动，作为 Rust 引擎的兼容回退。</p></li>
+            <li><span>01</span><p>在 iOS 真机完成签名、设备授权和首次安装验证。</p></li>
+            <li><span>02</span><p>用真实 Microsoft 账号完成登录与 Minecraft 所有权校验。</p></li>
+            <li><span>03</span><p>在设备上完成 26.3 资源导出与首次进入世界。</p></li>
+            <li><span>04</span><p>补齐触控布局、陀螺仪、外接键盘/鼠标和联机稳定性。</p></li>
             <li><span>05</span><p>自动更新：签名清单 + 回滚。</p></li>
           </ol>
         </div>
@@ -778,12 +780,12 @@
           <h3>继续往下看</h3>
           <a class="link-row" href="https://github.com/NativeCraftLauncherRust/NCLR" target="_blank" rel="noopener noreferrer">
             <span class="icon-tile icon-tile-sm accent-violet"><svg class="ico" aria-hidden="true"><use href="#i-github"></use></svg></span>
-            <span><strong>NativeCraftLauncherRust</strong><small>GitHub · port code only</small></span>
+            <span><strong>NativeCraftLauncherRust</strong><small>GitHub · iOS 启动器</small></span>
             <svg class="ico link-arrow" aria-hidden="true"><use href="#i-external"></use></svg>
           </a>
           <a class="link-row" href="#/security">
             <span class="icon-tile icon-tile-sm accent-blue"><svg class="ico" aria-hidden="true"><use href="#i-book"></use></svg></span>
-            <span><strong>边界与已知限制</strong><small>诚实的验收清单</small></span>
+            <span><strong>边界与原则</strong><small>不打包、不镜像、不破解</small></span>
             <svg class="ico link-arrow" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
           </a>
           <p class="legal-line"><svg class="ico" aria-hidden="true"><use href="#i-shield"></use></svg>不是 Mojang / Microsoft 官方产品，未获其背书。你需要自己拥有 Minecraft: Java Edition。</p>
@@ -799,7 +801,7 @@
         <div class="page-head-copy">
           <p class="overline"><span>07</span> 下载 <span class="slash">/</span> L1.1</p>
           <h1 id="download-title">下载 NCLR</h1>
-          <p class="lede">最新测试包是 L1.1，iOS 15+ / arm64。IPA 还没有发布</p>
+          <p class="lede">最新测试包是 L1.1，iOS 15+ / arm64。未签名开发构建；不含游戏资源，首次准备从官方服务下载。</p>
         </div>
       </header>
 
@@ -808,32 +810,32 @@
           <div class="download-icon"><img src="assets/img/nclr-icon-512.png" alt="NCLR 图标" width="88" height="88"></div>
           <p class="kicker">01 / 最新版本</p>
           <h2 class="download-version" id="download-version">L1.1 <small>开发者测试版</small></h2>
-          <p class="download-lede">单 App：点“启动游戏”后才启动引擎。含键位映射、26.3 资源树和 late-start 修复。</p>
+          <p class="download-lede">单 App：点“启动游戏”后才启动引擎。含键位映射、设备端资源导出和 late-start 修复。</p>
           <div class="download-actions">
-            <a class="download-button" href="https://github.com/NativeCraftLauncherRust/NCLR/releases" target="_blank" rel="noopener noreferrer">查看最新进度<span aria-hidden="true">↗</span></a>
+            <a class="download-button" href="https://github.com/NativeCraftLauncherRust/NCLR/releases" target="_blank" rel="noopener noreferrer">查看 Releases<span aria-hidden="true">↗</span></a>
             <a class="download-secondary" href="https://github.com/NativeCraftLauncherRust/NCLR" target="_blank" rel="noopener noreferrer">打开 NCLR 仓库</a>
           </div>
-          <p class="download-note">IPA 目前未发布。未签名包发布后会放在组织仓库的 Releases；已签名包只绑定测试设备，不公开。</p>
+          <p class="download-note">未签名开发构建。签名、设备授权和安装由使用者自行完成；IPA 不包含任何 Mojang 游戏资源。组织仓库尚未发布 Release，最新构建为 #10。</p>
         </div>
         <aside class="download-facts" aria-label="版本信息">
           <dl class="download-meta">
             <div><dt>版本</dt><dd>1.1</dd></div>
-            <div><dt>构建</dt><dd>202611201105</dd></div>
+            <div><dt>构建</dt><dd>10</dd></div>
             <div><dt>日期</dt><dd>2026-11-20</dd></div>
-            <div><dt>大小</dt><dd>105 MB</dd></div>
+            <div><dt>大小</dt><dd>54.04 MB</dd></div>
             <div><dt>平台</dt><dd>iOS 15+ / arm64</dd></div>
             <div><dt>方向</dt><dd>横屏</dd></div>
           </dl>
-          <p class="download-sha">未签名包 SHA-256<br><code>8174675B0A968E984EC010DC976BC6BF62DFF8F00A844075B112EFF7C7B3167F</code></p>
+          <p class="download-sha">未签名包 SHA-256<br><code>57EB46ABC9B544F48A4D0B6561C714D584A2D6652DE50697862BF0012AE63FFA</code></p>
         </aside>
       </section>
 
       <section class="block two-col" aria-labelledby="download-install">
         <div>
           <p class="kicker">02 / 安装</p>
-          <h2 id="download-install">发布后的安装顺序。</h2>
+          <h2 id="download-install">安装未签名构建。</h2>
           <ol class="download-steps">
-          <li><span>01</span><p>用 Sideloadly 安装未签名 IPA，或用自己的 Apple ID 重签。</p></li>
+          <li><span>01</span><p>用 Sideloadly 安装未签名开发构建，或用自己的 Apple ID 重签。</p></li>
             <li><span>02</span><p>打开 NCLR，先进入启动器；点“启动游戏”进入引擎。</p></li>
           </ol>
         </div>
@@ -859,10 +861,10 @@
     </nav>
     <div class="footer-meta">
       <span>v0.1.0 · 2026-11-18</span>
-      <span>MIT / LGPL-3.0-or-later</span>
+      <span>LGPL-3.0</span>
       <span>非官方产品</span>
     </div>
-    <p class="footer-note">本页是工作区 NCLR文档的前端呈现；文案与数字取自真实的开发日志。Minecraft 是 Mojang Synergies AB 的商标。</p>
+    <p class="footer-note">本页是 NCLR 的项目页；文案与数字取自 NativeCraftLauncherRust/NCLR README 与开发日志。Minecraft 是 Mojang Synergies AB 的商标。</p>
   </div>
 </footer>
 
