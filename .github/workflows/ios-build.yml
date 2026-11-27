@@ -47,6 +47,7 @@ jobs:
             BUNDLE_ID=dev.zrxmaxlnx.nclr \
             IPA_NAME=NCLR-L10.6-unsigned.ipa \
             ICON_DIR="$PWD/ios/icons" \
+            SHADER_PACK_DIR="$PWD/shaderpacks" \
             RESOURCE_DIR="" SHIP_BUNDLE="" \
             WASM_STD_DIR="$PWD/ios/wasm-std" \
             BUILD_DIR="$PWD/build-nclr" DIST_DIR="$PWD/dist-nclr" \
