@@ -25,6 +25,8 @@
 //! then swaps it into place, so a failed run never costs the player a working
 //! tree.
 
+pub mod tables;
+
 use hzr_fetch::{bundle as staging, facts, gameplay, jar, model_states, nbt, worldgen};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -278,6 +280,21 @@ pub fn assemble(
     done.bytes += write(&bp, &rebuilt)?;
     done.restored_tables += 1;
 
+    finish(out, client_jar, index, store, &mut done)?;
+    Ok(done)
+}
+
+/// Everything after the tables are in place: the asset index, the assets and
+/// data trees, the derived tables and the manifests. The bundle path and the
+/// jar-only path share this half.
+fn finish(
+    out: &Path,
+    client_jar: &Path,
+    index: &Path,
+    store: &Path,
+    done: &mut Assembled,
+) -> Result<(), String> {
+    let shared = out.join("_shared");
     // The duplicate collision table is the root one, again.
     let collision = read(&out.join("cached-collision.nbt"))?;
     done.bytes += write(&out.join(staging::DUPLICATE), &collision)?;
@@ -376,6 +393,127 @@ pub fn assemble(
     let flags_bytes = serde_json::to_vec(&flags).map_err(|e| e.to_string())?;
     done.bytes += write(&out.join("worldgen/block_flags.json"), &flags_bytes)?;
 
+    // The launcher's resource manifest. The engine only reads `schema` and
+    // `minecraft`; the hashes in the old Java bundle are not needed after the
+    // tables are derived on device.
+    let manifest = serde_json::json!({
+        "schema": 7,
+        "minecraft": "26.3",
+        "data_version": 5023,
+    });
+    done.bytes += write(
+        &out.join("horizon-resources.json"),
+        &serde_json::to_vec(&manifest).map_err(|e| e.to_string())?,
+    )?;
+    let prepare = serde_json::json!({ "output_version": 4 });
+    done.bytes += write(
+        &out.join("horizon-prepare.json"),
+        &serde_json::to_vec(&prepare).map_err(|e| e.to_string())?,
+    )?;
+
+    Ok(())
+}
+
+/// Assemble `out` from the player's own `client.jar`, with no shipped bundle:
+/// every table is generated on device first, then the same asset and derived
+/// pipeline runs. This is the path that lets the app stop distributing
+/// Minecraft's derived data.
+#[cfg(target_os = "ios")]
+unsafe extern "C" {
+    fn NCLRAssemblyProgress(done: i32, total: i32);
+}
+
+fn assembly_progress(done: usize, total: usize) {
+    #[cfg(target_os = "ios")]
+    unsafe {
+        NCLRAssemblyProgress(done as i32, total as i32);
+    }
+    #[cfg(not(target_os = "ios"))]
+    let _ = (done, total);
+}
+
+pub fn assemble_from_jar(
+    client_jar: &Path,
+    index: &Path,
+    store: &Path,
+    out: &Path,
+) -> Result<Assembled, String> {
+    let mut done = Assembled::default();
+    if out.is_dir() && fs::read_dir(out).map_err(|e| e.to_string())?.next().is_some() {
+        return Err(format!("{} is not empty", out.display()));
+    }
+    fs::create_dir_all(out).map_err(|e| format!("{}: {}", out.display(), explain(&e)))?;
+    tables::generate_with_progress(client_jar, out, &|done, total| {
+        assembly_progress(done, total)
+    })?;
+    restore_generated_tables(out)?;
+    finish(out, client_jar, index, store, &mut done)?;
+    Ok(done)
+}
+
+/// The exporter writes the same split form the shipped bundle used: the four
+/// shape tables and `block-properties` carry a shared `states` trailer, and
+/// `occlusion`/`cached-collision` are the whole tables they embed. Put them
+/// back together exactly as the bundle path does.
+pub fn restore_generated_tables(out: &Path) -> Result<(), String> {
+    let shared = out.join("_shared");
+    let states = read(&shared.join("states.bin"))?;
+    for table in TRAILER_TABLES {
+        let path = out.join(table);
+        let body = read(&path)?;
+        let whole = nbt::restore(&body, &states)?;
+        write(&path, &whole)?;
+    }
+    let bp = out.join(BLOCK_PROPERTIES);
+    let with_states = nbt::restore(&read(&bp)?, &states)?;
+    let index_bytes = read(&shared.join("occlusion.index"))?;
+    let key_index = u32::from_le_bytes([
+        *index_bytes.first().ok_or("occlusion.index is empty")?,
+        index_bytes[1],
+        index_bytes[2],
+        index_bytes[3],
+    ]) as usize;
+    let occlusion = read(&out.join("occlusion.nbt"))?;
+    let rebuilt = nbt::restore_key(
+        &with_states,
+        &nbt::KeySpan {
+            index: key_index,
+            bytes: nbt::occlusion_key(&occlusion)?,
+        },
+    )?;
+    write(&bp, &rebuilt)?;
+    let collision = read(&out.join("cached-collision.nbt"))?;
+    write(&out.join(staging::DUPLICATE), &collision)?;
+    Ok(())
+}
+
+/// `assemble_from_jar`, staged and verified like [`assemble_clean`].
+pub fn assemble_from_jar_clean(
+    client_jar: &Path,
+    index: &Path,
+    store: &Path,
+    out: &Path,
+) -> Result<Assembled, String> {
+    let parent = out
+        .parent()
+        .ok_or_else(|| format!("{}: no parent folder", out.display()))?;
+    let name = out
+        .file_name()
+        .ok_or_else(|| format!("{}: no folder name", out.display()))?
+        .to_string_lossy()
+        .into_owned();
+    fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), explain(&e)))?;
+    let staging = parent.join(format!(".{name}.assembling"));
+    for leftover in [&staging, &parent.join(format!(".{name}.previous"))] {
+        if leftover.exists() {
+            fs::remove_dir_all(leftover)
+                .map_err(|e| format!("{}: {}", leftover.display(), explain(&e)))?;
+        }
+    }
+    let done = assemble_from_jar(client_jar, index, store, &staging)?;
+    forget_shared(&staging)?;
+    verify(&staging)?;
+    swap_into_place(&staging, out)?;
     Ok(done)
 }
 

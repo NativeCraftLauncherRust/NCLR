@@ -66,6 +66,7 @@ declare_class!(
                 .preferred_screen_edges_deferring_system_gestures
                 .get()
         }
+
     }
 );
 

@@ -311,6 +311,41 @@ pub extern "C" fn horizon_ios_assemble(
     }
 }
 
+/// Assembles the resource tree from the player's own `client.jar` alone:
+/// every table is generated on device, so no Mojang-derived data ships in the
+/// bundle. Returns null on success, otherwise a message owned by the library.
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_assemble_from_jar(
+    client_jar: *const c_char,
+    index: *const c_char,
+    store: *const c_char,
+    out: *const c_char,
+) -> *const c_char {
+    let text = |pointer: *const c_char| -> Option<String> {
+        if pointer.is_null() {
+            return None;
+        }
+        unsafe { CStr::from_ptr(pointer) }
+            .to_str()
+            .ok()
+            .map(str::to_owned)
+    };
+    let (Some(client_jar), Some(index), Some(store), Some(out)) =
+        (text(client_jar), text(index), text(store), text(out))
+    else {
+        return message("assemble needs four UTF-8 paths");
+    };
+    match hzr_device::assemble_from_jar_clean(
+        std::path::Path::new(&client_jar),
+        std::path::Path::new(&index),
+        std::path::Path::new(&store),
+        std::path::Path::new(&out),
+    ) {
+        Ok(_) => std::ptr::null(),
+        Err(error) => message(&error),
+    }
+}
+
 /// A C string this library owns for the rest of the process.
 fn message(text: &str) -> *const c_char {
     CString::new(text.replace('\0', " "))

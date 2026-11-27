@@ -1,0 +1,22 @@
+[package]
+name = "hzr-export"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Device-side Rust export of Horizon's derived tables"
+# There is one dispatcher binary plus one helper binary per table group; keep
+# `cargo run` unambiguous.
+default-run = "hzr-export"
+
+[dependencies]
+serde_json = "1"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
+# The exporter generates very large constant tables; full debug info for them
+# was what pushed rustc/LLVM over the memory limit. Line tables are enough for
+# backtraces and keep every codegen unit small.
+[profile.dev]
+debug = 0
+
+[workspace]
+

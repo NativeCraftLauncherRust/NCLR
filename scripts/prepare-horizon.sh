@@ -21,7 +21,11 @@ fi
 rm -rf "$HORIZON_DIR/crates/horizon-ios"
 cp -R "$ROOT/port/horizon-ios" "$HORIZON_DIR/crates/horizon-ios"
 
-for crate in hzr-pack hzr-fetch hzr-device hzr-download; do
+for crate in hzr-pack hzr-fetch hzr-device hzr-download hzr-bytecode hzr-export \
+    hzr-export-behaviour hzr-export-blocks hzr-export-commands hzr-export-creative \
+    hzr-export-entity hzr-export-gameplay hzr-export-items hzr-export-mob \
+    hzr-export-models hzr-export-registries hzr-export-render hzr-export-shapes \
+    hzr-export-structure hzr-export-world; do
     rm -rf "$HORIZON_DIR/crates/$crate"
     cp -R "$ROOT/port/$crate" "$HORIZON_DIR/crates/$crate"
 done
@@ -36,7 +40,12 @@ import sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
-members = ["horizon-ios", "hzr-pack", "hzr-fetch", "hzr-device", "hzr-download"]
+members = ["horizon-ios", "hzr-pack", "hzr-fetch", "hzr-device", "hzr-download",
+           "hzr-bytecode", "hzr-export", "hzr-export-behaviour", "hzr-export-blocks",
+           "hzr-export-commands", "hzr-export-creative", "hzr-export-entity",
+           "hzr-export-gameplay", "hzr-export-items", "hzr-export-mob",
+           "hzr-export-models", "hzr-export-registries", "hzr-export-render",
+           "hzr-export-shapes", "hzr-export-structure", "hzr-export-world"]
 
 # Each crate ships with a standalone `[workspace]` so it can be tested on its
 # own; inside Horizon it has to join the parent workspace instead.

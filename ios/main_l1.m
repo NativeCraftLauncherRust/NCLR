@@ -10,6 +10,9 @@
 #import <AuthenticationServices/AuthenticationServices.h>
 #import <SafariServices/SafariServices.h>
 #import <stdlib.h>
+#import <os/lock.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
@@ -98,8 +101,23 @@ static void NCLRLoadRemoteAvatar(NSString *url, UIImageView *imageView, UILabel 
 @property (atomic, strong) NSURLSession *downloadSession;
 - (void)cancel;
 @end
-extern const char *horizon_ios_assemble(const char *bundle, const char *client_jar,
-                                        const char *index, const char *store, const char *out);
+
+/// Called from the Rust assembler once per generated table, so the launcher
+/// shows real progress while the phone builds the resource tree.
+void NCLRAssemblyProgress(int done, int total) {
+    if (total <= 0) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NCLRResourcePreparer *preparer = NCLRResourcePreparer.shared;
+        NSString *line = [NSString stringWithFormat:@"生成资源表 %d/%d…", done, total];
+        preparer.lastLine = line;
+        preparer.progressValue = 0.90f + 0.06f * ((float)done / (float)total);
+        [[NSNotificationCenter defaultCenter] postNotificationName:NCLRPrepareProgressNotification
+                                                            object:preparer
+                                                          userInfo:@{@"line": line}];
+    });
+}
+extern const char *horizon_ios_assemble_from_jar(const char *client_jar, const char *index,
+                                                 const char *store, const char *out);
 
 
 static NSString *const kNCLRService = @"dev.zrxmaxlnx.nclr.launcher";
@@ -114,6 +132,78 @@ static NSString *NCLRAvatarURLForName(NSString *name) {
         @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"] invertedSet];
     if (name.length == 0 || name.length > 16 || [name rangeOfCharacterFromSet:invalid].location != NSNotFound) return nil;
     return [NSString stringWithFormat:@"https://minotar.net/helm/%@/128", name];
+}
+
+static NSString *NCLRString(id value);
+static NSString *NCLRDocuments(void);
+
+/// Offline accounts live beside the game as one JSON file each in
+/// `Documents/account`. The launcher reads them on start so a profile can be
+/// dropped in without signing in. Java's `UUID.nameUUIDFromBytes` (MD5,
+/// version 3) over `OfflinePlayer:<name>` is the id the game expects.
+static NSString *NCLROfflineDirectory(void) {
+    return [NCLRDocuments() stringByAppendingPathComponent:@"account"];
+}
+
+static NSString *NCLROfflineUUID(NSString *name) {
+    NSString *seed = [@"OfflinePlayer:" stringByAppendingString:name];
+    unsigned char digest[CC_MD5_DIGEST_LENGTH];
+    CC_MD5(seed.UTF8String, (CC_LONG)strlen(seed.UTF8String), digest);
+    digest[6] = (unsigned char)((digest[6] & 0x0F) | 0x30);
+    digest[8] = (unsigned char)((digest[8] & 0x3F) | 0x80);
+    NSMutableString *hex = [NSMutableString stringWithCapacity:32];
+    for (int index = 0; index < CC_MD5_DIGEST_LENGTH; index++) {
+        [hex appendFormat:@"%02x", digest[index]];
+    }
+    return hex;
+}
+
+static NSString *NCLROfflinePath(NSString *directory, id value) {
+    NSString *name = NCLRString(value);
+    if (name.length == 0) return nil;
+    BOOL absolute = [name hasPrefix:@"/"] || [name containsString:@":"];
+    NSString *path = absolute ? name : [directory stringByAppendingPathComponent:name];
+    return [NSFileManager.defaultManager fileExistsAtPath:path] ? path : nil;
+}
+
+static NSArray<NSDictionary *> *NCLROfflineProfiles(void) {
+    NSString *directory = NCLROfflineDirectory();
+    NSMutableArray<NSDictionary *> *profiles = [NSMutableArray array];
+    NSCharacterSet *hexSet = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
+    for (NSString *name in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:directory error:nil]
+                                sortedArrayUsingSelector:@selector(compare:)]) {
+        if (![name.pathExtension.lowercaseString isEqualToString:@"json"]) continue;
+        NSString *path = [directory stringByAppendingPathComponent:name];
+        NSData *data = [NSData dataWithContentsOfFile:path];
+        id json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        if (![json isKindOfClass:NSDictionary.class]) continue;
+        NSString *player = [NCLRString(json[@"name"])
+            stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if (NCLRAvatarURLForName(player) == nil) continue;
+        NSString *uuid = [[NCLRString(json[@"uuid"]) stringByReplacingOccurrencesOfString:@"-" withString:@""] lowercaseString];
+        if (uuid.length != 32 || [uuid rangeOfCharacterFromSet:hexSet].location != NSNotFound) {
+            uuid = NCLROfflineUUID(player);
+        }
+        [profiles addObject:@{
+            @"name": player,
+            @"uuid": uuid,
+            @"file": name,
+            @"active": @([json[@"active"] boolValue]),
+            @"skin": NCLROfflinePath(directory, json[@"skin"]) ?: @"",
+            @"cape": NCLROfflinePath(directory, json[@"cape"]) ?: @"",
+            @"slim": @([json[@"slim"] boolValue]),
+        }];
+    }
+    return profiles;
+}
+
+/// The profile marked `"active": true`, else the first file by name.
+static NSDictionary *NCLRActiveOfflineProfile(void) {
+    NSArray<NSDictionary *> *profiles = NCLROfflineProfiles();
+    for (NSDictionary *profile in profiles) {
+        if ([profile[@"active"] boolValue]) return profile;
+    }
+    return profiles.firstObject;
 }
 
 @class NCLRRootController;
@@ -136,7 +226,6 @@ static BOOL NCLRPageTransitionBlurEnabled(void) {
     NSNumber *saved = [defaults objectForKey:kNCLRPageTransitionBlurKey];
     return saved == nil ? NO : saved.boolValue;
 }
-
 static void NCLRThemeResolveFromTraitCollection(UITraitCollection *traitCollection) {
     if (NCLRThemeModeValue == NCLRThemeModeDark) {
         NCLRDarkMode = YES;
@@ -384,19 +473,118 @@ static NSString *NCLRModIdentifier(NSString *path) {
 
 // Runs on the main queue. Device motion is fused and low-pass filtered, then
 // integrated with hardware timestamps so frame drops do not change the turn.
-static CMMotionManager *NCLRStartGyro(UIWindowScene *scene, CGFloat sensitivity,
-                                       BOOL invertX, BOOL invertY) {
-    CMMotionManager *motion = [CMMotionManager new];
-    if (!motion.deviceMotionAvailable) return nil;
-    motion.deviceMotionUpdateInterval = 1.0 / 120.0;
+// The manager can report unavailable for a moment right after launch, and iOS
+// stops updates in the background, so this controller keeps retrying while a
+// game is running instead of giving up for the whole session.
+@interface NCLRGyro : NSObject
+@property (nonatomic, strong) CMMotionManager *motion;
+@property (nonatomic, strong) NSTimer *retry;
+@property (nonatomic, weak) UIWindowScene *scene;
+@property (nonatomic, assign) CGFloat sensitivity;
+@property (nonatomic, assign) BOOL invertX;
+@property (nonatomic, assign) BOOL invertY;
+@property (nonatomic, assign) BOOL enabled;
++ (instancetype)shared;
+- (void)startWithScene:(UIWindowScene *)scene
+           sensitivity:(CGFloat)sensitivity
+               invertX:(BOOL)invertX
+               invertY:(BOOL)invertY;
+- (void)stop;
+@end
+
+@implementation NCLRGyro
++ (instancetype)shared {
+    static NCLRGyro *gyro;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ gyro = [[NCLRGyro alloc] init]; });
+    return gyro;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+        [center addObserver:self selector:@selector(appBecameActive)
+                       name:UIApplicationDidBecomeActiveNotification object:nil];
+        [center addObserver:self selector:@selector(appResignedActive)
+                       name:UIApplicationWillResignActiveNotification object:nil];
+    }
+    return self;
+}
+
+- (void)startWithScene:(UIWindowScene *)scene
+           sensitivity:(CGFloat)sensitivity
+               invertX:(BOOL)invertX
+               invertY:(BOOL)invertY {
+    self.scene = scene;
+    self.sensitivity = sensitivity;
+    self.invertX = invertX;
+    self.invertY = invertY;
+    self.enabled = YES;
+    [self attach];
+}
+
+- (void)stop {
+    self.enabled = NO;
+    [self stopUpdates];
+}
+
+- (void)appBecameActive {
+    if (self.enabled) [self attach];
+}
+
+- (void)appResignedActive {
+    [self stopUpdates];
+}
+
+- (void)stopUpdates {
+    [self.motion stopDeviceMotionUpdates];
+    [self.retry invalidate];
+    self.retry = nil;
+}
+
+- (void)scheduleRetry {
+    if (self.retry || !self.enabled) return;
+    __weak typeof(self) weakSelf = self;
+    self.retry = [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:NO block:^(NSTimer *timer) {
+        (void)timer;
+        NCLRGyro *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.retry = nil;
+        [strongSelf attach];
+    }];
+}
+
+- (void)attach {
+    if (!self.enabled) return;
+    if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+    if (!self.motion) {
+        self.motion = [CMMotionManager new];
+    }
+    if (self.motion.deviceMotionActive) return;
+    if (!self.motion.deviceMotionAvailable) {
+        [self scheduleRetry];
+        return;
+    }
+    self.motion.deviceMotionUpdateInterval = 1.0 / 120.0;
     __block NSTimeInterval previous = 0;
     __block double smoothYaw = 0.0;
     __block double smoothPitch = 0.0;
     __block UIInterfaceOrientation lastOrientation = UIInterfaceOrientationUnknown;
-    __weak UIWindowScene *gameScene = scene;
-    [motion startDeviceMotionUpdatesToQueue:NSOperationQueue.mainQueue
-                                withHandler:^(CMDeviceMotion *sample, NSError *error) {
-        if (error || !sample || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+    __weak typeof(self) weakSelf = self;
+    __weak UIWindowScene *gameScene = self.scene;
+    [self.motion startDeviceMotionUpdatesToQueue:NSOperationQueue.mainQueue
+                                     withHandler:^(CMDeviceMotion *sample, NSError *error) {
+        NCLRGyro *strongSelf = weakSelf;
+        if (error) {
+            previous = 0;
+            smoothYaw = smoothPitch = 0.0;
+            lastOrientation = UIInterfaceOrientationUnknown;
+            [strongSelf stopUpdates];
+            [strongSelf scheduleRetry];
+            return;
+        }
+        if (!sample || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
             previous = 0;
             smoothYaw = smoothPitch = 0.0;
             lastOrientation = UIInterfaceOrientationUnknown;
@@ -431,23 +619,57 @@ static CMMotionManager *NCLRStartGyro(UIWindowScene *scene, CGFloat sensitivity,
         double pitch = fabs(smoothPitch) < deadzone ? 0.0 : smoothPitch;
         const double radiansToMouseUnits = 180.0 / (M_PI * 0.15);
         if (yaw || pitch) {
+            CGFloat sensitivity = strongSelf.sensitivity;
             double scale = direction * elapsed * sensitivity * radiansToMouseUnits;
-            double dx = (invertX ? -yaw : yaw) * scale;
-            double dy = (invertY ? -pitch : pitch) * scale;
+            double dx = (strongSelf.invertX ? -yaw : yaw) * scale;
+            double dy = (strongSelf.invertY ? -pitch : pitch) * scale;
             const double maxStep = 24.0;
             dx = fmax(-maxStep, fmin(maxStep, dx));
             dy = fmax(-maxStep, fmin(maxStep, dy));
             horizon_ios_add_motion(dx, dy);
         }
     }];
-    return motion;
 }
+@end
 
 static void NCLRRunOnMain(dispatch_block_t block) {
     if (NSThread.isMainThread) {
         block();
     } else {
         dispatch_async(dispatch_get_main_queue(), block);
+    }
+}
+
+// Raw reports can arrive at the mouse's polling rate (up to 1 kHz). They are
+// merged here and sent to the engine once per displayed frame, so the main
+// queue is not flooded and the view turns evenly.
+static os_unfair_lock NCLRMotionLock = OS_UNFAIR_LOCK_INIT;
+static float NCLRMotionDX = 0.0f;
+static float NCLRMotionDY = 0.0f;
+static bool NCLRMotionFlushScheduled = false;
+// Mirrors of the keymap settings the motion path needs before NCLRKeymap is
+// declared in this file. NCLRKeymap keeps them in step on load and on change.
+static BOOL NCLRMouseInvertX = NO;
+static BOOL NCLRMouseInvertY = NO;
+static BOOL NCLRMouseSwapAxes = NO;
+
+/// A window that resigned key stops the engine's mouse-look events until it
+/// becomes key again. iOS can leave the game window resigned with nothing
+/// taking its place after system UI or returning from the background, so a
+/// visible window is made key when no window holds the key.
+static void NCLRRestoreVisibleKeyWindow(void) {
+    UIWindow *candidate = nil;
+    BOOL anyKey = NO;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if (window.hidden || window.alpha < 0.01) continue;
+            if (window.isKeyWindow) anyKey = YES;
+            if (!candidate) candidate = window;
+        }
+    }
+    if (!anyKey && candidate) {
+        [candidate makeKeyWindow];
     }
 }
 
@@ -460,9 +682,11 @@ static void NCLRRunOnMain(dispatch_block_t block) {
 @property (nonatomic, assign) CGPoint cursor;
 @property (nonatomic, assign) CGSize cursorBounds;
 @property (nonatomic, assign) BOOL running;
+@property (nonatomic, strong) NSTimer *watchdog;
 + (instancetype)shared;
 - (void)start;
 - (void)stop;
+- (void)applyMotionDX:(float)deltaX dy:(float)deltaY;
 @end
 
 @implementation NCLRHardwareInput
@@ -493,12 +717,27 @@ static void NCLRRunOnMain(dispatch_block_t block) {
                    name:GCMouseDidDisconnectNotification object:nil];
     [center addObserver:self selector:@selector(devicesChanged:)
                    name:UIApplicationDidBecomeActiveNotification object:nil];
+    [center addObserver:self selector:@selector(devicesChanged:)
+                   name:UIApplicationWillResignActiveNotification object:nil];
+    [center addObserver:self selector:@selector(devicesChanged:)
+                   name:UIApplicationDidEnterBackgroundNotification object:nil];
+    // UIKit can drop a device's handlers while the app is in the background or
+    // while the system keyboard takes over. A slow tick reinstalls them even
+    // when no connect notification arrives.
+    self.watchdog = [NSTimer timerWithTimeInterval:1.0
+                                            target:self
+                                          selector:@selector(watchdogTick:)
+                                          userInfo:nil
+                                           repeats:YES];
+    [NSRunLoop.mainRunLoop addTimer:self.watchdog forMode:NSRunLoopCommonModes];
     [self refreshDevices];
 }
 
 - (void)stop {
     if (!self.running) return;
     self.running = NO;
+    [self.watchdog invalidate];
+    self.watchdog = nil;
     [NSNotificationCenter.defaultCenter removeObserver:self];
     [self detachKeyboard:YES];
     [self detachMouse];
@@ -512,15 +751,21 @@ static void NCLRRunOnMain(dispatch_block_t block) {
     NCLRRunOnMain(^{ [weakSelf refreshDevices]; });
 }
 
+- (void)watchdogTick:(NSTimer *)timer {
+    (void)timer;
+    [self refreshDevices];
+}
+
 - (void)refreshDevices {
+    NCLRRestoreVisibleKeyWindow();
     GCKeyboard *keyboard = GCKeyboard.coalescedKeyboard;
-    if (keyboard != self.keyboard) {
+    if (keyboard != self.keyboard || (keyboard && keyboard.keyboardInput.keyChangedHandler == nil)) {
         [self detachKeyboard:YES];
         self.keyboard = keyboard;
         [self attachKeyboard:keyboard];
     }
     GCMouse *mouse = GCMouse.current;
-    if (mouse != self.mouse) {
+    if (mouse != self.mouse || (mouse && mouse.mouseInput.mouseMovedHandler == nil)) {
         [self detachMouse];
         self.mouse = mouse;
         [self attachMouse:mouse];
@@ -589,10 +834,28 @@ static void NCLRRunOnMain(dispatch_block_t block) {
 
 - (void)attachMouse:(GCMouse *)mouse {
     if (!mouse) return;
-    __weak typeof(self) weakSelf = self;
+    mouse.handlerQueue = dispatch_get_main_queue();
     mouse.mouseInput.mouseMovedHandler = ^(GCMouseInput *input, float deltaX, float deltaY) {
         (void)input;
-        NCLRRunOnMain(^{ [weakSelf moveMouseX:deltaX y:deltaY]; });
+        os_unfair_lock_lock(&NCLRMotionLock);
+        NCLRMotionDX += deltaX;
+        NCLRMotionDY += deltaY;
+        bool schedule = !NCLRMotionFlushScheduled;
+        NCLRMotionFlushScheduled = schedule;
+        os_unfair_lock_unlock(&NCLRMotionLock);
+        if (schedule) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                os_unfair_lock_lock(&NCLRMotionLock);
+                NCLRMotionFlushScheduled = false;
+                float dx = NCLRMotionDX;
+                float dy = NCLRMotionDY;
+                NCLRMotionDX = 0.0f;
+                NCLRMotionDY = 0.0f;
+                os_unfair_lock_unlock(&NCLRMotionLock);
+                if (dx == 0.0f && dy == 0.0f) return;
+                [NCLRHardwareInput.shared applyMotionDX:dx dy:dy];
+            });
+        }
     };
     mouse.mouseInput.leftButton.pressedChangedHandler =
         ^(GCControllerButtonInput *button, float value, BOOL pressed) {
@@ -621,7 +884,7 @@ static void NCLRRunOnMain(dispatch_block_t block) {
         NCLRRunOnMain(^{ horizon_ios_hardware_mouse_scroll(horizontal, vertical); });
     };
     self.cursorReady = NO;
-    [self moveMouseX:0 y:0];
+    [self applyMotionDX:0.0f dy:0.0f];
 }
 
 - (void)detachMouse {
@@ -633,6 +896,11 @@ static void NCLRRunOnMain(dispatch_block_t block) {
         mouse.mouseInput.middleButton.pressedChangedHandler = nil;
         mouse.mouseInput.scroll.valueChangedHandler = nil;
     }
+    os_unfair_lock_lock(&NCLRMotionLock);
+    NCLRMotionDX = 0.0f;
+    NCLRMotionDY = 0.0f;
+    NCLRMotionFlushScheduled = false;
+    os_unfair_lock_unlock(&NCLRMotionLock);
     self.mouse = nil;
     for (int button = 0; button < 3; button++) {
         horizon_ios_hardware_mouse_button(button, 0);
@@ -640,10 +908,22 @@ static void NCLRRunOnMain(dispatch_block_t block) {
     self.cursorReady = NO;
 }
 
-- (void)moveMouseX:(float)deltaX y:(float)deltaY {
+- (void)applyMotionDX:(float)deltaX dy:(float)deltaY {
     UIWindow *window = UIApplication.sharedApplication.keyWindow;
-    if (!window) return;
-    CGSize size = window.bounds.size;
+    if (!window) {
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
+                if (!candidate.hidden) {
+                    window = candidate;
+                    break;
+                }
+            }
+            if (window) break;
+        }
+    }
+    UIScreen *screen = window.screen ?: UIScreen.mainScreen;
+    CGSize size = window ? window.bounds.size : screen.bounds.size;
     if (size.width < 1.0 || size.height < 1.0) return;
     if (!self.cursorReady || !CGSizeEqualToSize(self.cursorBounds, size)) {
         self.cursor = CGPointMake(size.width * 0.5, size.height * 0.5);
@@ -653,12 +933,16 @@ static void NCLRRunOnMain(dispatch_block_t block) {
     CGFloat x = fmax(0.0, fmin(size.width - 1.0, self.cursor.x + deltaX));
     CGFloat y = fmax(0.0, fmin(size.height - 1.0, self.cursor.y + deltaY));
     self.cursor = CGPointMake(x, y);
-    CGFloat scale = window.screen.scale > 0.0 ? window.screen.scale : UIScreen.mainScreen.scale;
-    NCLRRunOnMain(^{
-        // Relative motion stays in points so mouse look matches the cursor on
-        // every display scale. The pointer position is a drawable pixel.
-        horizon_ios_hardware_mouse_motion(deltaX, deltaY, x * scale, y * scale);
-    });
+    CGFloat scale = screen.scale > 0.0 ? screen.scale : 1.0;
+    float dx = NCLRMouseSwapAxes ? deltaY : deltaX;
+    float dy = NCLRMouseSwapAxes ? deltaX : deltaY;
+    if (NCLRMouseInvertX) dx = -dx;
+    if (NCLRMouseInvertY) dy = -dy;
+    // GameController reports pointer deltas in screen points, where y grows
+    // downward. The camera takes winit deltas, where a positive y looks up.
+    // Relative motion stays in points so the turn matches the cursor on every
+    // display scale; the pointer position is a drawable pixel.
+    horizon_ios_hardware_mouse_motion(dx, -dy, x * scale, y * scale);
 }
 @end
 
@@ -734,6 +1018,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *positions;
 @property (nonatomic, strong) NSMutableSet<NSString *> *deletedKeys;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *triggerModes;
+@property (nonatomic, strong) NSMutableSet<NSString *> *swipeThroughKeys;
 @property (nonatomic, assign) CGFloat buttonSize;
 @property (nonatomic, assign) CGFloat opacity;
 @property (nonatomic, copy) NSString *touchMode;
@@ -746,6 +1031,9 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
 @property (nonatomic, assign) CGFloat gyroSensitivity;
 @property (nonatomic, assign) BOOL gyroInvertX;
 @property (nonatomic, assign) BOOL gyroInvertY;
+@property (nonatomic, assign) BOOL mouseInvertX;
+@property (nonatomic, assign) BOOL mouseInvertY;
+@property (nonatomic, assign) BOOL mouseSwapAxes;
 @property (nonatomic, assign) CGFloat joystickDeadzone;
 @property (nonatomic, assign) BOOL sprintButton;
 @property (nonatomic, assign) NSInteger buttonStyle;
@@ -810,6 +1098,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     self.opacity = 0.55;
     self.layoutVersion = 2;
     self.deletedKeys = [NSMutableSet set];
+    self.swipeThroughKeys = [NSMutableSet set];
     self.menuKeys = [NSMutableArray array];
     self.leftHanded = NO;
     self.joystickSprint = NO;
@@ -818,11 +1107,14 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     self.gyroSensitivity = 1.0;
     self.gyroInvertX = NO;
     self.gyroInvertY = NO;
+    self.mouseInvertX = NO;
+    self.mouseInvertY = NO;
+    self.mouseSwapAxes = NO;
     self.joystickDeadzone = 0.16;
     self.sprintButton = YES;
     self.buttonStyle = 0;
     self.iconLabels = NO;
-    self.hiddenKeys = [NSMutableSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield", @"keyboard"]];
+    self.hiddenKeys = [NSMutableSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]];
     self.touchMode = @"crosshair";
     self.dynamicJoystick = NO;
     self.positions = [@{
@@ -889,12 +1181,28 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     if ([gyroSensitivity isKindOfClass:NSNumber.class] && isfinite(gyroSensitivity.doubleValue)) {
         self.gyroSensitivity = MAX(0.25, MIN(2.5, gyroSensitivity.doubleValue));
     }
+    NSNumber *mouseInvertX = json[@"mouseInvertX"];
+    NSNumber *mouseInvertY = json[@"mouseInvertY"];
+    NSNumber *mouseSwapAxes = json[@"mouseSwapAxes"];
+    if ([mouseInvertX isKindOfClass:NSNumber.class]) self.mouseInvertX = mouseInvertX.boolValue;
+    if ([mouseInvertY isKindOfClass:NSNumber.class]) self.mouseInvertY = mouseInvertY.boolValue;
+    if ([mouseSwapAxes isKindOfClass:NSNumber.class]) self.mouseSwapAxes = mouseSwapAxes.boolValue;
+    NCLRMouseInvertX = self.mouseInvertX;
+    NCLRMouseInvertY = self.mouseInvertY;
+    NCLRMouseSwapAxes = self.mouseSwapAxes;
     NSNumber *sensitivity = json[@"sensitivity"];
     if ([sensitivity isKindOfClass:[NSNumber class]]) {
         self.sensitivity = MAX(0.3, MIN(2.5, sensitivity.doubleValue));
     }
     if ([json[@"triggerModes"] isKindOfClass:NSDictionary.class]) {
         self.triggerModes = [json[@"triggerModes"] mutableCopy];
+    }
+    NSArray *swipeThrough = json[@"swipeThrough"];
+    if ([swipeThrough isKindOfClass:NSArray.class]) {
+        [self.swipeThroughKeys removeAllObjects];
+        for (id key in swipeThrough) {
+            if ([key isKindOfClass:NSString.class]) [self.swipeThroughKeys addObject:key];
+        }
     }
     NSNumber *deadzone = json[@"joystickDeadzone"];
     if ([deadzone isKindOfClass:[NSNumber class]]) {
@@ -971,6 +1279,16 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         for (NSString *key in hidden) {
             if ([key isKindOfClass:[NSString class]]) [self.hiddenKeys addObject:key];
         }
+    }
+    // The system-keyboard control is now a persistent, editable overlay.
+    [self.hiddenKeys removeObject:@"keyboard"];
+    [self.deletedKeys removeObject:@"keyboard"];
+    if (self.bindings[@"keyboard"] == nil) {
+        self.bindings[@"keyboard"] = @"键盘";
+    }
+    if (self.positions[@"keyboard"] == nil) {
+        self.positions[@"keyboard"] = @{ @"x" : @0.66, @"y" : @0.12,
+                                         @"size" : @0.075, @"width" : @0.075 };
     }
     if (self.bindings[@"move"] == nil) {
         self.bindings[@"move"] = @"移动";
@@ -1063,7 +1381,8 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         @"keyboard" : @{ @"x" : @0.66, @"y" : @0.12, @"size" : @0.065 },
         @"move" : @{ @"x" : @0.14, @"y" : @0.74, @"size" : @0.28 },
     } mutableCopy];
-    [self.hiddenKeys setSet:[NSSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield", @"keyboard"]]];
+    [self.hiddenKeys setSet:[NSSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]]];
+    [self.swipeThroughKeys removeAllObjects];
 }
 
 - (BOOL)isHidden:(NSString *)key {
@@ -1133,6 +1452,9 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         @"gyroSensitivity" : @(self.gyroSensitivity),
         @"gyroInvertX" : @(self.gyroInvertX),
         @"gyroInvertY" : @(self.gyroInvertY),
+        @"mouseInvertX" : @(self.mouseInvertX),
+        @"mouseInvertY" : @(self.mouseInvertY),
+        @"mouseSwapAxes" : @(self.mouseSwapAxes),
         @"joystickDeadzone" : @(self.joystickDeadzone),
         @"sprintButton" : @(self.sprintButton),
         @"buttonStyle" : @(self.buttonStyle),
@@ -1143,6 +1465,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         @"bindings" : self.bindings ?: @{},
         @"layout" : self.positions ?: @{},
         @"triggerModes" : self.triggerModes ?: @{},
+        @"swipeThrough" : self.swipeThroughKeys.allObjects ?: @[],
     };
     NSData *data = [NSJSONSerialization dataWithJSONObject:json
                                                    options:NSJSONWritingPrettyPrinted
@@ -1462,6 +1785,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, assign) BOOL developerPremium;
 @property (nonatomic, copy) NSString *avatarURL;
 @property (nonatomic, copy) NSString *uuid;
+@property (nonatomic, copy) NSDictionary *offlineProfile;
 @property (nonatomic, strong) ASWebAuthenticationSession *session;
 @property (nonatomic, weak) UIViewController *presenter;
 @property (nonatomic, strong) SFSafariViewController *authSafari;
@@ -1483,6 +1807,21 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         if (_token.length > 0) {
             _uuid = [[NSUserDefaults standardUserDefaults] stringForKey:kNCLRAccountUUIDKey];
             _avatarURL = NCLRAvatarURLForName(_name);
+        }
+        NSString *accountDirectory = NCLROfflineDirectory();
+        [[NSFileManager defaultManager] createDirectoryAtPath:accountDirectory
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil];
+        NSString *readme = [accountDirectory stringByAppendingPathComponent:@"README.txt"];
+        [NSFileManager.defaultManager removeItemAtPath:readme error:nil];
+        if (_token.length == 0) {
+            NSDictionary *profile = NCLRActiveOfflineProfile();
+            if (profile) {
+                _offlineProfile = profile;
+                _name = profile[@"name"];
+                _uuid = profile[@"uuid"];
+            }
         }
         _developerPremium = NO;
     }
@@ -2438,15 +2777,25 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 - (void)launchTapped {
     if (NCLRResourcePreparer.shared.preparing || self.checkingAccount) return;
     NCLRAuth *auth = NCLRAuth.shared;
+    NSDictionary *offlineProfile = nil;
     if (auth.token.length == 0 || NCLRTokenExpired(auth.token)) {
         if (auth.token.length > 0) {
             [auth logout];
             [[NSNotificationCenter defaultCenter] postNotificationName:NCLRAvatarUpdatedNotification object:auth];
         }
-        [self showLaunchError:@"请在账号页登录 Microsoft 正版账号后启动游戏。"];
-        return;
+        offlineProfile = NCLRActiveOfflineProfile();
+        if (offlineProfile == nil) {
+            [self showLaunchError:@"请在账号页登录 Microsoft 正版账号后启动游戏。"];
+            return;
+        }
+        auth.offlineProfile = offlineProfile;
+        auth.name = offlineProfile[@"name"];
+        auth.uuid = offlineProfile[@"uuid"];
+        auth.avatarURL = nil;
+    } else {
+        auth.offlineProfile = nil;
     }
-    if (auth.uuid.length == 0 || !NCLRAvatarURLForName(auth.name)) {
+    if (offlineProfile == nil && (auth.uuid.length == 0 || !NCLRAvatarURLForName(auth.name))) {
         self.checkingAccount = YES;
         [self updateLaunchControlsAnimated:YES];
         [auth fetchProfileWithToken:auth.token completion:^(NSString *token, NSString *name, NSString *error) {
@@ -2476,31 +2825,50 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NSString *game = NCLRDocuments();
     NCLRCreateDirectory(game);
     NSString *sessionPath = [game stringByAppendingPathComponent:@".nclr-session.json"];
-    NSData *sessionData = [NSJSONSerialization dataWithJSONObject:@{
-        @"name": auth.name, @"uuid": auth.uuid, @"access_token": auth.token, @"user_type": @"msa"
-    } options:0 error:nil];
-    if (![sessionData writeToFile:sessionPath options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:nil] ||
-        ![files setAttributes:@{NSFilePosixPermissions: @0600} ofItemAtPath:sessionPath error:nil]) {
-        [files removeItemAtPath:sessionPath error:nil];
-        [self showLaunchError:@"无法建立正版游戏会话，请检查设备可用空间。"];
-        return;
-    }
     setenv("HORIZON_HOME", game.UTF8String, 1);
-    setenv("HORIZON_SESSION_FILE", sessionPath.UTF8String, 1);
     unsetenv("HORIZON_OFFLINE_SKIN");
     unsetenv("HORIZON_OFFLINE_CAPE");
     unsetenv("HORIZON_OFFLINE_SKIN_MODEL");
-    NSDictionary *appearance = NCLRReadAppearance(auth.uuid);
-    NSString *skinPath = NCLRTextureCache(auth.uuid, @"skin.png");
-    NSString *capePath = NCLRTextureCache(auth.uuid, @"cape.png");
-    NSDictionary *skin = NCLRActiveTexture(appearance, @"skins");
-    if (skin && skinPath && [files fileExistsAtPath:skinPath]) {
-        setenv("HORIZON_OFFLINE_SKIN", skinPath.UTF8String, 1);
-        BOOL slim = [NCLRString(skin[@"variant"]).lowercaseString isEqualToString:@"slim"];
-        setenv("HORIZON_OFFLINE_SKIN_MODEL", slim ? "slim" : "classic", 1);
-    }
-    if (NCLRActiveTexture(appearance, @"capes") && capePath && [files fileExistsAtPath:capePath]) {
-        setenv("HORIZON_OFFLINE_CAPE", capePath.UTF8String, 1);
+    if (offlineProfile) {
+        // No Microsoft session: the engine runs the profile offline and the
+        // skin and cape come straight from the account folder.
+        unsetenv("HORIZON_SESSION_FILE");
+        [files removeItemAtPath:sessionPath error:nil];
+        setenv("HORIZON_PLAYER_NAME", [(NSString *)offlineProfile[@"name"] UTF8String], 1);
+        NSString *skinPath = NCLRString(offlineProfile[@"skin"]);
+        if (skinPath.length > 0 && [files fileExistsAtPath:skinPath]) {
+            setenv("HORIZON_OFFLINE_SKIN", skinPath.UTF8String, 1);
+            setenv("HORIZON_OFFLINE_SKIN_MODEL",
+                   [offlineProfile[@"slim"] boolValue] ? "slim" : "classic", 1);
+        }
+        NSString *capePath = NCLRString(offlineProfile[@"cape"]);
+        if (capePath.length > 0 && [files fileExistsAtPath:capePath]) {
+            setenv("HORIZON_OFFLINE_CAPE", capePath.UTF8String, 1);
+        }
+    } else {
+        NSData *sessionData = [NSJSONSerialization dataWithJSONObject:@{
+            @"name": auth.name, @"uuid": auth.uuid, @"access_token": auth.token, @"user_type": @"msa"
+        } options:0 error:nil];
+        if (![sessionData writeToFile:sessionPath options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:nil] ||
+            ![files setAttributes:@{NSFilePosixPermissions: @0600} ofItemAtPath:sessionPath error:nil]) {
+            [files removeItemAtPath:sessionPath error:nil];
+            [self showLaunchError:@"无法建立正版游戏会话，请检查设备可用空间。"];
+            return;
+        }
+        setenv("HORIZON_SESSION_FILE", sessionPath.UTF8String, 1);
+        unsetenv("HORIZON_PLAYER_NAME");
+        NSDictionary *appearance = NCLRReadAppearance(auth.uuid);
+        NSString *skinPath = NCLRTextureCache(auth.uuid, @"skin.png");
+        NSString *capePath = NCLRTextureCache(auth.uuid, @"cape.png");
+        NSDictionary *skin = NCLRActiveTexture(appearance, @"skins");
+        if (skin && skinPath && [files fileExistsAtPath:skinPath]) {
+            setenv("HORIZON_OFFLINE_SKIN", skinPath.UTF8String, 1);
+            BOOL slim = [NCLRString(skin[@"variant"]).lowercaseString isEqualToString:@"slim"];
+            setenv("HORIZON_OFFLINE_SKIN_MODEL", slim ? "slim" : "classic", 1);
+        }
+        if (NCLRActiveTexture(appearance, @"capes") && capePath && [files fileExistsAtPath:capePath]) {
+            setenv("HORIZON_OFFLINE_CAPE", capePath.UTF8String, 1);
+        }
     }
     NSInteger screenLimit = self.view.window.screen.maximumFramesPerSecond;
     BOOL highRefresh = screenLimit >= 120 && !NSProcessInfo.processInfo.isLowPowerModeEnabled;
@@ -2523,13 +2891,28 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
                                                  : CAFrameRateRangeMake(30, 60, 60);
     [display addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
     NCLRKeymap *keymap = NCLRKeymap.shared;
-    CMMotionManager *motion = keymap.gyroEnabled
-        ? NCLRStartGyro(launcherWindow.windowScene, keymap.gyroSensitivity,
-                        keymap.gyroInvertX, keymap.gyroInvertY) : nil;
+    if (keymap.gyroEnabled) {
+        [NCLRGyro.shared startWithScene:launcherWindow.windowScene
+                            sensitivity:keymap.gyroSensitivity
+                                invertX:keymap.gyroInvertX
+                                invertY:keymap.gyroInvertY];
+    }
+    // The engine reports load failures on stderr; on a phone that goes to the
+    // system log, which the person cannot read. Keep a copy beside the game
+    // files so a failing world can be diagnosed from the device.
+    NSString *engineLog = [NCLRDocuments() stringByAppendingPathComponent:@"engine.log"];
+    int logHandle = open(engineLog.fileSystemRepresentation, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (logHandle >= 0) {
+        dup2(logHandle, STDOUT_FILENO);
+        dup2(logHandle, STDERR_FILENO);
+        close(logHandle);
+        fprintf(stderr, "NCLR engine start %s\n", NSDate.date.description.UTF8String);
+        fflush(stderr);
+    }
     [[NCLRHardwareInput shared] start];
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
     [[NCLRHardwareInput shared] stop];
-    [motion stopDeviceMotionUpdates];
+    [NCLRGyro.shared stop];
     [display invalidate];
     unsetenv("HORIZON_SESSION_FILE");
     [files removeItemAtPath:sessionPath error:nil];
@@ -3213,6 +3596,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @property (nonatomic, strong) UISlider *gyroSlider;
 @property (nonatomic, strong) UISwitch *gyroInvertXSwitch;
 @property (nonatomic, strong) UISwitch *gyroInvertYSwitch;
+@property (nonatomic, strong) UISwitch *mouseInvertXSwitch;
+@property (nonatomic, strong) UISwitch *mouseInvertYSwitch;
+@property (nonatomic, strong) UISwitch *mouseSwapAxesSwitch;
 @property (nonatomic, strong) UILabel *gyroValue;
 @property (nonatomic, strong) UILabel *canvasStatus;
 @property (nonatomic, assign) BOOL canvasFullscreen;
@@ -3223,6 +3609,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @property (nonatomic, strong) UISlider *keySizeSlider;
 @property (nonatomic, strong) UISlider *keyWidthSlider;
 @property (nonatomic, strong) UISegmentedControl *triggerControl;
+@property (nonatomic, strong) UISwitch *swipeThroughSwitch;
 @property (nonatomic, strong) UIButton *deleteKeyButton;
 @property (nonatomic, strong) UISegmentedControl *layoutScreenControl;
 @property (nonatomic, strong) UISlider *keyXSlider;
@@ -3664,6 +4051,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.canvasStatus.lineBreakMode = NSLineBreakByTruncatingTail;
     self.undoTool = [self canvasTool:@"arrow.uturn.backward" label:@"撤销" action:@selector(undoTapped)];
     self.redoTool = [self canvasTool:@"arrow.uturn.forward" label:@"重做" action:@selector(redoTapped)];
+    UIButton *keyboardTool = [self canvasTool:@"keyboard" label:@"编辑系统键盘按钮位置"
+                                       action:@selector(editKeyboardOverlay)];
     self.gridTool = [self canvasTool:@"grid" label:@"显示或隐藏网格" action:@selector(toggleGrid)];
     self.canvasClose = [self canvasTool:@"arrow.up.left.and.arrow.down.right" label:@"全屏编辑" action:@selector(toggleCanvas)];
     UIButton *more = [self canvasTool:@"ellipsis" label:@"更多布局操作" action:NULL];
@@ -3680,7 +4069,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     ]];
     more.showsMenuAsPrimaryAction = YES;
     UIStackView *toolbar = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.canvasStatus, self.undoTool, self.redoTool, self.gridTool, self.canvasClose, more]];
+        @[self.canvasStatus, self.undoTool, self.redoTool, keyboardTool,
+          self.gridTool, self.canvasClose, more]];
     toolbar.alignment = UIStackViewAlignmentCenter;
     toolbar.spacing = 2;
     toolbar.translatesAutoresizingMaskIntoConstraints = NO;
@@ -3813,6 +4203,19 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.triggerControl.enabled = NO;
     self.triggerControl.selectedSegmentIndex = 0;
     [self.triggerControl addTarget:self action:@selector(triggerChanged:) forControlEvents:UIControlEventValueChanged];
+    UILabel *swipeThroughLabel = [self label:@"穿透滑屏" size:12.0 weight:UIFontWeightSemibold
+                                         color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
+    self.swipeThroughSwitch = [[UISwitch alloc] init];
+    self.swipeThroughSwitch.enabled = NO;
+    self.swipeThroughSwitch.onTintColor = NCLRAccent();
+    self.swipeThroughSwitch.accessibilityLabel = @"允许拖动穿过此按键转动视角";
+    [self.swipeThroughSwitch addTarget:self action:@selector(swipeThroughChanged:)
+                      forControlEvents:UIControlEventValueChanged];
+    UIStackView *swipeThroughRow = [[UIStackView alloc] initWithArrangedSubviews:
+        @[swipeThroughLabel, [UIView new], self.swipeThroughSwitch]];
+    swipeThroughRow.axis = UILayoutConstraintAxisHorizontal;
+    swipeThroughRow.alignment = UIStackViewAlignmentCenter;
+    swipeThroughRow.spacing = 8;
     UILabel *inspectorTitle = [self eyebrow:@"选中按键"];
     inspectorTitle.textColor = NCLRAccent();
     self.keyEditTitle.numberOfLines = 1;
@@ -3844,7 +4247,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         row.spacing = 10;
         [inspector addObject:row];
     }
-    [inspector addObjectsFromArray:@[keyWidthRow, keySizeRow, keyVisibleRow, self.triggerControl, self.deleteKeyButton]];
+    [inspector addObjectsFromArray:@[keyWidthRow, keySizeRow, keyVisibleRow,
+                                      self.triggerControl, swipeThroughRow, self.deleteKeyButton]];
     UIStackView *keyStack = [[UIStackView alloc] initWithArrangedSubviews:inspector];
     keyStack.axis = UILayoutConstraintAxisVertical;
     keyStack.spacing = 9.0;
@@ -3862,7 +4266,11 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.editorWorkspace.axis = UILayoutConstraintAxisVertical;
     self.editorWorkspace.spacing = 12;
     [self.stack addArrangedSubview:self.editorWorkspace];
+    UIButton *keyboardLayout = [self button:@"编辑系统键盘按钮位置"
+                                     action:@selector(editKeyboardOverlay) primary:NO];
+    [self.stack addArrangedSubview:keyboardLayout];
     [self.stack addArrangedSubview:[self gyroCard]];
+    [self.stack addArrangedSubview:[self mouseCard]];
     [self.stack addArrangedSubview:menu];
 
     UIButton *save = [self button:@"保存" action:@selector(saveKeymap) primary:YES];
@@ -4015,6 +4423,79 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NCLRKeymap *keymap = NCLRKeymap.shared;
     keymap.gyroInvertX = self.gyroInvertXSwitch.on;
     keymap.gyroInvertY = self.gyroInvertYSwitch.on;
+    [keymap save];
+}
+
+- (UIView *)mouseCard {
+    UIView *card = [self card];
+    UILabel *title = [self label:@"外接鼠标" size:15 weight:UIFontWeightSemibold
+                            color:NCLRColor(0.94, 0.94, 0.94, 1)];
+    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"computermouse"]];
+    icon.tintColor = NCLRAccent();
+    icon.contentMode = UIViewContentModeScaleAspectFit;
+    UIView *spacer = [UIView new];
+    UIStackView *header = [[UIStackView alloc] initWithArrangedSubviews:@[icon, title, spacer]];
+    header.alignment = UIStackViewAlignmentCenter;
+    header.spacing = 10;
+    UILabel *hint = [self label:@"键鼠接入时触控键自动隐藏。视角方向不合适时在这里校正，设置会保存。"
+                            size:11 weight:UIFontWeightRegular
+                           color:NCLRColor(0.66, 0.66, 0.66, 1)];
+    hint.numberOfLines = 0;
+    self.mouseInvertXSwitch = [self mouseAxisSwitch:NCLRKeymap.shared.mouseInvertX
+                                             label:@"反转 X 轴（左右）"];
+    self.mouseInvertYSwitch = [self mouseAxisSwitch:NCLRKeymap.shared.mouseInvertY
+                                             label:@"反转 Y 轴（上下）"];
+    self.mouseSwapAxesSwitch = [self mouseAxisSwitch:NCLRKeymap.shared.mouseSwapAxes
+                                              label:@"交换 X / Y 轴"];
+    UIStackView *content = [[UIStackView alloc] initWithArrangedSubviews:@[
+        header,
+        hint,
+        [self mouseAxisRow:self.mouseInvertXSwitch],
+        [self mouseAxisRow:self.mouseInvertYSwitch],
+        [self mouseAxisRow:self.mouseSwapAxesSwitch],
+    ]];
+    content.axis = UILayoutConstraintAxisVertical;
+    content.spacing = 5;
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:content];
+    [NSLayoutConstraint activateConstraints:@[
+        [icon.widthAnchor constraintEqualToConstant:22],
+        [icon.heightAnchor constraintEqualToConstant:22],
+        [content.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:14],
+        [content.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-14],
+        [content.topAnchor constraintEqualToAnchor:card.topAnchor constant:10],
+        [content.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-10],
+    ]];
+    return card;
+}
+
+- (UISwitch *)mouseAxisSwitch:(BOOL)on label:(NSString *)label {
+    UISwitch *toggle = [[UISwitch alloc] init];
+    toggle.on = on;
+    toggle.onTintColor = NCLRAccent();
+    toggle.accessibilityLabel = label;
+    [toggle addTarget:self action:@selector(mouseAxesChanged) forControlEvents:UIControlEventValueChanged];
+    return toggle;
+}
+
+- (UIStackView *)mouseAxisRow:(UISwitch *)toggle {
+    UILabel *label = [self label:toggle.accessibilityLabel size:12 weight:UIFontWeightMedium
+                            color:NCLRColor(0.76, 0.76, 0.76, 1)];
+    label.isAccessibilityElement = NO;
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[label, [UIView new], toggle]];
+    row.alignment = UIStackViewAlignmentCenter;
+    row.spacing = 10;
+    return row;
+}
+
+- (void)mouseAxesChanged {
+    NCLRKeymap *keymap = NCLRKeymap.shared;
+    keymap.mouseInvertX = self.mouseInvertXSwitch.on;
+    keymap.mouseInvertY = self.mouseInvertYSwitch.on;
+    keymap.mouseSwapAxes = self.mouseSwapAxesSwitch.on;
+    NCLRMouseInvertX = keymap.mouseInvertX;
+    NCLRMouseInvertY = keymap.mouseInvertY;
+    NCLRMouseSwapAxes = keymap.mouseSwapAxes;
     [keymap save];
 }
 
@@ -4201,6 +4682,11 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.triggerControl.enabled = key.length > 0 && !NCLRIsMenuKey(key) && !menuCanvasKey && ![key isEqualToString:@"move"];
     self.triggerControl.selectedSegmentIndex = key.length > 0 &&
         [NCLRKeymap.shared.triggerModes[key] isEqualToString:@"toggle"] ? 1 : 0;
+    self.swipeThroughSwitch.enabled = key.length > 0 && !NCLRIsMenuKey(key) &&
+        !menuCanvasKey && ![key isEqualToString:@"move"] &&
+        ![key isEqualToString:@"keyboard"];
+    self.swipeThroughSwitch.on = key.length > 0 &&
+        [NCLRKeymap.shared.swipeThroughKeys containsObject:key];
     self.keySizeSlider.enabled = key.length > 0;
     self.keyVisibleSwitch.enabled = key.length > 0 && !NCLRIsMenuKey(key) && !menuCanvasKey;
     NSDictionary *position = key.length ? NCLRKeymap.shared.positions[key] : nil;
@@ -4226,7 +4712,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     return @{@"positions": [keymap.positions copy], @"hidden": [keymap.hiddenKeys copy],
              @"bindings": [keymap.bindings copy], @"deletedKeys": [keymap.deletedKeys copy],
              @"menuKeys": [keymap.menuKeys mutableCopy],
-             @"triggerModes": [keymap.triggerModes copy] ?: @{}};
+             @"triggerModes": [keymap.triggerModes copy] ?: @{},
+             @"swipeThrough": [keymap.swipeThroughKeys copy] ?: [NSSet set]};
 }
 
 - (void)deleteSelectedKey {
@@ -4243,6 +4730,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     } else {
         [NCLRKeymap.shared.deletedKeys addObject:key];
     }
+    [NCLRKeymap.shared.swipeThroughKeys removeObject:key];
     [self pushUndo:before];
     [NCLRKeymap.shared save];
     [self selectKey:nil];
@@ -4256,6 +4744,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     keys.deletedKeys = [snapshot[@"deletedKeys"] mutableCopy];
     keys.menuKeys = [snapshot[@"menuKeys"] mutableCopy] ?: [NSMutableArray array];
     keys.triggerModes = [snapshot[@"triggerModes"] mutableCopy];
+    keys.swipeThroughKeys = [snapshot[@"swipeThrough"] mutableCopy] ?: [NSMutableSet set];
     [keys save];
     [self refreshPreviewButtons];
     [self selectKey:self.selectedKey];
@@ -4267,6 +4756,17 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NSDictionary *before = [self keyLayoutSnapshot];
     if (!keymap.triggerModes) keymap.triggerModes = [NSMutableDictionary dictionary];
     keymap.triggerModes[self.selectedKey] = sender.selectedSegmentIndex == 1 ? @"toggle" : @"tap";
+    [self pushUndo:before];
+    [keymap save];
+}
+
+- (void)swipeThroughChanged:(UISwitch *)sender {
+    if (!sender.enabled || self.selectedKey.length == 0) return;
+    NCLRKeymap *keymap = NCLRKeymap.shared;
+    NSDictionary *before = [self keyLayoutSnapshot];
+    if (!keymap.swipeThroughKeys) keymap.swipeThroughKeys = [NSMutableSet set];
+    if (sender.on) [keymap.swipeThroughKeys addObject:self.selectedKey];
+    else [keymap.swipeThroughKeys removeObject:self.selectedKey];
     [self pushUndo:before];
     [keymap save];
 }
@@ -4595,6 +5095,27 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 - (void)dynamicChanged:(UISwitch *)sender {
 }
 
+- (void)editKeyboardOverlay {
+    NCLRKeymap *keys = NCLRKeymap.shared;
+    [keys.hiddenKeys removeObject:@"keyboard"];
+    [keys.deletedKeys removeObject:@"keyboard"];
+    if (keys.bindings[@"keyboard"] == nil) keys.bindings[@"keyboard"] = @"键盘";
+    if (keys.positions[@"keyboard"] == nil) {
+        keys.positions[@"keyboard"] = @{ @"x" : @0.66, @"y" : @0.12,
+                                          @"size" : @0.075, @"width" : @0.075 };
+    }
+    [keys save];
+    [self refreshPreviewButtons];
+    [self selectKey:@"keyboard"];
+    [self.preview setNeedsLayout];
+    [self.view layoutIfNeeded];
+    UIButton *button = self.previewButtons[@"keyboard"];
+    if (button) {
+        CGRect target = [button convertRect:button.bounds toView:self.scroll];
+        [self.scroll scrollRectToVisible:CGRectInset(target, -20.0, -20.0) animated:YES];
+    }
+}
+
 - (void)addKeyTapped {
     [NCLRKeyPickerController presentFrom:self title:@"添加触控键" onPick:^(NSString *picked) {
         NSString *keyId = [picked isEqualToString:@"键盘"] ? @"keyboard" : picked;
@@ -4820,6 +5341,9 @@ static NSString *NCLRSHA1Hex(NSData *data) {
                  completion:(void (^)(NSString *))completion {
     if (self.preparing) return;
     self.preparing = YES;
+    // Generating the tables from the jar takes minutes on a phone; a locked
+    // screen would suspend the app and stall it, so keep the display awake.
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
     self.cancellable = YES;
     self.cancelRequested = NO;
     self.progressValue = 0;
@@ -4838,6 +5362,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
             }
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSString *result = self.cancelRequested ? @"下载已取消" : error;
+                UIApplication.sharedApplication.idleTimerDisabled = NO;
                 self.cancellable = NO;
                 self.preparing = NO;
                 self.lastLine = result ?: @"资源准备完成";
@@ -5020,9 +5545,9 @@ static NSString *NCLRSHA1Hex(NSData *data) {
         dispatch_sync(dispatch_get_main_queue(), ^{ self.cancellable = NO; });
         if (self.cancelRequested) { finish(@"下载已取消"); return; }
 
-        NSString *bundle = [[NSBundle mainBundle] pathForResource:@"ship" ofType:@"hzr3"];
-        if (bundle.length == 0) { finish(@"IPA 内缺少 ship.hzr3"); return; }
-        report(@"组装游戏资源…", 0.93);
+        // Every table is generated from the player's own client.jar, so the
+        // app ships no Mojang-derived data.
+        report(@"生成并组装游戏资源…", 0.90);
         NSString *destination = out;
         out = [out stringByAppendingString:@".preparing"];
         NSFileManager *files = NSFileManager.defaultManager;
@@ -5032,9 +5557,10 @@ static NSString *NCLRSHA1Hex(NSData *data) {
             return;
         }
         NCLRCreateDirectory([out stringByDeletingLastPathComponent]);
-        const char *message = horizon_ios_assemble(bundle.UTF8String, jarPath.UTF8String,
-                                                   indexPath.UTF8String, objects.UTF8String,
-                                                   out.UTF8String);
+        const char *message = horizon_ios_assemble_from_jar(jarPath.UTF8String,
+                                                           indexPath.UTF8String,
+                                                           objects.UTF8String,
+                                                           out.UTF8String);
         if (message != NULL) {
             finish([NSString stringWithUTF8String:message]);
             return;
