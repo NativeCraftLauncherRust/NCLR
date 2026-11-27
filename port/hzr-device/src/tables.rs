@@ -17,7 +17,7 @@ pub const COMMANDS: [&str; 28] = [
     "entity-types",
     "attributes",
     "biome-parameters",
-    "command-registries",
+    "command-registries-full",
     "landing-definitions",
     "block-states",
     "registries",
@@ -104,7 +104,9 @@ fn run(command: &str, client_jar: &Path, out: &Path) -> Result<(), String> {
         }
         "shapes" => hzr_export_shapes::run(&args),
         "structure-blocks" => hzr_export_structure::run(&args),
-        "registries" | "command-registries" => hzr_export_registries::run(&args),
+        "registries" | "command-registries" | "command-registries-full" => {
+            hzr_export_registries::run(&args)
+        }
         "commands" => hzr_export_commands::run(&args),
         "items" => hzr_export_items::run(&args),
         "gameplay-compact" => hzr_export_gameplay::run(&args),
