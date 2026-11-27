@@ -133,6 +133,98 @@ static NSString *NCLRAvatarURLForName(NSString *name) {
     return [NSString stringWithFormat:@"https://minotar.net/helm/%@/128", name];
 }
 
+static NSString *NCLRString(id value);
+static NSString *NCLRDocuments(void);
+
+/// Offline accounts live beside the game as one JSON file each in
+/// `Documents/account`. The launcher reads them on start so a profile can be
+/// dropped in without signing in. Java's `UUID.nameUUIDFromBytes` (MD5,
+/// version 3) over `OfflinePlayer:<name>` is the id the game expects.
+static NSString *NCLROfflineDirectory(void) {
+    return [NCLRDocuments() stringByAppendingPathComponent:@"account"];
+}
+
+static NSString *NCLROfflineUUID(NSString *name) {
+    NSString *seed = [@"OfflinePlayer:" stringByAppendingString:name];
+    unsigned char digest[CC_MD5_DIGEST_LENGTH];
+    CC_MD5(seed.UTF8String, (CC_LONG)strlen(seed.UTF8String), digest);
+    digest[6] = (unsigned char)((digest[6] & 0x0F) | 0x30);
+    digest[8] = (unsigned char)((digest[8] & 0x3F) | 0x80);
+    NSMutableString *hex = [NSMutableString stringWithCapacity:32];
+    for (int index = 0; index < CC_MD5_DIGEST_LENGTH; index++) {
+        [hex appendFormat:@"%02x", digest[index]];
+    }
+    return hex;
+}
+
+static NSString *NCLROfflinePath(NSString *directory, id value) {
+    NSString *name = NCLRString(value);
+    if (name.length == 0) return nil;
+    BOOL absolute = [name hasPrefix:@"/"] || [name containsString:@":"];
+    NSString *path = absolute ? name : [directory stringByAppendingPathComponent:name];
+    return [NSFileManager.defaultManager fileExistsAtPath:path] ? path : nil;
+}
+
+static NSArray<NSDictionary *> *NCLROfflineProfiles(void) {
+    NSString *directory = NCLROfflineDirectory();
+    NSMutableArray<NSDictionary *> *profiles = [NSMutableArray array];
+    NSCharacterSet *hexSet = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
+    for (NSString *name in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:directory error:nil]
+                                sortedArrayUsingSelector:@selector(compare:)]) {
+        if (![name.pathExtension.lowercaseString isEqualToString:@"json"]) continue;
+        NSString *path = [directory stringByAppendingPathComponent:name];
+        NSData *data = [NSData dataWithContentsOfFile:path];
+        id json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        if (![json isKindOfClass:NSDictionary.class]) continue;
+        NSString *player = [NCLRString(json[@"name"])
+            stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if (NCLRAvatarURLForName(player) == nil) continue;
+        NSString *uuid = [[NCLRString(json[@"uuid"]) stringByReplacingOccurrencesOfString:@"-" withString:@""] lowercaseString];
+        if (uuid.length != 32 || [uuid rangeOfCharacterFromSet:hexSet].location != NSNotFound) {
+            uuid = NCLROfflineUUID(player);
+        }
+        [profiles addObject:@{
+            @"name": player,
+            @"uuid": uuid,
+            @"file": name,
+            @"active": @([json[@"active"] boolValue]),
+            @"skin": NCLROfflinePath(directory, json[@"skin"]) ?: @"",
+            @"cape": NCLROfflinePath(directory, json[@"cape"]) ?: @"",
+            @"slim": @([json[@"slim"] boolValue]),
+        }];
+    }
+    return profiles;
+}
+
+/// The profile marked `"active": true`, else the first file by name.
+static NSDictionary *NCLRActiveOfflineProfile(void) {
+    NSArray<NSDictionary *> *profiles = NCLROfflineProfiles();
+    for (NSDictionary *profile in profiles) {
+        if ([profile[@"active"] boolValue]) return profile;
+    }
+    return profiles.firstObject;
+}
+
+static NSString *const NCLROfflineReadme =
+    @"Offline accounts: one JSON file per player in this folder.\n"
+     "\n"
+     "{\n"
+     "  \"name\": \"Steve\",\n"
+     "  \"uuid\": \"\",\n"
+     "  \"skin\": \"steve.png\",\n"
+     "  \"cape\": \"cape.png\",\n"
+     "  \"slim\": false,\n"
+     "  \"active\": true\n"
+     "}\n"
+     "\n"
+     "name  : 1-16 letters, digits or underscore (required).\n"
+     "uuid  : optional 32 hex digits; empty means OfflinePlayer:<name>.\n"
+     "skin  : optional PNG path, relative to this folder or absolute.\n"
+     "cape  : optional PNG path, relative to this folder or absolute.\n"
+     "slim  : true for the slim (Alex) arm model.\n"
+     "active: when no Microsoft account is signed in, this profile is used;\n"
+     "        otherwise the first file by name is used.\n";
+
 @class NCLRRootController;
 static BOOL NCLRDarkMode = YES;
 static NSString *const kNCLRThemeKey = @"NCLRThemeDark";
@@ -1617,6 +1709,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, assign) BOOL developerPremium;
 @property (nonatomic, copy) NSString *avatarURL;
 @property (nonatomic, copy) NSString *uuid;
+@property (nonatomic, copy) NSDictionary *offlineProfile;
 @property (nonatomic, strong) ASWebAuthenticationSession *session;
 @property (nonatomic, weak) UIViewController *presenter;
 @property (nonatomic, strong) SFSafariViewController *authSafari;
@@ -1638,6 +1731,24 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         if (_token.length > 0) {
             _uuid = [[NSUserDefaults standardUserDefaults] stringForKey:kNCLRAccountUUIDKey];
             _avatarURL = NCLRAvatarURLForName(_name);
+        }
+        NSString *accountDirectory = NCLROfflineDirectory();
+        [[NSFileManager defaultManager] createDirectoryAtPath:accountDirectory
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil];
+        NSString *readme = [accountDirectory stringByAppendingPathComponent:@"README.txt"];
+        if (![NSFileManager.defaultManager fileExistsAtPath:readme]) {
+            [NCLROfflineReadme writeToFile:readme atomically:YES
+                                  encoding:NSUTF8StringEncoding error:nil];
+        }
+        if (_token.length == 0) {
+            NSDictionary *profile = NCLRActiveOfflineProfile();
+            if (profile) {
+                _offlineProfile = profile;
+                _name = profile[@"name"];
+                _uuid = profile[@"uuid"];
+            }
         }
         _developerPremium = NO;
     }
@@ -2598,15 +2709,25 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 - (void)launchTapped {
     if (NCLRResourcePreparer.shared.preparing || self.checkingAccount) return;
     NCLRAuth *auth = NCLRAuth.shared;
+    NSDictionary *offlineProfile = nil;
     if (auth.token.length == 0 || NCLRTokenExpired(auth.token)) {
         if (auth.token.length > 0) {
             [auth logout];
             [[NSNotificationCenter defaultCenter] postNotificationName:NCLRAvatarUpdatedNotification object:auth];
         }
-        [self showLaunchError:@"请在账号页登录 Microsoft 正版账号后启动游戏。"];
-        return;
+        offlineProfile = NCLRActiveOfflineProfile();
+        if (offlineProfile == nil) {
+            [self showLaunchError:@"请在账号页登录 Microsoft 正版账号后启动游戏。"];
+            return;
+        }
+        auth.offlineProfile = offlineProfile;
+        auth.name = offlineProfile[@"name"];
+        auth.uuid = offlineProfile[@"uuid"];
+        auth.avatarURL = nil;
+    } else {
+        auth.offlineProfile = nil;
     }
-    if (auth.uuid.length == 0 || !NCLRAvatarURLForName(auth.name)) {
+    if (offlineProfile == nil && (auth.uuid.length == 0 || !NCLRAvatarURLForName(auth.name))) {
         self.checkingAccount = YES;
         [self updateLaunchControlsAnimated:YES];
         [auth fetchProfileWithToken:auth.token completion:^(NSString *token, NSString *name, NSString *error) {
@@ -2636,31 +2757,50 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NSString *game = NCLRDocuments();
     NCLRCreateDirectory(game);
     NSString *sessionPath = [game stringByAppendingPathComponent:@".nclr-session.json"];
-    NSData *sessionData = [NSJSONSerialization dataWithJSONObject:@{
-        @"name": auth.name, @"uuid": auth.uuid, @"access_token": auth.token, @"user_type": @"msa"
-    } options:0 error:nil];
-    if (![sessionData writeToFile:sessionPath options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:nil] ||
-        ![files setAttributes:@{NSFilePosixPermissions: @0600} ofItemAtPath:sessionPath error:nil]) {
-        [files removeItemAtPath:sessionPath error:nil];
-        [self showLaunchError:@"无法建立正版游戏会话，请检查设备可用空间。"];
-        return;
-    }
     setenv("HORIZON_HOME", game.UTF8String, 1);
-    setenv("HORIZON_SESSION_FILE", sessionPath.UTF8String, 1);
     unsetenv("HORIZON_OFFLINE_SKIN");
     unsetenv("HORIZON_OFFLINE_CAPE");
     unsetenv("HORIZON_OFFLINE_SKIN_MODEL");
-    NSDictionary *appearance = NCLRReadAppearance(auth.uuid);
-    NSString *skinPath = NCLRTextureCache(auth.uuid, @"skin.png");
-    NSString *capePath = NCLRTextureCache(auth.uuid, @"cape.png");
-    NSDictionary *skin = NCLRActiveTexture(appearance, @"skins");
-    if (skin && skinPath && [files fileExistsAtPath:skinPath]) {
-        setenv("HORIZON_OFFLINE_SKIN", skinPath.UTF8String, 1);
-        BOOL slim = [NCLRString(skin[@"variant"]).lowercaseString isEqualToString:@"slim"];
-        setenv("HORIZON_OFFLINE_SKIN_MODEL", slim ? "slim" : "classic", 1);
-    }
-    if (NCLRActiveTexture(appearance, @"capes") && capePath && [files fileExistsAtPath:capePath]) {
-        setenv("HORIZON_OFFLINE_CAPE", capePath.UTF8String, 1);
+    if (offlineProfile) {
+        // No Microsoft session: the engine runs the profile offline and the
+        // skin and cape come straight from the account folder.
+        unsetenv("HORIZON_SESSION_FILE");
+        [files removeItemAtPath:sessionPath error:nil];
+        setenv("HORIZON_PLAYER_NAME", [(NSString *)offlineProfile[@"name"] UTF8String], 1);
+        NSString *skinPath = NCLRString(offlineProfile[@"skin"]);
+        if (skinPath.length > 0 && [files fileExistsAtPath:skinPath]) {
+            setenv("HORIZON_OFFLINE_SKIN", skinPath.UTF8String, 1);
+            setenv("HORIZON_OFFLINE_SKIN_MODEL",
+                   [offlineProfile[@"slim"] boolValue] ? "slim" : "classic", 1);
+        }
+        NSString *capePath = NCLRString(offlineProfile[@"cape"]);
+        if (capePath.length > 0 && [files fileExistsAtPath:capePath]) {
+            setenv("HORIZON_OFFLINE_CAPE", capePath.UTF8String, 1);
+        }
+    } else {
+        NSData *sessionData = [NSJSONSerialization dataWithJSONObject:@{
+            @"name": auth.name, @"uuid": auth.uuid, @"access_token": auth.token, @"user_type": @"msa"
+        } options:0 error:nil];
+        if (![sessionData writeToFile:sessionPath options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:nil] ||
+            ![files setAttributes:@{NSFilePosixPermissions: @0600} ofItemAtPath:sessionPath error:nil]) {
+            [files removeItemAtPath:sessionPath error:nil];
+            [self showLaunchError:@"无法建立正版游戏会话，请检查设备可用空间。"];
+            return;
+        }
+        setenv("HORIZON_SESSION_FILE", sessionPath.UTF8String, 1);
+        unsetenv("HORIZON_PLAYER_NAME");
+        NSDictionary *appearance = NCLRReadAppearance(auth.uuid);
+        NSString *skinPath = NCLRTextureCache(auth.uuid, @"skin.png");
+        NSString *capePath = NCLRTextureCache(auth.uuid, @"cape.png");
+        NSDictionary *skin = NCLRActiveTexture(appearance, @"skins");
+        if (skin && skinPath && [files fileExistsAtPath:skinPath]) {
+            setenv("HORIZON_OFFLINE_SKIN", skinPath.UTF8String, 1);
+            BOOL slim = [NCLRString(skin[@"variant"]).lowercaseString isEqualToString:@"slim"];
+            setenv("HORIZON_OFFLINE_SKIN_MODEL", slim ? "slim" : "classic", 1);
+        }
+        if (NCLRActiveTexture(appearance, @"capes") && capePath && [files fileExistsAtPath:capePath]) {
+            setenv("HORIZON_OFFLINE_CAPE", capePath.UTF8String, 1);
+        }
     }
     NSInteger screenLimit = self.view.window.screen.maximumFramesPerSecond;
     BOOL highRefresh = screenLimit >= 120 && !NSProcessInfo.processInfo.isLowPowerModeEnabled;
