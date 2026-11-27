@@ -482,7 +482,7 @@ static NSString *NCLRModIdentifier(NSString *path) {
 @property (nonatomic, strong) NSTimer *retry;
 @property (nonatomic, strong) UIWindowScene *scene;
 @property (nonatomic, strong) NSOperationQueue *motionQueue;
-@property (nonatomic, assign) UIInterfaceOrientation orientation;
+@property (assign) UIInterfaceOrientation orientation;
 @property (nonatomic, assign) CGFloat sensitivity;
 @property (nonatomic, assign) BOOL invertX;
 @property (nonatomic, assign) BOOL invertY;
@@ -4277,6 +4277,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.editorWorkspace.axis = UILayoutConstraintAxisVertical;
     self.editorWorkspace.spacing = 12;
     [self.stack addArrangedSubview:self.editorWorkspace];
+    UIButton *keyboardLayout = [self button:@"编辑系统键盘按钮位置"
+                                     action:@selector(editKeyboardOverlay) primary:NO];
+    [self.stack addArrangedSubview:keyboardLayout];
     [self.stack addArrangedSubview:[self gyroCard]];
     [self.stack addArrangedSubview:[self mouseCard]];
     [self.stack addArrangedSubview:menu];
