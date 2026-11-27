@@ -10,6 +10,8 @@
 #import <SafariServices/SafariServices.h>
 #import <stdlib.h>
 #import <os/lock.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
@@ -2687,6 +2689,18 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
                                 invertX:keymap.gyroInvertX
                                 invertY:keymap.gyroInvertY];
     }
+    // The engine reports load failures on stderr; on a phone that goes to the
+    // system log, which the person cannot read. Keep a copy beside the game
+    // files so a failing world can be diagnosed from the device.
+    NSString *engineLog = [NCLRDocuments() stringByAppendingPathComponent:@"engine.log"];
+    int logHandle = open(engineLog.fileSystemRepresentation, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (logHandle >= 0) {
+        dup2(logHandle, STDOUT_FILENO);
+        dup2(logHandle, STDERR_FILENO);
+        close(logHandle);
+        fprintf(stderr, "NCLR engine start %s\n", NSDate.date.description.UTF8String);
+        fflush(stderr);
+    }
     [[NCLRHardwareInput shared] start];
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
     [[NCLRHardwareInput shared] stop];
@@ -5022,6 +5036,9 @@ static NSString *NCLRSHA1Hex(NSData *data) {
                  completion:(void (^)(NSString *))completion {
     if (self.preparing) return;
     self.preparing = YES;
+    // Generating the tables from the jar takes minutes on a phone; a locked
+    // screen would suspend the app and stall it, so keep the display awake.
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
     self.cancellable = YES;
     self.cancelRequested = NO;
     self.progressValue = 0;
@@ -5040,6 +5057,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
             }
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSString *result = self.cancelRequested ? @"下载已取消" : error;
+                UIApplication.sharedApplication.idleTimerDisabled = NO;
                 self.cancellable = NO;
                 self.preparing = NO;
                 self.lastLine = result ?: @"资源准备完成";
