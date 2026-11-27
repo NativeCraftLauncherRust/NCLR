@@ -1,0 +1,98 @@
+schema = 1
+id = "horizon_lite"
+name = "轻光影 Lite"
+version = "1.0.0"
+api = "0.2"
+description = "为手机和低配设备做的光影：太阳与月亮的方向光、屏幕空间投影、天空渐变、柔和泛光、水面反光与轻色彩分级。不用阴影图，也不追踪光线。"
+authors = ["NCLR"]
+license = "MIT"
+shared = ["common.wgsl"]
+
+[sky]
+file = "sky.wgsl"
+name = "天空"
+
+[material]
+file = "material.wgsl"
+files = ["light.wgsl"]
+name = "地形"
+
+[entity]
+file = "entity.wgsl"
+files = ["light.wgsl"]
+name = "实体"
+
+[[post]]
+file = "post/sun.wgsl"
+name = "太阳投影"
+output = "sun"
+scale = 0.5
+
+[[post]]
+file = "post/bloom.wgsl"
+name = "泛光"
+output = "bloom"
+scale = 0.5
+
+[[post]]
+file = "post/composite.wgsl"
+name = "合成"
+
+[[options]]
+id = "shadows"
+name = "太阳投影"
+description = "地形和实体投下的影子。用深度缓冲在屏幕空间算，不额外绘制场景。"
+type = "bool"
+default = true
+
+[[options]]
+id = "sun_light"
+name = "阳光强度"
+description = "直射阳光的亮度。调高，亮面和影子反差更大。"
+type = "float"
+default = 1.0
+min = 0.0
+max = 2.0
+step = 0.05
+
+[[options]]
+id = "glow"
+name = "泛光"
+description = "太阳、岩浆、火把这类亮处的柔光。"
+type = "float"
+default = 0.45
+min = 0.0
+max = 1.0
+step = 0.05
+
+[[options]]
+id = "water"
+name = "水面效果"
+description = "水面随视角出现的天空反光和阳光高光。"
+type = "bool"
+default = true
+
+[[options]]
+id = "saturation"
+name = "饱和度"
+description = "画面颜色的浓淡。"
+type = "float"
+default = 1.08
+min = 0.6
+max = 1.5
+step = 0.02
+
+[[options]]
+id = "vignette"
+name = "暗角"
+description = "屏幕四周轻微压暗。"
+type = "bool"
+default = true
+
+[[pages]]
+id = "main"
+name = "轻光影 Lite"
+items = ["shadows", "sun_light", "glow", "water", "saturation", "vignette"]
+
+[budget]
+gpu_ms = 2.5
