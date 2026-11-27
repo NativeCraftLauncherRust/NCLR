@@ -51,6 +51,25 @@ jobs:
             WASM_STD_DIR="$PWD/ios/wasm-std" \
             BUILD_DIR="$PWD/build-nclr" DIST_DIR="$PWD/dist-nclr" \
             bash ios/build.sh
+      # The 3D backpack mod: a wasm code mod built by the same pinned toolchain the
+      # game's std member is built with, packed into mods/threed_backpack.
+      - name: Build the 3D backpack mod
+        env:
+          HORIZON_DIR: ${{ runner.temp }}/horizon
+        run: |
+          set -euxo pipefail
+          cd "$HORIZON_DIR"
+          cargo build --profile fast -p cargo-horizon-mod
+          mkdir -p "$HORIZON_DIR/mods"
+          rm -rf "$HORIZON_DIR/mods/threed_backpack"
+          cp -R "$GITHUB_WORKSPACE/mods/threed_backpack" "$HORIZON_DIR/mods/"
+          cd "$HORIZON_DIR/mods/threed_backpack"
+          "$HORIZON_DIR/target/fast/cargo-horizon-mod" build --wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: threed-backpack-hmod
+          path: ${{ runner.temp }}/horizon/mods/threed_backpack/*.hmod
+          if-no-files-found: error
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
