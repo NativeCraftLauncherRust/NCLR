@@ -1981,7 +1981,7 @@ index 026382e..9289a31 100644
                  if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
              {
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..ad56639 100644
+index 16664ff..c009838 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
 @@ -7,6 +7,20 @@ fn studio_suppresses_focus_pause(replay_active: bool, freecam_active: bool) -> b
@@ -2148,10 +2148,10 @@ index 16664ff..ad56639 100644
 +        let button = winit::event::MouseButton::Left;
 +        // Touch already chooses between a held button and an explicit toggle.
 +        // A controller/keyboard toggle must not swallow the touch release.
-+        if held
-+            || (!self.hardware_input_attached()
-+                && !self.mouse_mapping_held_elsewhere(button, Source::Pad))
-+        {
++        // The touch release clears its own latch even while a keyboard or
++        // mouse is attached. Only a physical button that still holds the same
++        // action keeps it down.
++        if held || !self.mouse_mapping_held_elsewhere(button, Source::Pad) {
 +            // Releasing is idempotent and must run even when the previous
 +            // frame already saw no attack. Otherwise a release that arrives
 +            // after a screen transition can leave `left` stuck down and mine
