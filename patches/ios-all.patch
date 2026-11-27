@@ -1593,250 +1593,10 @@ index 78cfdee..213c4a2 100644
  /// Refuse startup if any merged copy could not be installed, before loading any mod.
  /// Cells cannot roll back: each copy merges all requesting rows, so stopping the whole
  /// start is how we ensure none of a refused mod's rows run.
-diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.rs
-index 55bd735..dfe94d4 100644
---- a/crates/horizon-client/src/game.rs
-+++ b/crates/horizon-client/src/game.rs
-@@ -1113,6 +1113,10 @@ struct Game<'a> {
-     focus_after_run: Option<bool>,
-     /// Whether the window currently accepts input method events.
-     ime_allowed: bool,
-+    /// The keyboard button hid the keyboard without leaving the text field.
-+    ime_hidden: bool,
-+    /// A text field was focused at the previous IME check.
-+    ime_focus_was_active: bool,
-     /// The candidate window's area last given to the window, in pixels.
-     ime_area: Option<[i32; 4]>,
-     /// When the window lost focus, while it is still without
-@@ -1189,6 +1193,15 @@ struct Game<'a> {
-     last_input: Instant,
-     /// Controllers (Horizon's own).
-     pad: pad::Pads,
-+    /// On-screen controls for a touch screen (iOS).
-+    touch: horizon_client_render::touch::TouchControls,
-+    /// The touch attack trigger was down at the last frame.
-+    touch_attack_down: bool,
-+    /// A keyboard or mouse is attached; the touch mapping stays hidden.
-+    ios_hardware_input: bool,
-+    #[cfg(target_os = "ios")]
-+    ios_hardware_mouse: bool,
-+    menu_escape_touch: Option<u64>,
-     frames: u64,
-     /// The glint clock and options, read once per frame (game/interface/item_draw.rs).
-     glint_frame: horizon_client::item_render::GlintFrame,
-@@ -5306,6 +5319,47 @@ impl Game<'_> {
-         self.draw_studio_bars(&mut batch);
-         if show_hud {
-             self.draw_pad_guide(&mut batch, guide_from);
-+            if self.screen == Screen::Playing {
-+                self.touch.viewport(batch.width as u32, batch.height as u32);
-+                if !self.hardware_input_attached() {
-+                    self.touch.draw(&mut batch, &self.gui.atlas);
-+                }
-+            }
-+        }
-+        // A visible pointer and back button for touch menus: the finger drags
-+        // the cursor, a lift clicks where it sits, and the top-left ESC box
-+        // leaves an inventory or pause screen.
-+        if self.screen != Screen::Playing {
-+            let menu_inventory = matches!(self.screen, Screen::Inventory | Screen::Creative);
-+            if !self.hardware_input_attached() {
-+                let [x, y, w, h] = self.touch.settings.menu_escape_rect(
-+                    menu_inventory, batch.width, batch.height,
-+                );
-+                batch.fill(&self.gui.atlas, x, y, w, h, rgba(0, 0, 0, 210));
-+                if w > 2.0 && h > 2.0 {
-+                    batch.fill(&self.gui.atlas, x + 1.0, y + 1.0, w - 2.0, h - 2.0, rgba(90, 90, 90, 230));
-+                }
-+                self.native_text(&mut batch, "ESC", [x + w * 0.12, y + (h - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
-+                let [kx, ky, kw, kh] = self.touch.settings.menu_keyboard_rect(
-+                    menu_inventory, batch.width, batch.height,
-+                );
-+                batch.fill(&self.gui.atlas, kx, ky, kw, kh, rgba(0, 0, 0, 210));
-+                if kw > 2.0 && kh > 2.0 {
-+                    batch.fill(&self.gui.atlas, kx + 1.0, ky + 1.0, kw - 2.0, kh - 2.0, rgba(90, 90, 90, 230));
-+                }
-+                self.native_text(&mut batch, "键盘", [kx + kw * 0.12, ky + (kh - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
-+                let menu_screen = match self.screen {
-+                    Screen::Inventory | Screen::Creative => Some(0),
-+                    Screen::Paused => Some(1),
-+                    _ => None,
-+                };
-+                if let Some(menu_screen) = menu_screen {
-+                    self.touch.draw_menu(&mut batch, &self.gui.atlas, menu_screen);
-+                }
-+            }
-+            let (x, y) = self.cursor;
-+            batch.fill(&self.gui.atlas, x - 3.0, y - 3.0, 6.0, 6.0, rgba(0, 0, 0, 190));
-+            batch.fill(&self.gui.atlas, x - 2.0, y - 2.0, 4.0, 4.0, rgba(255, 255, 255, 230));
-         }
-         batch
-     }
-@@ -10262,6 +10316,28 @@ impl Game<'_> {
-                     horizon_client::spans::time("recover_device", || self.recover_device())?;
-                     self.observe_fullscreen();
-                     self.sync_ime();
-+                    #[cfg(target_os = "ios")]
-+                    {
-+                        let attached = crate::entry::ios_hardware_input();
-+                        if attached != self.ios_hardware_input {
-+                            self.ios_hardware_input = attached;
-+                            if attached {
-+                                self.touch.clear();
-+                                self.pad.inject_state(Default::default());
-+                            }
-+                        }
-+                        let mouse = crate::entry::ios_hardware_mouse();
-+                        if self.ios_hardware_mouse && !mouse {
-+                            self.captured = false;
-+                        }
-+                        self.ios_hardware_mouse = mouse;
-+                        if self.ios_hardware_mouse
-+                            && self.screen == Screen::Playing
-+                            && self.title.is_none()
-+                        {
-+                            self.captured = true;
-+                        }
-+                    }
-                     let now = Instant::now();
-                     horizon_threads::work::tick_start();
-                     let elapsed = now.duration_since(self.previous);
-@@ -10701,6 +10777,8 @@ impl<'a> Game<'a> {
-             unclaimed_modifiers: None,
-             focus_after_run: None,
-             ime_allowed: false,
-+            ime_hidden: false,
-+            ime_focus_was_active: false,
-             ime_area: None,
-             focus_lost: None,
-             modifiers: winit::keyboard::ModifiersState::empty(),
-@@ -10741,6 +10819,20 @@ impl<'a> Game<'a> {
-             previous: now,
-             last_input: now,
-             pad: Default::default(),
-+            touch: {
-+                let mut touch = horizon_client_render::touch::TouchControls::default();
-+                if let Ok(home) = std::env::var("HORIZON_HOME") {
-+                    touch
-+                        .settings
-+                        .apply_launcher_keymap(&std::path::Path::new(&home).join("keymap.json"));
-+                }
-+                touch
-+            },
-+            touch_attack_down: false,
-+            ios_hardware_input: false,
-+            #[cfg(target_os = "ios")]
-+            ios_hardware_mouse: false,
-+            menu_escape_touch: None,
-             frames: 0,
-             glint_frame: Default::default(),
-             kept_block_entities: Default::default(),
-diff --git a/crates/horizon-client/src/game/interface/ime.rs b/crates/horizon-client/src/game/interface/ime.rs
-index 22e0915..677fc74 100644
---- a/crates/horizon-client/src/game/interface/ime.rs
-+++ b/crates/horizon-client/src/game/interface/ime.rs
-@@ -46,7 +46,17 @@ impl Game<'_> {
- 
-     /// Allow the input method only while a text box has focus.
-     pub(super) fn sync_ime(&mut self) {
--        let want = self.text_field_focused();
-+        let focused = self.text_field_focused();
-+        if focused && !self.ime_focus_was_active {
-+            // Opening a text field must not summon the system keyboard. The
-+            // dedicated keyboard button opts in explicitly.
-+            self.ime_hidden = true;
-+        }
-+        self.ime_focus_was_active = focused;
-+        if !focused {
-+            self.ime_hidden = false;
-+        }
-+        let want = focused && !self.ime_hidden;
-         if want != self.ime_allowed
-             && let Some(window) = &self.window
-         {
-diff --git a/crates/horizon-client/src/game/interface/pad/mod.rs b/crates/horizon-client/src/game/interface/pad/mod.rs
-index 026382e..9289a31 100644
---- a/crates/horizon-client/src/game/interface/pad/mod.rs
-+++ b/crates/horizon-client/src/game/interface/pad/mod.rs
-@@ -56,6 +56,10 @@ pub(super) struct Pads {
-     devices: hardware::Devices,
-     /// The virtual pad of `horizon-ctl pad`.
-     injected: PadState,
-+    /// The virtual pad came from the on-screen touch controls, not a pad.
-+    touch_input: bool,
-+    /// The sneak press came from the touch settings, which already latch it if requested.
-+    touch_sneak: bool,
-     /// The virtual pad was in use at the last poll.
-     virtual_input: bool,
-     /// Buttons a `pad ... tap` releases at the next poll.
-@@ -282,6 +286,11 @@ impl Pads {
-         edges
-     }
- 
-+    /// The on-screen touch controls' state, as the virtual pad's.
-+    pub(super) fn inject_state(&mut self, state: PadState) {
-+        self.touch_input = state != PadState::default();
-+        self.injected = state;
-+    }
-     /// A replay's pad button, in place of `pad`'s line.
-     pub(super) fn inject_button(&mut self, button: Button, down: bool) {
-         self.injected.set(button, down);
-@@ -432,6 +441,12 @@ impl Game<'_> {
-         self.ui.options.pad_glyphs = Glyphs::of(&self.settings.controller, self.pad.style);
-         self.ui.options.pad_driving = self.pad.in_use && self.pad_focus_mode();
-         let mut state = hardware.merge(&self.pad.injected);
-+        if self.pad.touch_input {
-+            // The on-screen controls are not a controller: keep the keyboard
-+            // and mouse UI, and its menus, instead of switching to pad mode.
-+            self.pad.in_use = false;
-+            self.pad.keyboard_took_over = true;
-+        }
-         let activity = self.pad.activity.observe(&state, &self.settings.controller);
-         for (i, (stick, deadzone)) in [
-             (&mut state.left, self.settings.controller.move_deadzone),
-@@ -453,7 +468,7 @@ impl Game<'_> {
-         }
-         let threshold = self.settings.controller.trigger_threshold;
-         let edges = self.pad.edges.update(&state, threshold);
--        if activity && self.pad_focused() {
-+        if activity && self.pad_focused() && !self.pad.touch_input {
-             self.last_input = Instant::now();
-             self.pad.in_use = true;
-             self.pad.keyboard_took_over = false;
-@@ -667,6 +682,28 @@ impl Game<'_> {
-                 }
-                 Ok(())
-             }
-+            Route::Sneak
-+                if (down && self.pad.touch_input && self.pad.injected.held(Button::RightStick))
-+                    || (!down && self.pad.touch_sneak) =>
-+            {
-+                self.pad.touch_sneak = down;
-+                let screen_open = self.screen != Screen::Playing || self.title.is_some();
-+                let action = if down {
-+                    horizon_client_input::keymapping::KeyAction::Press
-+                } else {
-+                    horizon_client_input::keymapping::KeyAction::Release
-+                };
-+                self.toggles.key(SNEAK, action, screen_open, false);
-+                self.sync_toggle(SNEAK);
-+                if down && self.keys.held(Action::Sneak) {
-+                    self.keys.press(KeyCode::ShiftLeft, Source::Pad);
-+                    self.keys.release(&KeyCode::ShiftLeft, Source::Keyboard);
-+                }
-+                if down {
-+                    self.key_pressed(KeyCode::ShiftLeft, KeyCode::ShiftLeft)?;
-+                }
-+                Ok(())
-+            }
-             Route::Sneak
-                 if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
-             {
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..5684db9 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
-@@ -7,6 +7,11 @@ fn studio_suppresses_focus_pause(replay_active: bool, freecam_active: bool) -> b
+@@ -7,6 +7,41 @@
  }
  
  impl Game<'_> {
@@ -1845,13 +1605,44 @@ index 16664ff..5684db9 100644
 +        self.ios_hardware_input
 +    }
 +
++    /// The system-keyboard button for a multiplayer address screen, in the
++    /// frame's GUI pixels. It appears only after a text field has focus, so
++    /// the button always toggles the keyboard for the field the player chose.
++    pub(crate) fn text_keyboard_rect(&mut self, width: f32, height: f32) -> Option<[f32; 4]> {
++        if self.hardware_input_attached() || !self.text_field_focused() {
++            return None;
++        }
++        let title = self.title.as_ref()?;
++        let crate::title::Mode::Multiplayer(screen) = &title.mode else {
++            return None;
++        };
++        if !matches!(
++            screen,
++            crate::multiplayer::Screen::Edit { .. }
++                | crate::multiplayer::Screen::Direct { .. }
++                | crate::multiplayer::Screen::Friend { .. }
++                | crate::multiplayer::Screen::Page(_)
++        ) {
++            return None;
++        }
++        let button_width = (width * 0.18).clamp(92.0, 132.0);
++        let button_height = (height * 0.045).clamp(28.0, 42.0);
++        Some([
++            (width - button_width - 10.0).max(0.0),
++            10.0,
++            button_width.min(width),
++            button_height.min(height),
++        ])
++    }
++
      /// The options `MouseHandler.turnPlayer` reads.
      pub(super) fn look_options(&self) -> LookOptions {
          LookOptions {
-@@ -55,6 +60,200 @@ impl Game<'_> {
+@@ -54,6 +89,201 @@
+         self.tutorial.mouse(x, y);
          let zoom = self.zoom_turn_scale();
          self.turn_player(x * zoom, y * zoom);
-     }
++    }
 +    /// One finger on the on-screen controls: the joystick and buttons feed the
 +    /// virtual pad; a drag on the world turns the camera.
 +    pub(super) fn touch_event(&mut self, touch: &winit::event::Touch) {
@@ -1981,14 +1772,15 @@ index 16664ff..5684db9 100644
 +
 +    pub(super) fn apply_touch_attack(&mut self, held: bool, clicked: bool) {
 +        let was_held = std::mem::replace(&mut self.touch_attack_down, held);
-+        if was_held == held && !clicked {
-+            return;
-+        }
 +        use horizon_client_input::held::Source;
 +        let button = winit::event::MouseButton::Left;
 +        // Touch already chooses between a held button and an explicit toggle.
 +        // A controller/keyboard toggle must not swallow the touch release.
 +        if held || !self.mouse_mapping_held_elsewhere(button, Source::Pad) {
++            // Releasing is idempotent and must run even when the previous
++            // frame already saw no attack. Otherwise a release that arrives
++            // after a screen transition can leave `left` stuck down and mine
++            // again as soon as the world resumes.
 +            self.toggles.0[2].set_down(held, false);
 +            self.left = self.toggles.is_down(2);
 +        }
@@ -2045,27 +1837,185 @@ index 16664ff..5684db9 100644
 +        }
 +        self.ime_allowed = true;
 +        self.ime_area = None;
-+    }
+     }
      /// `Minecraft.pause`: a single-player game with a pausing screen open.
      pub(super) fn pauses_game(&self) -> bool {
-         self.has_singleplayer_server()
+diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.rs
+--- a/crates/horizon-client/src/game.rs
++++ b/crates/horizon-client/src/game.rs
+@@ -1113,6 +1113,10 @@
+     focus_after_run: Option<bool>,
+     /// Whether the window currently accepts input method events.
+     ime_allowed: bool,
++    /// The keyboard button hid the keyboard without leaving the text field.
++    ime_hidden: bool,
++    /// A text field was focused at the previous IME check.
++    ime_focus_was_active: bool,
+     /// The candidate window's area last given to the window, in pixels.
+     ime_area: Option<[i32; 4]>,
+     /// When the window lost focus, while it is still without
+@@ -1189,6 +1193,15 @@
+     last_input: Instant,
+     /// Controllers (Horizon's own).
+     pad: pad::Pads,
++    /// On-screen controls for a touch screen (iOS).
++    touch: horizon_client_render::touch::TouchControls,
++    /// The touch attack trigger was down at the last frame.
++    touch_attack_down: bool,
++    /// A keyboard or mouse is attached; the touch mapping stays hidden.
++    ios_hardware_input: bool,
++    #[cfg(target_os = "ios")]
++    ios_hardware_mouse: bool,
++    menu_escape_touch: Option<u64>,
+     frames: u64,
+     /// The glint clock and options, read once per frame (game/interface/item_draw.rs).
+     glint_frame: horizon_client::item_render::GlintFrame,
+@@ -5306,6 +5319,70 @@
+         self.draw_studio_bars(&mut batch);
+         if show_hud {
+             self.draw_pad_guide(&mut batch, guide_from);
++            if self.screen == Screen::Playing {
++                self.touch.viewport(batch.width as u32, batch.height as u32);
++                if !self.hardware_input_attached() {
++                    self.touch.draw(&mut batch, &self.gui.atlas);
++                }
++            }
++        }
++        // A visible pointer and back button for touch menus: the finger drags
++        // the cursor, a lift clicks where it sits, and the top-left ESC box
++        // leaves an inventory or pause screen.
++        if self.screen != Screen::Playing {
++            let menu_inventory = matches!(self.screen, Screen::Inventory | Screen::Creative);
++            if !self.hardware_input_attached() {
++                let [x, y, w, h] = self.touch.settings.menu_escape_rect(
++                    menu_inventory, batch.width, batch.height,
++                );
++                batch.fill(&self.gui.atlas, x, y, w, h, rgba(0, 0, 0, 210));
++                if w > 2.0 && h > 2.0 {
++                    batch.fill(&self.gui.atlas, x + 1.0, y + 1.0, w - 2.0, h - 2.0, rgba(90, 90, 90, 230));
++                }
++                self.native_text(&mut batch, "ESC", [x + w * 0.12, y + (h - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
++                let [kx, ky, kw, kh] = self.touch.settings.menu_keyboard_rect(
++                    menu_inventory, batch.width, batch.height,
++                );
++                batch.fill(&self.gui.atlas, kx, ky, kw, kh, rgba(0, 0, 0, 210));
++                if kw > 2.0 && kh > 2.0 {
++                    batch.fill(&self.gui.atlas, kx + 1.0, ky + 1.0, kw - 2.0, kh - 2.0, rgba(90, 90, 90, 230));
++                }
++                self.native_text(&mut batch, "键盘", [kx + kw * 0.12, ky + (kh - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
++                let menu_screen = match self.screen {
++                    Screen::Inventory | Screen::Creative => Some(0),
++                    Screen::Paused => Some(1),
++                    _ => None,
++                };
++                if let Some(menu_screen) = menu_screen {
++                    self.touch.draw_menu(&mut batch, &self.gui.atlas, menu_screen);
++                }
++            }
++            let (x, y) = self.cursor;
++            batch.fill(&self.gui.atlas, x - 3.0, y - 3.0, 6.0, 6.0, rgba(0, 0, 0, 190));
++            batch.fill(&self.gui.atlas, x - 2.0, y - 2.0, 4.0, 4.0, rgba(255, 255, 255, 230));
++        }
++        // A focused address field on the multiplayer screens gets the same
++        // keyboard toggle as the inventory and pause menus. The button is
++        // drawn over the title screen too, including while `screen` is Playing.
++        if let Some([kx, ky, kw, kh]) = self.text_keyboard_rect(batch.width, batch.height) {
++            batch.fill(&self.gui.atlas, kx, ky, kw, kh, rgba(0, 0, 0, 220));
++            if kw > 2.0 && kh > 2.0 {
++                batch.fill(
++                    &self.gui.atlas,
++                    kx + 1.0,
++                    ky + 1.0,
++                    kw - 2.0,
++                    kh - 2.0,
++                    rgba(90, 90, 90, 235),
++                );
++            }
++            self.native_text(
++                &mut batch,
++                "键盘",
++                [kx + kw * 0.18, ky + (kh - 8.0).max(0.0) / 2.0],
++                0xFFFFFFFF,
++                true,
++            );
+         }
+         batch
+     }
+@@ -10262,6 +10339,28 @@
+                     horizon_client::spans::time("recover_device", || self.recover_device())?;
+                     self.observe_fullscreen();
+                     self.sync_ime();
++                    #[cfg(target_os = "ios")]
++                    {
++                        let attached = crate::entry::ios_hardware_input();
++                        if attached != self.ios_hardware_input {
++                            self.ios_hardware_input = attached;
++                            if attached {
++                                self.touch.clear();
++                                self.pad.inject_state(Default::default());
++                            }
++                        }
++                        let mouse = crate::entry::ios_hardware_mouse();
++                        if self.ios_hardware_mouse && !mouse {
++                            self.captured = false;
++                        }
++                        self.ios_hardware_mouse = mouse;
++                        if self.ios_hardware_mouse
++                            && self.screen == Screen::Playing
++                            && self.title.is_none()
++                        {
++                            self.captured = true;
++                        }
++                    }
+                     let now = Instant::now();
+                     horizon_threads::work::tick_start();
+                     let elapsed = now.duration_since(self.previous);
+@@ -10701,6 +10800,8 @@
+             unclaimed_modifiers: None,
+             focus_after_run: None,
+             ime_allowed: false,
++            ime_hidden: false,
++            ime_focus_was_active: false,
+             ime_area: None,
+             focus_lost: None,
+             modifiers: winit::keyboard::ModifiersState::empty(),
+@@ -10741,6 +10842,20 @@
+             previous: now,
+             last_input: now,
+             pad: Default::default(),
++            touch: {
++                let mut touch = horizon_client_render::touch::TouchControls::default();
++                if let Ok(home) = std::env::var("HORIZON_HOME") {
++                    touch
++                        .settings
++                        .apply_launcher_keymap(&std::path::Path::new(&home).join("keymap.json"));
++                }
++                touch
++            },
++            touch_attack_down: false,
++            ios_hardware_input: false,
++            #[cfg(target_os = "ios")]
++            ios_hardware_mouse: false,
++            menu_escape_touch: None,
+             frames: 0,
+             glint_frame: Default::default(),
+             kept_block_entities: Default::default(),
 diff --git a/crates/horizon-client/src/game/runtime/loading_screen.rs b/crates/horizon-client/src/game/runtime/loading_screen.rs
-index 2511aa2..12bec62 100644
 --- a/crates/horizon-client/src/game/runtime/loading_screen.rs
 +++ b/crates/horizon-client/src/game/runtime/loading_screen.rs
-@@ -3,6 +3,11 @@
+@@ -2,6 +2,11 @@
+ //! takes over (`App`), and the checks a start makes first: missing or damaged prepared files,
  //! an unclean last exit, a fullscreen the window system could not show.
  use super::*;
- 
++
 +/// The loading screen's heartbeat for the iOS port: the last line before a
 +/// freeze says whether it was still looping and whether rest was ready.
 +static LOADING_HEARTBEAT: std::sync::atomic::AtomicU64 =
 +    std::sync::atomic::AtomicU64::new(0);
-+
+ 
  /// The window system ended the event loop with a failure (on Linux, a compositor dropping the
  /// connection after a protocol error) while fullscreen was on: the next start opens windowed, so a
- /// fullscreen the system can't show doesn't crash every launch (#2904).
-@@ -258,6 +263,20 @@ impl Loading {
+@@ -258,6 +263,20 @@
              event_loop.exit();
              return;
          }
@@ -2086,7 +2036,7 @@ index 2511aa2..12bec62 100644
          if let Err(error) = self.poll_menu_resources() {
              self.error = Some(error);
              event_loop.exit();
-@@ -265,12 +284,15 @@ impl Loading {
+@@ -265,12 +284,15 @@
          }
          self.poll_menu_realms(event_loop);
          if let Some(w) = &self.window {
@@ -2103,7 +2053,7 @@ index 2511aa2..12bec62 100644
          event_loop.set_control_flow(ControlFlow::Poll);
      }
      pub(super) fn draw(&mut self) {
-@@ -419,6 +441,45 @@ pub(super) enum App {
+@@ -419,6 +441,45 @@
      Loading(Box<Loading>),
      Ready(Box<split::Split<'static>>),
  }
@@ -2149,7 +2099,7 @@ index 2511aa2..12bec62 100644
  impl ApplicationHandler for App {
      fn resumed(&mut self, event_loop: &ActiveEventLoop) {
          match self {
-@@ -427,6 +488,164 @@ impl ApplicationHandler for App {
+@@ -427,6 +488,173 @@
          }
      }
      fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -2278,6 +2228,15 @@ index 2511aa2..12bec62 100644
 +                    }
 +                }
 +                if !game.host.hardware_input_attached() {
++                    if let Some([kx, ky, kw, kh]) =
++                        game.host.text_keyboard_rect(gui.width, gui.height)
++                    {
++                        if x >= kx && x < kx + kw && y >= ky && y < ky + kh {
++                            game.host.menu_escape_touch = Some(touch.id as u64);
++                            game.host.toggle_keyboard_input();
++                            return;
++                        }
++                    }
 +                    let menu_inventory =
 +                        matches!(game.host.screen, Screen::Inventory | Screen::Creative);
 +                    let [left, top, width, height] = game.host.touch.settings.menu_escape_rect(
@@ -2314,6 +2273,107 @@ index 2511aa2..12bec62 100644
          match self {
              App::Loading(loading) => loading.window_event(event_loop, id, event),
              App::Ready(game) => game.window_event(event_loop, id, event),
+diff --git a/crates/horizon-client/src/game/interface/ime.rs b/crates/horizon-client/src/game/interface/ime.rs
+index 22e0915..677fc74 100644
+--- a/crates/horizon-client/src/game/interface/ime.rs
++++ b/crates/horizon-client/src/game/interface/ime.rs
+@@ -46,7 +46,17 @@ impl Game<'_> {
+ 
+     /// Allow the input method only while a text box has focus.
+     pub(super) fn sync_ime(&mut self) {
+-        let want = self.text_field_focused();
++        let focused = self.text_field_focused();
++        if focused && !self.ime_focus_was_active {
++            // Opening a text field must not summon the system keyboard. The
++            // dedicated keyboard button opts in explicitly.
++            self.ime_hidden = true;
++        }
++        self.ime_focus_was_active = focused;
++        if !focused {
++            self.ime_hidden = false;
++        }
++        let want = focused && !self.ime_hidden;
+         if want != self.ime_allowed
+             && let Some(window) = &self.window
+         {
+diff --git a/crates/horizon-client/src/game/interface/pad/mod.rs b/crates/horizon-client/src/game/interface/pad/mod.rs
+index 026382e..9289a31 100644
+--- a/crates/horizon-client/src/game/interface/pad/mod.rs
++++ b/crates/horizon-client/src/game/interface/pad/mod.rs
+@@ -56,6 +56,10 @@ pub(super) struct Pads {
+     devices: hardware::Devices,
+     /// The virtual pad of `horizon-ctl pad`.
+     injected: PadState,
++    /// The virtual pad came from the on-screen touch controls, not a pad.
++    touch_input: bool,
++    /// The sneak press came from the touch settings, which already latch it if requested.
++    touch_sneak: bool,
+     /// The virtual pad was in use at the last poll.
+     virtual_input: bool,
+     /// Buttons a `pad ... tap` releases at the next poll.
+@@ -282,6 +286,11 @@ impl Pads {
+         edges
+     }
+ 
++    /// The on-screen touch controls' state, as the virtual pad's.
++    pub(super) fn inject_state(&mut self, state: PadState) {
++        self.touch_input = state != PadState::default();
++        self.injected = state;
++    }
+     /// A replay's pad button, in place of `pad`'s line.
+     pub(super) fn inject_button(&mut self, button: Button, down: bool) {
+         self.injected.set(button, down);
+@@ -432,6 +441,12 @@ impl Game<'_> {
+         self.ui.options.pad_glyphs = Glyphs::of(&self.settings.controller, self.pad.style);
+         self.ui.options.pad_driving = self.pad.in_use && self.pad_focus_mode();
+         let mut state = hardware.merge(&self.pad.injected);
++        if self.pad.touch_input {
++            // The on-screen controls are not a controller: keep the keyboard
++            // and mouse UI, and its menus, instead of switching to pad mode.
++            self.pad.in_use = false;
++            self.pad.keyboard_took_over = true;
++        }
+         let activity = self.pad.activity.observe(&state, &self.settings.controller);
+         for (i, (stick, deadzone)) in [
+             (&mut state.left, self.settings.controller.move_deadzone),
+@@ -453,7 +468,7 @@ impl Game<'_> {
+         }
+         let threshold = self.settings.controller.trigger_threshold;
+         let edges = self.pad.edges.update(&state, threshold);
+-        if activity && self.pad_focused() {
++        if activity && self.pad_focused() && !self.pad.touch_input {
+             self.last_input = Instant::now();
+             self.pad.in_use = true;
+             self.pad.keyboard_took_over = false;
+@@ -667,6 +682,28 @@ impl Game<'_> {
+                 }
+                 Ok(())
+             }
++            Route::Sneak
++                if (down && self.pad.touch_input && self.pad.injected.held(Button::RightStick))
++                    || (!down && self.pad.touch_sneak) =>
++            {
++                self.pad.touch_sneak = down;
++                let screen_open = self.screen != Screen::Playing || self.title.is_some();
++                let action = if down {
++                    horizon_client_input::keymapping::KeyAction::Press
++                } else {
++                    horizon_client_input::keymapping::KeyAction::Release
++                };
++                self.toggles.key(SNEAK, action, screen_open, false);
++                self.sync_toggle(SNEAK);
++                if down && self.keys.held(Action::Sneak) {
++                    self.keys.press(KeyCode::ShiftLeft, Source::Pad);
++                    self.keys.release(&KeyCode::ShiftLeft, Source::Keyboard);
++                }
++                if down {
++                    self.key_pressed(KeyCode::ShiftLeft, KeyCode::ShiftLeft)?;
++                }
++                Ok(())
++            }
+             Route::Sneak
+                 if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
+             {
 diff --git a/crates/horizon-client/src/game/runtime/loading_window.rs b/crates/horizon-client/src/game/runtime/loading_window.rs
 index 041b72b..04f9cf6 100644
 --- a/crates/horizon-client/src/game/runtime/loading_window.rs
