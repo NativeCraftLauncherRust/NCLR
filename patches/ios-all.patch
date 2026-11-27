@@ -1638,7 +1638,7 @@ diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crate
      /// The options `MouseHandler.turnPlayer` reads.
      pub(super) fn look_options(&self) -> LookOptions {
          LookOptions {
-@@ -54,6 +89,201 @@
+@@ -54,6 +89,210 @@
          self.tutorial.mouse(x, y);
          let zoom = self.zoom_turn_scale();
          self.turn_player(x * zoom, y * zoom);
@@ -1695,9 +1695,15 @@ diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crate
 +                return;
 +            }
 +        }
++        let owned = self.touch.owns_pointer(touch.id as u64);
 +        let turns = self
 +            .touch
 +            .update(touch.id as u64, point, started, ended);
++        if ended && !owned {
++            // UIKit can pair a lost start with a later end after a system
++            // gesture. Drop any latch it left behind instead of mining again.
++            self.touch.clear();
++        }
 +        if turns != [0.0, 0.0] {
 +            let degrees = horizon_client_render::touch::camera_delta(
 +                turns,
@@ -1776,7 +1782,10 @@ diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crate
 +        let button = winit::event::MouseButton::Left;
 +        // Touch already chooses between a held button and an explicit toggle.
 +        // A controller/keyboard toggle must not swallow the touch release.
-+        if held || !self.mouse_mapping_held_elsewhere(button, Source::Pad) {
++        if held
++            || (!self.hardware_input_attached()
++                && !self.mouse_mapping_held_elsewhere(button, Source::Pad))
++        {
 +            // Releasing is idempotent and must run even when the previous
 +            // frame already saw no attack. Otherwise a release that arrives
 +            // after a screen transition can leave `left` stuck down and mine
