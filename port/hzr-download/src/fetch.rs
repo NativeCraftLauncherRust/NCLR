@@ -6,8 +6,13 @@
 
 use crate::plan::{Plan, RemoteFile};
 use std::fs;
-use std::io::{Read, Write};
+#[cfg(feature = "http")]
+use std::io::Read;
+use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
+#[cfg(feature = "http")]
 use std::time::Duration;
 
 /// Where bytes come from.
@@ -29,9 +34,8 @@ pub trait Transport {
 
 /// HTTPS over the system trust store, through `ureq`/`rustls`.
 ///
-/// Only built with the `http` feature: on iOS the shell supplies its own
-/// transport, because the system networking already knows about proxies, VPNs,
-/// background transfers and the trust store.
+/// Only built with the `http` feature. The iOS entry point uses this transport
+/// with the system trust store and the agent's connection pool.
 #[cfg(feature = "http")]
 pub struct HttpTransport {
     agent: ureq::Agent,
@@ -43,7 +47,11 @@ impl HttpTransport {
         HttpTransport {
             agent: ureq::AgentBuilder::new()
                 .timeout_connect(Duration::from_secs(20))
-                .timeout(Duration::from_secs(120))
+                // A slow but progressing CDN response should be allowed to
+                // finish. The read timeout only fires when no bytes arrive.
+                .timeout_read(Duration::from_secs(45))
+                .timeout_write(Duration::from_secs(45))
+                .max_idle_connections_per_host(8)
                 .build(),
         }
     }
@@ -59,17 +67,34 @@ impl Default for HttpTransport {
 #[cfg(feature = "http")]
 impl HttpTransport {
     fn get(&self, url: &str, token: Option<&str>) -> Result<Vec<u8>, String> {
-        let mut request = self.agent.get(url);
-        if let Some(token) = token {
-            request = request.set("Authorization", &format!("Bearer {token}"));
+        const MAX_ATTEMPTS: usize = 3;
+        let mut failure = String::from("request failed");
+
+        for attempt in 0..MAX_ATTEMPTS {
+            let mut request = self.agent.get(url);
+            if let Some(token) = token {
+                request = request.set("Authorization", &format!("Bearer {token}"));
+            }
+            match request.call() {
+                Ok(response) => {
+                    let mut bytes = Vec::new();
+                    match response.into_reader().read_to_end(&mut bytes) {
+                        Ok(_) => return Ok(bytes),
+                        Err(error) => failure = error.to_string(),
+                    }
+                }
+                Err(ureq::Error::Status(status, _)) => {
+                    return Err(format!("{url}: HTTP {status}"));
+                }
+                Err(error) => failure = error.to_string(),
+            }
+
+            if attempt + 1 < MAX_ATTEMPTS {
+                std::thread::sleep(Duration::from_millis(400 * (attempt as u64 + 1)));
+            }
         }
-        let response = request.call().map_err(|error| format!("{url}: {error}"))?;
-        let mut bytes = Vec::new();
-        response
-            .into_reader()
-            .read_to_end(&mut bytes)
-            .map_err(|error| format!("{url}: {error}"))?;
-        Ok(bytes)
+
+        Err(format!("{url}: {failure}"))
     }
 }
 
@@ -148,6 +173,26 @@ fn store(file: &RemoteFile, bytes: &[u8]) -> Result<(), String> {
     fs::rename(&temporary, path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+fn fetch_one<T: Transport>(transport: &T, file: &RemoteFile) -> Result<u64, String> {
+    let bytes = transport.fetch(&file.url)?;
+    if bytes.len() as u64 != file.size {
+        return Err(format!(
+            "expected {} bytes, got {}",
+            file.size,
+            bytes.len()
+        ));
+    }
+    let hash = hzr_fetch::sha1_hex(&bytes);
+    if hash != file.sha1 {
+        return Err(format!(
+            "sha1 {hash}, the version publishes {}",
+            file.sha1
+        ));
+    }
+    store(file, &bytes)?;
+    Ok(bytes.len() as u64)
+}
+
 /// Fetch every file `plan` names, skipping the ones already correct.
 ///
 /// `progress` is called after each file with the file and its byte count.
@@ -163,35 +208,79 @@ pub fn download<T: Transport>(
             progress(file, file.size);
             continue;
         }
-        match transport.fetch(&file.url) {
-            Err(error) => report.failures.push((show(file), error)),
+        match fetch_one(transport, file) {
             Ok(bytes) => {
-                if bytes.len() as u64 != file.size {
-                    report.failures.push((
-                        show(file),
-                        format!("expected {} bytes, got {}", file.size, bytes.len()),
-                    ));
-                    continue;
-                }
-                let hash = hzr_fetch::sha1_hex(&bytes);
-                if hash != file.sha1 {
-                    report.failures.push((
-                        show(file),
-                        format!("sha1 {hash}, the version publishes {}", file.sha1),
-                    ));
-                    continue;
-                }
-                match store(file, &bytes) {
-                    Ok(()) => {
-                        report.downloaded += 1;
-                        report.bytes += bytes.len() as u64;
-                        progress(file, bytes.len() as u64);
-                    }
-                    Err(error) => report.failures.push((show(file), error)),
-                }
+                report.downloaded += 1;
+                report.bytes += bytes;
+                progress(file, bytes);
             }
+            Err(error) => report.failures.push((show(file), error)),
         }
     }
+    report
+}
+
+/// Fetch every missing file with up to `concurrency` workers.
+///
+/// Verification and atomic writes still happen in each worker. The progress
+/// callback runs on the caller's thread as results arrive, so callers do not
+/// need to make their UI or logging callback thread-safe.
+pub fn download_with_concurrency<T: Transport + Sync>(
+    transport: &T,
+    plan: &Plan,
+    concurrency: usize,
+    mut progress: impl FnMut(&RemoteFile, u64),
+) -> Report {
+    let mut report = Report::default();
+    let mut pending = Vec::new();
+
+    for (index, file) in plan.files.iter().enumerate() {
+        if satisfied(file) {
+            report.skipped += 1;
+            progress(file, file.size);
+        } else {
+            pending.push(index);
+        }
+    }
+
+    if pending.is_empty() {
+        return report;
+    }
+
+    let worker_count = concurrency.max(1).min(pending.len());
+    let pending = pending.as_slice();
+    let next = Arc::new(AtomicUsize::new(0));
+    let (sender, receiver) = mpsc::channel();
+
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let next = Arc::clone(&next);
+            let sender = sender.clone();
+            scope.spawn(move || loop {
+                let position = next.fetch_add(1, Ordering::Relaxed);
+                let Some(&index) = pending.get(position) else {
+                    break;
+                };
+                let result = fetch_one(transport, &plan.files[index]);
+                sender.send((index, result)).expect("download receiver is alive");
+            });
+        }
+        drop(sender);
+
+        for (index, result) in receiver {
+            let file = &plan.files[index];
+            match result {
+                Ok(bytes) => {
+                    report.downloaded += 1;
+                    report.bytes += bytes;
+                    progress(file, bytes);
+                }
+                Err(error) => report.failures.push((show(file), error)),
+            }
+        }
+    });
+
+    report.failures.sort_by(|left, right| left.0.cmp(&right.0));
     report
 }
 
@@ -204,6 +293,9 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
 
     struct Fake(BTreeMap<String, Vec<u8>>);
 
@@ -213,6 +305,27 @@ mod tests {
                 .get(url)
                 .cloned()
                 .ok_or_else(|| format!("{url}: not in the fixture"))
+        }
+    }
+
+    struct ConcurrentFake {
+        files: BTreeMap<String, Vec<u8>>,
+        active: Arc<AtomicUsize>,
+        maximum: Arc<AtomicUsize>,
+    }
+
+    impl Transport for ConcurrentFake {
+        fn fetch(&self, url: &str) -> Result<Vec<u8>, String> {
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.maximum.fetch_max(active, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(20));
+            let result = self
+                .files
+                .get(url)
+                .cloned()
+                .ok_or_else(|| format!("{url}: not in the fixture"));
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            result
         }
     }
 
@@ -256,6 +369,30 @@ mod tests {
         let again = download(&transport, &plan, |_, _| {});
         assert_eq!(again.skipped, 2);
         assert_eq!(again.downloaded, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_plan_can_download_with_multiple_workers() {
+        let root = scratch("concurrent");
+        let body = b"payload".as_slice();
+        let files: Vec<RemoteFile> = (0..4)
+            .map(|index| file(&root, &format!("{index}.bin"), body))
+            .collect();
+        let transport = ConcurrentFake {
+            files: files
+                .iter()
+                .map(|file| (file.url.clone(), body.to_vec()))
+                .collect(),
+            active: Arc::new(AtomicUsize::new(0)),
+            maximum: Arc::new(AtomicUsize::new(0)),
+        };
+        let maximum = Arc::clone(&transport.maximum);
+        let report = download_with_concurrency(&transport, &Plan { files }, 4, |_, _| {});
+
+        assert!(report.is_clean(), "{:?}", report.failures);
+        assert_eq!(report.downloaded, 4);
+        assert!(maximum.load(Ordering::SeqCst) >= 2);
         let _ = fs::remove_dir_all(root);
     }
 

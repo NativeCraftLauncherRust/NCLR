@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
+#import <math.h>
 #import <stdlib.h>
 
 // The Rust side of the launcher: route3's device ABI (download, assemble, auth)
@@ -20,6 +21,12 @@ static NSString *const kNCLRService = @"dev.zrxmaxlnx.nclr";
 static NSString *const kNCLRAccount = @"minecraft-access-token";
 static NSString *const kNCLRLaunchKey = @"NCLRLaunchEngine";
 static NSString *const kNCLRClientKey = @"NCLRMicrosoftClientID";
+static NSString *const kNCLRResourceConcurrencyKey = @"NCLRResourceDownloadConcurrency";
+
+static NSInteger NCLRResourceDownloadConcurrency(void) {
+    NSInteger value = [[NSUserDefaults standardUserDefaults] integerForKey:kNCLRResourceConcurrencyKey];
+    return (value >= 1 && value <= 8) ? value : 4;
+}
 
 // Set in main() before UIApplicationMain. The scene delegate must create the
 // launcher window on the first phase, but leave window creation to winit on the
@@ -428,22 +435,108 @@ static UIColor *NCLRColor(CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
 }
 
 - (void)settingsTapped {
-    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"NCLR 设置"
-                                                                   message:@"登录应用 ID 只保存在本机。"
-                                                            preferredStyle:UIAlertControllerStyleActionSheet];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"配置 Client ID" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        [self promptForClientID];
-    }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"退出登录" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+    UIViewController *panel = [[UIViewController alloc] init];
+    panel.view.backgroundColor = NCLRColor(0.027, 0.043, 0.065, 1.0);
+    panel.modalPresentationStyle = UIModalPresentationFormSheet;
+    panel.preferredContentSize = CGSizeMake(420.0, 520.0);
+
+    UIStackView *stack = [[UIStackView alloc] init];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.spacing = 14.0;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [panel.view addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:panel.view.safeAreaLayoutGuide.leadingAnchor constant:22.0],
+        [stack.trailingAnchor constraintEqualToAnchor:panel.view.safeAreaLayoutGuide.trailingAnchor constant:-22.0],
+        [stack.topAnchor constraintEqualToAnchor:panel.view.safeAreaLayoutGuide.topAnchor constant:22.0],
+        [stack.bottomAnchor constraintEqualToAnchor:panel.view.safeAreaLayoutGuide.bottomAnchor constant:-22.0],
+    ]];
+
+    UILabel *title = [self label:@"NCLR 设置" size:25.0 weight:UIFontWeightBold color:NCLRColor(0.93, 0.96, 1.0, 1.0)];
+    UILabel *subtitle = [self label:@"登录应用 ID 只保存在本机。" size:12.0 weight:UIFontWeightRegular color:NCLRColor(0.55, 0.64, 0.73, 1.0)];
+    [stack addArrangedSubview:title];
+    [stack addArrangedSubview:subtitle];
+
+    UILabel *concurrencyTitle = [self label:@"资源下载并发限制" size:16.0 weight:UIFontWeightSemibold color:NCLRColor(0.92, 0.96, 1.0, 1.0)];
+    NSInteger savedConcurrency = NCLRResourceDownloadConcurrency();
+    UILabel *concurrencyValue = [self label:[NSString stringWithFormat:@"%ld", (long)savedConcurrency]
+                                       size:18.0
+                                     weight:UIFontWeightBold
+                                      color:NCLRColor(0.55, 1.0, 0.78, 1.0)];
+    concurrencyValue.textAlignment = NSTextAlignmentRight;
+    concurrencyValue.accessibilityLabel = @"当前资源下载并发数";
+    UIStackView *concurrencyHeader = [[UIStackView alloc] init];
+    concurrencyHeader.axis = UILayoutConstraintAxisHorizontal;
+    concurrencyHeader.alignment = UIStackViewAlignmentCenter;
+    concurrencyHeader.spacing = 8.0;
+    [concurrencyHeader addArrangedSubview:concurrencyTitle];
+    [concurrencyHeader addArrangedSubview:concurrencyValue];
+    [concurrencyTitle setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    [concurrencyValue setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+
+    UISlider *slider = [[UISlider alloc] init];
+    slider.minimumValue = 1.0;
+    slider.maximumValue = 8.0;
+    slider.minimumTrackTintColor = NCLRColor(0.55, 1.0, 0.78, 1.0);
+    slider.maximumTrackTintColor = [UIColor colorWithWhite:1.0 alpha:0.18];
+    slider.value = (float)savedConcurrency;
+    slider.continuous = YES;
+    slider.translatesAutoresizingMaskIntoConstraints = NO;
+    [slider.heightAnchor constraintGreaterThanOrEqualToConstant:44.0].active = YES;
+    slider.accessibilityLabel = @"资源下载并发限制";
+    slider.accessibilityValue = [NSString stringWithFormat:@"%ld", (long)savedConcurrency];
+    __weak UISlider *weakSlider = slider;
+    __weak UILabel *weakConcurrencyValue = concurrencyValue;
+    [slider addAction:[UIAction actionWithHandler:^(UIAction *action) {
+        UISlider *activeSlider = weakSlider;
+        UILabel *activeValue = weakConcurrencyValue;
+        NSInteger value = (NSInteger)lroundf(activeSlider.value);
+        activeSlider.value = (float)value;
+        activeValue.text = [NSString stringWithFormat:@"%ld", (long)value];
+        activeSlider.accessibilityValue = [NSString stringWithFormat:@"%ld", (long)value];
+    }] forControlEvents:UIControlEventValueChanged];
+
+    UILabel *rangeHint = [self label:@"1–8 个下载任务，默认 4。数值越高越容易占满带宽。" size:11.0 weight:UIFontWeightRegular color:NCLRColor(0.48, 0.57, 0.66, 1.0)];
+    rangeHint.numberOfLines = 0;
+    [stack addArrangedSubview:concurrencyHeader];
+    [stack addArrangedSubview:slider];
+    [stack addArrangedSubview:rangeHint];
+
+    UIButton *configureButton = [self button:@"配置 Client ID" action:@selector(promptForClientID) primary:NO];
+    UIButton *saveButton = [self button:@"保存并发设置" action:@selector(settingsTapped) primary:YES];
+    UIButton *logoutButton = [self button:@"退出登录" action:@selector(settingsTapped) primary:NO];
+    UIButton *cancelButton = [self button:@"取消" action:@selector(settingsTapped) primary:NO];
+    __weak UIViewController *weakPanel = panel;
+    [configureButton removeTarget:self action:@selector(promptForClientID) forControlEvents:UIControlEventTouchUpInside];
+    [configureButton addAction:[UIAction actionWithHandler:^(UIAction *action) {
+        [weakPanel dismissViewControllerAnimated:YES completion:^{
+            [self promptForClientID];
+        }];
+    }] forControlEvents:UIControlEventTouchUpInside];
+    [saveButton removeTarget:self action:@selector(settingsTapped) forControlEvents:UIControlEventTouchUpInside];
+    [saveButton addAction:[UIAction actionWithHandler:^(UIAction *action) {
+        NSInteger value = (NSInteger)lroundf(slider.value);
+        [[NSUserDefaults standardUserDefaults] setInteger:value forKey:kNCLRResourceConcurrencyKey];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        [weakPanel dismissViewControllerAnimated:YES completion:nil];
+    }] forControlEvents:UIControlEventTouchUpInside];
+    [logoutButton removeTarget:self action:@selector(settingsTapped) forControlEvents:UIControlEventTouchUpInside];
+    [logoutButton addAction:[UIAction actionWithHandler:^(UIAction *action) {
         self.mcToken = nil;
         NCLRKeychainWrite(nil);
-        [self refreshInterface];
-    }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    sheet.popoverPresentationController.sourceView = self.view;
-    sheet.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(self.view.bounds),
-                                                                 CGRectGetMidY(self.view.bounds), 1, 1);
-    [self presentViewController:sheet animated:YES completion:nil];
+        [weakPanel dismissViewControllerAnimated:YES completion:^{
+            [self refreshInterface];
+        }];
+    }] forControlEvents:UIControlEventTouchUpInside];
+    [cancelButton removeTarget:self action:@selector(settingsTapped) forControlEvents:UIControlEventTouchUpInside];
+    [cancelButton addAction:[UIAction actionWithHandler:^(UIAction *action) {
+        [weakPanel dismissViewControllerAnimated:YES completion:nil];
+    }] forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:configureButton];
+    [stack addArrangedSubview:saveButton];
+    [stack addArrangedSubview:logoutButton];
+    [stack addArrangedSubview:cancelButton];
+    [self presentViewController:panel animated:YES completion:nil];
 }
 
 - (void)loginTapped {
@@ -586,6 +679,8 @@ static UIColor *NCLRColor(CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
         NSString *index = [assetsDir stringByAppendingPathComponent:@"indexes/34.json"];
         NSString *store = [assetsDir stringByAppendingPathComponent:@"objects"];
 
+        NSString *concurrency = [NSString stringWithFormat:@"%ld", (long)NCLRResourceDownloadConcurrency()];
+        setenv("NCLR_RESOURCE_DOWNLOAD_CONCURRENCY", concurrency.UTF8String, 1);
         const char *fetchFailure = horizon_ios_fetch("26.3", jarDir.UTF8String, assetsDir.UTF8String);
         NSString *fetchMessage = NCLRString(fetchFailure);
         if (fetchMessage != nil) {

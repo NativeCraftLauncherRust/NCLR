@@ -14,7 +14,7 @@ pub mod callback;
 pub mod fetch;
 pub mod plan;
 
-pub use fetch::{download, Report, Transport};
+pub use fetch::{download, download_with_concurrency, Report, Transport};
 #[cfg(feature = "http")]
 pub use fetch::HttpTransport;
 pub use plan::{

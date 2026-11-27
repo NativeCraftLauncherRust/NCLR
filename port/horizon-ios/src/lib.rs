@@ -396,6 +396,11 @@ fn fetch_into(version: &str, jar_dir: &str, store_dir: &str) -> Result<(), Strin
     std::fs::create_dir_all(store).map_err(|e| format!("{}: {e}", store.display()))?;
 
     let transport = hzr_download::HttpTransport::new();
+    let concurrency = std::env::var("NCLR_RESOURCE_DOWNLOAD_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(1, 8))
+        .unwrap_or(4);
     // The download itself is public. A release build sets HORIZON_ACCESS_TOKEN
     // once the player signs in, and then a first run has to prove ownership
     // before a single byte is fetched.
@@ -410,7 +415,12 @@ fn fetch_into(version: &str, jar_dir: &str, store_dir: &str) -> Result<(), Strin
 
     // The jar and the asset index first: the index lists the objects.
     let root = hzr_download::root_files(&json, jar_dir, store);
-    let report = hzr_download::download(&transport, &root, |_, _| {});
+    let report = hzr_download::download_with_concurrency(
+        &transport,
+        &root,
+        concurrency,
+        |_, _| {},
+    );
     if !report.is_clean() {
         let (what, why) = &report.failures[0];
         return Err(format!("{what}: {why}"));
@@ -430,7 +440,8 @@ fn fetch_into(version: &str, jar_dir: &str, store_dir: &str) -> Result<(), Strin
             || name.starts_with("minecraft/resourcepacks/")
             || name == "pack.mcmeta"
     });
-    let report = hzr_download::download(&transport, &objects, |_, _| {});
+    let report =
+        hzr_download::download_with_concurrency(&transport, &objects, concurrency, |_, _| {});
     if !report.is_clean() {
         let (what, why) = &report.failures[0];
         return Err(format!("{what}: {why}"));
