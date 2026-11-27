@@ -5022,6 +5022,9 @@ static NSString *NCLRSHA1Hex(NSData *data) {
                  completion:(void (^)(NSString *))completion {
     if (self.preparing) return;
     self.preparing = YES;
+    // Generating the tables from the jar takes minutes on a phone; a locked
+    // screen would suspend the app and stall it, so keep the display awake.
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
     self.cancellable = YES;
     self.cancelRequested = NO;
     self.progressValue = 0;
@@ -5040,6 +5043,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
             }
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSString *result = self.cancelRequested ? @"下载已取消" : error;
+                UIApplication.sharedApplication.idleTimerDisabled = NO;
                 self.cancellable = NO;
                 self.preparing = NO;
                 self.lastLine = result ?: @"资源准备完成";
