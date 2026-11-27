@@ -1,7 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMotion/CoreMotion.h>
-#import <CoreImage/CoreImage.h>
 #import <GameController/GameController.h>
 #import <SceneKit/SceneKit.h>
 #import <objc/runtime.h>
@@ -11,8 +10,6 @@
 #import <SafariServices/SafariServices.h>
 #import <stdlib.h>
 #import <os/lock.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
@@ -53,7 +50,7 @@ static void NCLRLoadRemoteAvatar(NSString *url, UIImageView *imageView, UILabel 
     if ([previous isEqualToString:url]) return;
     objc_setAssociatedObject(imageView, &NCLRAvatarRequestKey, url, OBJC_ASSOCIATION_COPY_NONATOMIC);
     imageView.image = nil;
-    imageView.hidden = NO;
+    imageView.hidden = YES;
     fallback.hidden = NO;
     NSURL *address = url.length ? [NSURL URLWithString:url] : nil;
     if (![address.scheme.lowercaseString isEqualToString:@"https"]) return;
@@ -70,8 +67,8 @@ static void NCLRLoadRemoteAvatar(NSString *url, UIImageView *imageView, UILabel 
         UIImageView *target = weakImageView;
         if (!target || ![objc_getAssociatedObject(target, &NCLRAvatarRequestKey) isEqualToString:url]) return;
         target.image = image;
-        target.hidden = NO;
-        weakFallback.hidden = NO;
+        target.hidden = image == nil;
+        weakFallback.hidden = image != nil;
         if (!image) objc_setAssociatedObject(target, &NCLRAvatarRequestKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
     };
     UIImage *cached = [cache objectForKey:url];
@@ -134,138 +131,18 @@ static NSString *NCLRAvatarURLForName(NSString *name) {
     return [NSString stringWithFormat:@"https://minotar.net/helm/%@/128", name];
 }
 
-static NSString *NCLRString(id value);
-static NSString *NCLRDocuments(void);
-
-/// Offline accounts live beside the game as one JSON file each in
-/// `Documents/account`. The launcher reads them on start so a profile can be
-/// dropped in without signing in. Java's `UUID.nameUUIDFromBytes` (MD5,
-/// version 3) over `OfflinePlayer:<name>` is the id the game expects.
-static NSString *NCLROfflineDirectory(void) {
-    return [NCLRDocuments() stringByAppendingPathComponent:@"account"];
-}
-
-static NSString *NCLROfflineUUID(NSString *name) {
-    NSString *seed = [@"OfflinePlayer:" stringByAppendingString:name];
-    unsigned char digest[CC_MD5_DIGEST_LENGTH];
-    CC_MD5(seed.UTF8String, (CC_LONG)strlen(seed.UTF8String), digest);
-    digest[6] = (unsigned char)((digest[6] & 0x0F) | 0x30);
-    digest[8] = (unsigned char)((digest[8] & 0x3F) | 0x80);
-    NSMutableString *hex = [NSMutableString stringWithCapacity:32];
-    for (int index = 0; index < CC_MD5_DIGEST_LENGTH; index++) {
-        [hex appendFormat:@"%02x", digest[index]];
-    }
-    return hex;
-}
-
-static NSString *NCLROfflinePath(NSString *directory, id value) {
-    NSString *name = NCLRString(value);
-    if (name.length == 0) return nil;
-    BOOL absolute = [name hasPrefix:@"/"] || [name containsString:@":"];
-    NSString *path = absolute ? name : [directory stringByAppendingPathComponent:name];
-    return [NSFileManager.defaultManager fileExistsAtPath:path] ? path : nil;
-}
-
-static NSArray<NSDictionary *> *NCLROfflineProfiles(void) {
-    NSString *directory = NCLROfflineDirectory();
-    NSMutableArray<NSDictionary *> *profiles = [NSMutableArray array];
-    NSCharacterSet *hexSet = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
-    for (NSString *name in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:directory error:nil]
-                                sortedArrayUsingSelector:@selector(compare:)]) {
-        if (![name.pathExtension.lowercaseString isEqualToString:@"json"]) continue;
-        NSString *path = [directory stringByAppendingPathComponent:name];
-        NSData *data = [NSData dataWithContentsOfFile:path];
-        id json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-        if (![json isKindOfClass:NSDictionary.class]) continue;
-        NSString *player = [NCLRString(json[@"name"])
-            stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
-        if (NCLRAvatarURLForName(player) == nil) continue;
-        NSString *uuid = [[NCLRString(json[@"uuid"]) stringByReplacingOccurrencesOfString:@"-" withString:@""] lowercaseString];
-        if (uuid.length != 32 || [uuid rangeOfCharacterFromSet:hexSet].location != NSNotFound) {
-            uuid = NCLROfflineUUID(player);
-        }
-        [profiles addObject:@{
-            @"name": player,
-            @"uuid": uuid,
-            @"file": name,
-            @"active": @([json[@"active"] boolValue]),
-            @"skin": NCLROfflinePath(directory, json[@"skin"]) ?: @"",
-            @"cape": NCLROfflinePath(directory, json[@"cape"]) ?: @"",
-            @"slim": @([json[@"slim"] boolValue]),
-        }];
-    }
-    return profiles;
-}
-
-/// The profile marked `"active": true`, else the first file by name.
-static NSDictionary *NCLRActiveOfflineProfile(void) {
-    NSArray<NSDictionary *> *profiles = NCLROfflineProfiles();
-    for (NSDictionary *profile in profiles) {
-        if ([profile[@"active"] boolValue]) return profile;
-    }
-    return profiles.firstObject;
-}
-
 @class NCLRRootController;
-typedef NS_ENUM(NSInteger, NCLRThemeMode) {
-    NCLRThemeModeSystem = 0,
-    NCLRThemeModeDark = 1,
-    NCLRThemeModeLight = 2,
-};
-
 static BOOL NCLRDarkMode = YES;
-static NCLRThemeMode NCLRThemeModeValue = NCLRThemeModeSystem;
 static NSString *const kNCLRThemeKey = @"NCLRThemeDark";
-static NSString *const kNCLRThemeModeKey = @"NCLRThemeMode";
-static NSString *const kNCLRPageTransitionBlurKey = @"NCLRPageTransitionBlurEnabled";
-static NSString *const NCLRPageTransitionBlurPreferenceChangedNotification =
-    @"NCLRPageTransitionBlurPreferenceChanged";
-
-static BOOL NCLRPageTransitionBlurEnabled(void) {
-    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    NSNumber *saved = [defaults objectForKey:kNCLRPageTransitionBlurKey];
-    return saved == nil ? NO : saved.boolValue;
-}
-static void NCLRThemeResolveFromTraitCollection(UITraitCollection *traitCollection) {
-    if (NCLRThemeModeValue == NCLRThemeModeDark) {
-        NCLRDarkMode = YES;
-    } else if (NCLRThemeModeValue == NCLRThemeModeLight) {
-        NCLRDarkMode = NO;
-    } else {
-        UIUserInterfaceStyle style = traitCollection.userInterfaceStyle;
-        if (style == UIUserInterfaceStyleUnspecified) {
-            style = UITraitCollection.currentTraitCollection.userInterfaceStyle;
-        }
-        NCLRDarkMode = style != UIUserInterfaceStyleLight;
-    }
-}
 
 static void NCLRThemeLoad(void) {
-    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    NSNumber *savedMode = [defaults objectForKey:kNCLRThemeModeKey];
-    if ([savedMode isKindOfClass:NSNumber.class]) {
-        NSInteger mode = MAX(NCLRThemeModeSystem, MIN(NCLRThemeModeLight, savedMode.integerValue));
-        NCLRThemeModeValue = (NCLRThemeMode)mode;
-    } else {
-        NSNumber *legacyDark = [defaults objectForKey:kNCLRThemeKey];
-        NCLRThemeModeValue = [legacyDark isKindOfClass:NSNumber.class]
-            ? (legacyDark.boolValue ? NCLRThemeModeDark : NCLRThemeModeLight)
-            : NCLRThemeModeSystem;
-    }
-    NCLRThemeResolveFromTraitCollection(UITraitCollection.currentTraitCollection);
+    NSNumber *saved = [[NSUserDefaults standardUserDefaults] objectForKey:kNCLRThemeKey];
+    NCLRDarkMode = saved == nil ? YES : saved.boolValue;
 }
 
-static void NCLRThemeSet(NCLRThemeMode mode, UITraitCollection *traitCollection) {
-    NCLRThemeModeValue = mode;
-    [[NSUserDefaults standardUserDefaults] setInteger:mode forKey:kNCLRThemeModeKey];
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:kNCLRThemeKey];
-    NCLRThemeResolveFromTraitCollection(traitCollection);
-}
-
-static UIUserInterfaceStyle NCLRThemeOverrideStyle(void) {
-    if (NCLRThemeModeValue == NCLRThemeModeDark) return UIUserInterfaceStyleDark;
-    if (NCLRThemeModeValue == NCLRThemeModeLight) return UIUserInterfaceStyleLight;
-    return UIUserInterfaceStyleUnspecified;
+static void NCLRThemeSet(BOOL dark) {
+    NCLRDarkMode = dark;
+    [[NSUserDefaults standardUserDefaults] setBool:dark forKey:kNCLRThemeKey];
 }
 
 /// The launcher palette is authored for the dark theme. Light mode inverts
@@ -279,11 +156,10 @@ static UIColor *NCLRColor(CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
         CGFloat hi = MAX(r, MAX(g, b));
         CGFloat lo = MIN(r, MIN(g, b));
         if (hi - lo <= 0.10 || hi <= 0.12) {
-            if (hi >= 0.86) {
-                CGFloat ink = 0.08 + 0.18 * (1.0 - hi);
-                r = ink; g = ink; b = ink;
-            } else if (hi >= 0.30) {
-                CGFloat ink = 0.26 + 0.55 * (1.0 - hi);
+            if (hi >= 0.30 && hi < 0.86) {
+                // Mid-grey secondary text: inversion leaves it at 50% grey on
+                // white, which is barely readable. Pull it down to ink.
+                CGFloat ink = 0.16 + 0.10 * (1.0 - hi);
                 r = ink; g = ink; b = ink;
             } else {
                 r = 1.0 - r; g = 1.0 - g; b = 1.0 - b;
@@ -294,48 +170,23 @@ static UIColor *NCLRColor(CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
 }
 
 static UIColor *NCLRSurface(void) {
-    return NCLRDarkMode ? [UIColor colorWithRed:0.075 green:0.095 blue:0.115 alpha:1]
-                        : [UIColor colorWithRed:1.0 green:1.0 blue:1.0 alpha:1];
+    return NCLRDarkMode ? [UIColor colorWithRed:0.09 green:0.12 blue:0.15 alpha:1]
+                        : [UIColor colorWithRed:0.99 green:1 blue:1 alpha:1];
 }
 
 static UIColor *NCLRCanvas(void) {
     return NCLRDarkMode ? [UIColor colorWithRed:0.045 green:0.065 blue:0.085 alpha:1]
-                        : [UIColor colorWithRed:0.906 green:0.910 blue:0.929 alpha:1];
-}
-
-static UIColor *NCLRSunkenSurface(void) {
-    return NCLRDarkMode ? [UIColor colorWithRed:0.015 green:0.035 blue:0.055 alpha:1]
-                        : [UIColor colorWithRed:0.875 green:0.886 blue:0.906 alpha:1];
-}
-
-static UIColor *NCLRRaisedSurface(void) {
-    return NCLRDarkMode ? [UIColor colorWithRed:0.105 green:0.135 blue:0.165 alpha:1]
-                        : [UIColor colorWithRed:0.933 green:0.937 blue:0.953 alpha:1];
+                        : [UIColor colorWithRed:0.89 green:0.94 blue:0.94 alpha:1];
 }
 
 static UIColor *NCLRBorder(void) {
-    return NCLRDarkMode ? [UIColor colorWithRed:0.075 green:0.095 blue:0.115 alpha:1]
-                        : [UIColor colorWithRed:0.92 green:0.95 blue:0.95 alpha:1];
+    return NCLRDarkMode ? [UIColor colorWithRed:0.20 green:0.26 blue:0.30 alpha:1]
+                        : [UIColor colorWithRed:0.73 green:0.80 blue:0.82 alpha:1];
 }
 
 static UIColor *NCLRAccent(void) {
     return NCLRDarkMode ? [UIColor colorWithRed:0.30 green:0.85 blue:0.68 alpha:1]
                         : [UIColor colorWithRed:0.05 green:0.39 blue:0.31 alpha:1];
-}
-
-static UIColor *NCLRSidebarSelectionColor(void) {
-    return NCLRDarkMode ? [UIColor colorWithWhite:1.0 alpha:0.10]
-                        : [UIColor colorWithWhite:0.55 alpha:0.22];
-}
-
-static UIColor *NCLRSidebarSelectedForeground(void) {
-    return NCLRDarkMode ? [UIColor colorWithWhite:0.94 alpha:1.0]
-                        : [UIColor colorWithWhite:0.14 alpha:1.0];
-}
-
-static UIColor *NCLRSidebarUnselectedForeground(void) {
-    return NCLRDarkMode ? [UIColor colorWithWhite:0.68 alpha:1.0]
-                        : [UIColor colorWithWhite:0.46 alpha:1.0];
 }
 
 static BOOL NCLRTokenExpired(NSString *token) {
@@ -368,6 +219,165 @@ static NSString *NCLRWasmRefusalText(void) {
                                               encoding:NSUTF8StringEncoding
                                                  error:nil];
     return [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+#pragma mark - Shader packs
+
+// The game's own settings screen for a pack is the one that changes these; the launcher only
+// needs to pick the pack and to offer a size for phones before the game starts.
+
+static NSString *NCLRShaderPacksPath(void) {
+    return [NCLRDocuments() stringByAppendingPathComponent:@"shaderpacks"];
+}
+
+static NSString *NCLRGraphicsPath(void) {
+    return [NCLRDocuments() stringByAppendingPathComponent:@"horizon-graphics.txt"];
+}
+
+// One line of horizon-graphics.txt, as `key:value`.
+static NSString *NCLRGraphicsValue(NSString *key) {
+    NSString *text = [NSString stringWithContentsOfFile:NCLRGraphicsPath()
+                                              encoding:NSUTF8StringEncoding
+                                                 error:nil];
+    NSString *prefix = [key stringByAppendingString:@":"];
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        if ([line hasPrefix:prefix]) {
+            return [line substringFromIndex:prefix.length];
+        }
+    }
+    return nil;
+}
+
+static void NCLRSetGraphicsValue(NSString *key, NSString *value) {
+    NSString *path = NCLRGraphicsPath();
+    NSString *text = [NSString stringWithContentsOfFile:path
+                                              encoding:NSUTF8StringEncoding
+                                                 error:nil];
+    NSMutableArray<NSString *> *lines = [[text componentsSeparatedByString:@"\n"] mutableCopy];
+    if (lines.count == 0) {
+        lines = [NSMutableArray array];
+    }
+    NSString *prefix = [key stringByAppendingString:@":"];
+    NSString *line = [prefix stringByAppendingString:value ?: @""];
+    NSInteger found = -1;
+    for (NSInteger i = 0; i < (NSInteger)lines.count; i++) {
+        if ([lines[i] hasPrefix:prefix]) {
+            found = i;
+            break;
+        }
+    }
+    if (found >= 0) {
+        lines[found] = line;
+    } else {
+        // Keep a blank line at the end rather than a trailing empty entry.
+        if (lines.count > 0 && [lines.lastObject length] == 0) {
+            [lines insertObject:line atIndex:lines.count - 1];
+        } else {
+            [lines addObject:line];
+        }
+    }
+    [[lines componentsJoinedByString:@"\n"] writeToFile:path atomically:YES
+                                                encoding:NSUTF8StringEncoding error:nil];
+}
+
+// The manifest of a Horizon pack folder: `id`, `name` and `version`; nil for anything else.
+static NSDictionary<NSString *, NSString *> *NCLRShaderManifest(NSString *folder) {
+    NSString *text = [NSString stringWithContentsOfFile:
+                            [folder stringByAppendingPathComponent:@"horizon-shaders.toml"]
+                                              encoding:NSUTF8StringEncoding
+                                                 error:nil];
+    if (text.length == 0) {
+        return nil;
+    }
+    NSMutableDictionary<NSString *, NSString *> *manifest = [NSMutableDictionary dictionary];
+    NSCharacterSet *space = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString *raw in [text componentsSeparatedByString:@"\n"]) {
+        NSString *line = [raw stringByTrimmingCharactersInSet:space];
+        if ([line hasPrefix:@"#"]) {
+            continue;
+        }
+        NSRange equals = [line rangeOfString:@"="];
+        if (equals.location == NSNotFound) {
+            continue;
+        }
+        NSString *key = [[line substringToIndex:equals.location] stringByTrimmingCharactersInSet:space];
+        NSString *value = [[line substringFromIndex:equals.location + 1] stringByTrimmingCharactersInSet:space];
+        if (value.length >= 2 && [value hasPrefix:@"\""] && [value hasSuffix:@"\""]) {
+            value = [value substringWithRange:NSMakeRange(1, value.length - 2)];
+        }
+        if ([key isEqualToString:@"id"] || [key isEqualToString:@"name"] || [key isEqualToString:@"version"]) {
+            manifest[key] = value;
+        }
+    }
+    return manifest[@"id"] ? manifest : nil;
+}
+
+// Every pack the app ships, copied into Documents/shaderpacks so the game can list it. A pack
+// whose version is already there is left alone, so a player's own copy is never replaced twice.
+static void NCLRInstallBundledShaderPacks(void) {
+    NSFileManager *files = NSFileManager.defaultManager;
+    NSString *bundled = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"shaderpacks"];
+    BOOL directory = NO;
+    if (![files fileExistsAtPath:bundled isDirectory:&directory] || !directory) {
+        return;
+    }
+    NSString *destination = NCLRShaderPacksPath();
+    [files createDirectoryAtPath:destination withIntermediateDirectories:YES attributes:nil error:nil];
+    for (NSString *entry in [files contentsOfDirectoryAtPath:bundled error:nil]) {
+        if ([entry hasPrefix:@"."]) {
+            continue;
+        }
+        NSString *from = [bundled stringByAppendingPathComponent:entry];
+        NSString *to = [destination stringByAppendingPathComponent:entry];
+        BOOL fromDirectory = NO;
+        [files fileExistsAtPath:from isDirectory:&fromDirectory];
+        if (!fromDirectory) {
+            continue;
+        }
+        BOOL present = NO;
+        [files fileExistsAtPath:to isDirectory:&present];
+        if (present && [NCLRShaderManifest(to)[@"version"] isEqualToString:NCLRShaderManifest(from)[@"version"]]) {
+            continue;
+        }
+        [files removeItemAtPath:to error:nil];
+        [files copyItemAtPath:from toPath:to error:nil];
+    }
+}
+
+// The values of the light-and-shadow preset the launcher offers: choice options by index.
+static void NCLRApplyShaderPreset(NSInteger preset) {
+    NSDictionary<NSString *, NSString *> *values = nil;
+    switch (preset) {
+        case 0: // Smooth: the smallest of everything a phone pays for.
+            values = @{@"shadows" : @"1", @"sun_light" : @"1.0", @"glow" : @"0.25",
+                       @"water" : @"1", @"saturation" : @"1.06", @"vignette" : @"0"};
+            break;
+        case 2: // Fine: more sun and more glow.
+            values = @{@"shadows" : @"1", @"sun_light" : @"1.15", @"glow" : @"0.60",
+                       @"water" : @"1", @"saturation" : @"1.10", @"vignette" : @"1"};
+            break;
+        default: // Balanced: the pack's own defaults.
+            values = @{@"shadows" : @"1", @"sun_light" : @"1.0", @"glow" : @"0.45",
+                       @"water" : @"1", @"saturation" : @"1.08", @"vignette" : @"1"};
+            break;
+    }
+    NSString *directory = [NCLRShaderPacksPath() stringByAppendingPathComponent:@".horizon-options"];
+    [NSFileManager.defaultManager createDirectoryAtPath:directory
+                            withIntermediateDirectories:YES attributes:nil error:nil];
+    NSMutableString *text = [NSMutableString string];
+    for (NSString *key in values) {
+        [text appendFormat:@"%@=%@\n", key, values[key]];
+    }
+    [text writeToFile:[directory stringByAppendingPathComponent:@"horizon_lite"] atomically:YES
+             encoding:NSUTF8StringEncoding error:nil];
+}
+
+static NSString *NCLRPickedShaderId(void) {
+    NSString *picked = NCLRGraphicsValue(@"pickedShaderPack");
+    if (![picked hasPrefix:@"horizon:"]) {
+        return nil;
+    }
+    return [picked substringFromIndex:@"horizon:".length];
 }
 
 static void NCLRCreateDirectory(NSString *path) {
@@ -1018,7 +1028,6 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *positions;
 @property (nonatomic, strong) NSMutableSet<NSString *> *deletedKeys;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *triggerModes;
-@property (nonatomic, strong) NSMutableSet<NSString *> *swipeThroughKeys;
 @property (nonatomic, assign) CGFloat buttonSize;
 @property (nonatomic, assign) CGFloat opacity;
 @property (nonatomic, copy) NSString *touchMode;
@@ -1098,7 +1107,6 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     self.opacity = 0.55;
     self.layoutVersion = 2;
     self.deletedKeys = [NSMutableSet set];
-    self.swipeThroughKeys = [NSMutableSet set];
     self.menuKeys = [NSMutableArray array];
     self.leftHanded = NO;
     self.joystickSprint = NO;
@@ -1114,7 +1122,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     self.sprintButton = YES;
     self.buttonStyle = 0;
     self.iconLabels = NO;
-    self.hiddenKeys = [NSMutableSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]];
+    self.hiddenKeys = [NSMutableSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield", @"keyboard"]];
     self.touchMode = @"crosshair";
     self.dynamicJoystick = NO;
     self.positions = [@{
@@ -1197,13 +1205,6 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     if ([json[@"triggerModes"] isKindOfClass:NSDictionary.class]) {
         self.triggerModes = [json[@"triggerModes"] mutableCopy];
     }
-    NSArray *swipeThrough = json[@"swipeThrough"];
-    if ([swipeThrough isKindOfClass:NSArray.class]) {
-        [self.swipeThroughKeys removeAllObjects];
-        for (id key in swipeThrough) {
-            if ([key isKindOfClass:NSString.class]) [self.swipeThroughKeys addObject:key];
-        }
-    }
     NSNumber *deadzone = json[@"joystickDeadzone"];
     if ([deadzone isKindOfClass:[NSNumber class]]) {
         self.joystickDeadzone = MAX(0.05, MIN(0.35, deadzone.doubleValue));
@@ -1279,16 +1280,6 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         for (NSString *key in hidden) {
             if ([key isKindOfClass:[NSString class]]) [self.hiddenKeys addObject:key];
         }
-    }
-    // The system-keyboard control is now a persistent, editable overlay.
-    [self.hiddenKeys removeObject:@"keyboard"];
-    [self.deletedKeys removeObject:@"keyboard"];
-    if (self.bindings[@"keyboard"] == nil) {
-        self.bindings[@"keyboard"] = @"键盘";
-    }
-    if (self.positions[@"keyboard"] == nil) {
-        self.positions[@"keyboard"] = @{ @"x" : @0.66, @"y" : @0.12,
-                                         @"size" : @0.075, @"width" : @0.075 };
     }
     if (self.bindings[@"move"] == nil) {
         self.bindings[@"move"] = @"移动";
@@ -1381,8 +1372,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         @"keyboard" : @{ @"x" : @0.66, @"y" : @0.12, @"size" : @0.065 },
         @"move" : @{ @"x" : @0.14, @"y" : @0.74, @"size" : @0.28 },
     } mutableCopy];
-    [self.hiddenKeys setSet:[NSSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]]];
-    [self.swipeThroughKeys removeAllObjects];
+    [self.hiddenKeys setSet:[NSSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield", @"keyboard"]]];
 }
 
 - (BOOL)isHidden:(NSString *)key {
@@ -1465,7 +1455,6 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         @"bindings" : self.bindings ?: @{},
         @"layout" : self.positions ?: @{},
         @"triggerModes" : self.triggerModes ?: @{},
-        @"swipeThrough" : self.swipeThroughKeys.allObjects ?: @[],
     };
     NSData *data = [NSJSONSerialization dataWithJSONObject:json
                                                    options:NSJSONWritingPrettyPrinted
@@ -1785,7 +1774,6 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, assign) BOOL developerPremium;
 @property (nonatomic, copy) NSString *avatarURL;
 @property (nonatomic, copy) NSString *uuid;
-@property (nonatomic, copy) NSDictionary *offlineProfile;
 @property (nonatomic, strong) ASWebAuthenticationSession *session;
 @property (nonatomic, weak) UIViewController *presenter;
 @property (nonatomic, strong) SFSafariViewController *authSafari;
@@ -1807,21 +1795,6 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         if (_token.length > 0) {
             _uuid = [[NSUserDefaults standardUserDefaults] stringForKey:kNCLRAccountUUIDKey];
             _avatarURL = NCLRAvatarURLForName(_name);
-        }
-        NSString *accountDirectory = NCLROfflineDirectory();
-        [[NSFileManager defaultManager] createDirectoryAtPath:accountDirectory
-                                  withIntermediateDirectories:YES
-                                                   attributes:nil
-                                                        error:nil];
-        NSString *readme = [accountDirectory stringByAppendingPathComponent:@"README.txt"];
-        [NSFileManager.defaultManager removeItemAtPath:readme error:nil];
-        if (_token.length == 0) {
-            NSDictionary *profile = NCLRActiveOfflineProfile();
-            if (profile) {
-                _offlineProfile = profile;
-                _name = profile[@"name"];
-                _uuid = profile[@"uuid"];
-            }
         }
         _developerPremium = NO;
     }
@@ -2296,6 +2269,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     card.backgroundColor = NCLRSurface();
     card.layer.cornerRadius = 18.0;
     card.clipsToBounds = YES;
+    card.layer.borderWidth = 1.0;
+    card.layer.borderColor = NCLRBorder().CGColor;
     return card;
 }
 
@@ -2312,7 +2287,9 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         [button setTitleColor:NCLRDarkMode ? UIColor.blackColor : UIColor.whiteColor forState:UIControlStateDisabled];
     } else {
         [button setTitleColor:NCLRColor(0.94, 0.94, 0.94, 1.0) forState:UIControlStateNormal];
-        button.backgroundColor = NCLRRaisedSurface();
+        button.backgroundColor = NCLRCanvas();
+        button.layer.borderWidth = 1.0;
+        button.layer.borderColor = NCLRBorder().CGColor;
     }
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     return button;
@@ -2542,7 +2519,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NCLRVersion *selected = store.selected;
 
     UIView *hero = [self card];
-    hero.backgroundColor = NCLRSunkenSurface();
+    hero.backgroundColor = NCLRColor(0.055, 0.055, 0.055, 1.0);
+    hero.layer.borderColor = NCLRBorder().CGColor;
     UILabel *heroEyebrow = [self eyebrow:@"NCLR · 游戏大厅"];
     heroEyebrow.textColor = NCLRAccent();
     NSString *heroTitleText = selected.name ?: @"Minecraft 26.3";
@@ -2562,7 +2540,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.launchButton = launch;
     self.launchProgress = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
     self.launchProgress.progressTintColor = NCLRAccent();
-    self.launchProgress.trackTintColor = NCLRRaisedSurface();
+    self.launchProgress.trackTintColor = NCLRBorder();
     self.cancelLaunchDownload = [self button:@"取消下载" action:@selector(cancelLaunchPreparation) primary:NO];
     UILabel *hint = [self label:NCLRResourcePreparer.shared.lastLine ?: @""
                            size:12.0 weight:UIFontWeightMedium
@@ -2774,28 +2752,38 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
                                                 encoding:NSUTF8StringEncoding error:nil];
 }
 
+- (void)installShaderPacks {
+    NCLRInstallBundledShaderPacks();
+    NSString *pack = [NCLRShaderPacksPath() stringByAppendingPathComponent:@"horizon_lite"];
+    if (NCLRShaderManifest(pack) == nil) {
+        return;
+    }
+    // A game that never picked a pack gets the light shaders on, at the balanced size; the 光影
+    // page turns them off or changes the preset.
+    if (NCLRGraphicsValue(@"pickedShaderPack") == nil) {
+        NSNumber *saved = [[NSUserDefaults standardUserDefaults] objectForKey:@"NCLRShaderPreset"];
+        NSInteger preset = saved == nil ? 1 : saved.integerValue;
+        if (preset < 0 || preset > 2) {
+            preset = 1;
+        }
+        [[NSUserDefaults standardUserDefaults] setInteger:preset forKey:@"NCLRShaderPreset"];
+        NCLRApplyShaderPreset(preset);
+        NCLRSetGraphicsValue(@"pickedShaderPack", @"horizon:horizon_lite");
+    }
+}
+
 - (void)launchTapped {
     if (NCLRResourcePreparer.shared.preparing || self.checkingAccount) return;
     NCLRAuth *auth = NCLRAuth.shared;
-    NSDictionary *offlineProfile = nil;
     if (auth.token.length == 0 || NCLRTokenExpired(auth.token)) {
         if (auth.token.length > 0) {
             [auth logout];
             [[NSNotificationCenter defaultCenter] postNotificationName:NCLRAvatarUpdatedNotification object:auth];
         }
-        offlineProfile = NCLRActiveOfflineProfile();
-        if (offlineProfile == nil) {
-            [self showLaunchError:@"请在账号页登录 Microsoft 正版账号后启动游戏。"];
-            return;
-        }
-        auth.offlineProfile = offlineProfile;
-        auth.name = offlineProfile[@"name"];
-        auth.uuid = offlineProfile[@"uuid"];
-        auth.avatarURL = nil;
-    } else {
-        auth.offlineProfile = nil;
+        [self showLaunchError:@"请在账号页登录 Microsoft 正版账号后启动游戏。"];
+        return;
     }
-    if (offlineProfile == nil && (auth.uuid.length == 0 || !NCLRAvatarURLForName(auth.name))) {
+    if (auth.uuid.length == 0 || !NCLRAvatarURLForName(auth.name)) {
         self.checkingAccount = YES;
         [self updateLaunchControlsAnimated:YES];
         [auth fetchProfileWithToken:auth.token completion:^(NSString *token, NSString *name, NSString *error) {
@@ -2820,55 +2808,37 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         }
     }
 
+    [self installShaderPacks];
     [self writePerformanceOptions];
     [NCLRKeymap.shared save];
     NSString *game = NCLRDocuments();
     NCLRCreateDirectory(game);
     NSString *sessionPath = [game stringByAppendingPathComponent:@".nclr-session.json"];
+    NSData *sessionData = [NSJSONSerialization dataWithJSONObject:@{
+        @"name": auth.name, @"uuid": auth.uuid, @"access_token": auth.token, @"user_type": @"msa"
+    } options:0 error:nil];
+    if (![sessionData writeToFile:sessionPath options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:nil] ||
+        ![files setAttributes:@{NSFilePosixPermissions: @0600} ofItemAtPath:sessionPath error:nil]) {
+        [files removeItemAtPath:sessionPath error:nil];
+        [self showLaunchError:@"无法建立正版游戏会话，请检查设备可用空间。"];
+        return;
+    }
     setenv("HORIZON_HOME", game.UTF8String, 1);
+    setenv("HORIZON_SESSION_FILE", sessionPath.UTF8String, 1);
     unsetenv("HORIZON_OFFLINE_SKIN");
     unsetenv("HORIZON_OFFLINE_CAPE");
     unsetenv("HORIZON_OFFLINE_SKIN_MODEL");
-    if (offlineProfile) {
-        // No Microsoft session: the engine runs the profile offline and the
-        // skin and cape come straight from the account folder.
-        unsetenv("HORIZON_SESSION_FILE");
-        [files removeItemAtPath:sessionPath error:nil];
-        setenv("HORIZON_PLAYER_NAME", [(NSString *)offlineProfile[@"name"] UTF8String], 1);
-        NSString *skinPath = NCLRString(offlineProfile[@"skin"]);
-        if (skinPath.length > 0 && [files fileExistsAtPath:skinPath]) {
-            setenv("HORIZON_OFFLINE_SKIN", skinPath.UTF8String, 1);
-            setenv("HORIZON_OFFLINE_SKIN_MODEL",
-                   [offlineProfile[@"slim"] boolValue] ? "slim" : "classic", 1);
-        }
-        NSString *capePath = NCLRString(offlineProfile[@"cape"]);
-        if (capePath.length > 0 && [files fileExistsAtPath:capePath]) {
-            setenv("HORIZON_OFFLINE_CAPE", capePath.UTF8String, 1);
-        }
-    } else {
-        NSData *sessionData = [NSJSONSerialization dataWithJSONObject:@{
-            @"name": auth.name, @"uuid": auth.uuid, @"access_token": auth.token, @"user_type": @"msa"
-        } options:0 error:nil];
-        if (![sessionData writeToFile:sessionPath options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:nil] ||
-            ![files setAttributes:@{NSFilePosixPermissions: @0600} ofItemAtPath:sessionPath error:nil]) {
-            [files removeItemAtPath:sessionPath error:nil];
-            [self showLaunchError:@"无法建立正版游戏会话，请检查设备可用空间。"];
-            return;
-        }
-        setenv("HORIZON_SESSION_FILE", sessionPath.UTF8String, 1);
-        unsetenv("HORIZON_PLAYER_NAME");
-        NSDictionary *appearance = NCLRReadAppearance(auth.uuid);
-        NSString *skinPath = NCLRTextureCache(auth.uuid, @"skin.png");
-        NSString *capePath = NCLRTextureCache(auth.uuid, @"cape.png");
-        NSDictionary *skin = NCLRActiveTexture(appearance, @"skins");
-        if (skin && skinPath && [files fileExistsAtPath:skinPath]) {
-            setenv("HORIZON_OFFLINE_SKIN", skinPath.UTF8String, 1);
-            BOOL slim = [NCLRString(skin[@"variant"]).lowercaseString isEqualToString:@"slim"];
-            setenv("HORIZON_OFFLINE_SKIN_MODEL", slim ? "slim" : "classic", 1);
-        }
-        if (NCLRActiveTexture(appearance, @"capes") && capePath && [files fileExistsAtPath:capePath]) {
-            setenv("HORIZON_OFFLINE_CAPE", capePath.UTF8String, 1);
-        }
+    NSDictionary *appearance = NCLRReadAppearance(auth.uuid);
+    NSString *skinPath = NCLRTextureCache(auth.uuid, @"skin.png");
+    NSString *capePath = NCLRTextureCache(auth.uuid, @"cape.png");
+    NSDictionary *skin = NCLRActiveTexture(appearance, @"skins");
+    if (skin && skinPath && [files fileExistsAtPath:skinPath]) {
+        setenv("HORIZON_OFFLINE_SKIN", skinPath.UTF8String, 1);
+        BOOL slim = [NCLRString(skin[@"variant"]).lowercaseString isEqualToString:@"slim"];
+        setenv("HORIZON_OFFLINE_SKIN_MODEL", slim ? "slim" : "classic", 1);
+    }
+    if (NCLRActiveTexture(appearance, @"capes") && capePath && [files fileExistsAtPath:capePath]) {
+        setenv("HORIZON_OFFLINE_CAPE", capePath.UTF8String, 1);
     }
     NSInteger screenLimit = self.view.window.screen.maximumFramesPerSecond;
     BOOL highRefresh = screenLimit >= 120 && !NSProcessInfo.processInfo.isLowPowerModeEnabled;
@@ -2896,18 +2866,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
                             sensitivity:keymap.gyroSensitivity
                                 invertX:keymap.gyroInvertX
                                 invertY:keymap.gyroInvertY];
-    }
-    // The engine reports load failures on stderr; on a phone that goes to the
-    // system log, which the person cannot read. Keep a copy beside the game
-    // files so a failing world can be diagnosed from the device.
-    NSString *engineLog = [NCLRDocuments() stringByAppendingPathComponent:@"engine.log"];
-    int logHandle = open(engineLog.fileSystemRepresentation, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (logHandle >= 0) {
-        dup2(logHandle, STDOUT_FILENO);
-        dup2(logHandle, STDERR_FILENO);
-        close(logHandle);
-        fprintf(stderr, "NCLR engine start %s\n", NSDate.date.description.UTF8String);
-        fflush(stderr);
     }
     [[NCLRHardwareInput shared] start];
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
@@ -3226,6 +3184,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @property (nonatomic, copy) NSString *emptyText;
 @property (nonatomic, copy) NSString *noteText;
 @property (nonatomic, copy) NSArray<NSString *> *extensions;
+/// The shader packs page: its built-in pack gets a switch and the launcher's presets.
+@property (nonatomic, assign) BOOL shaderMode;
 @end
 
 @implementation NCLRPackController
@@ -3251,6 +3211,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [self.stack addArrangedSubview:[self headerWithTitle:self.pageTitle ?: @"文件"
                                                 subtitle:self.pageSubtitle ?: @"导入本地文件"
                                              actionTitle:@"导入" action:@selector(importTapped)]];
+    if (self.shaderMode) {
+        [self addShaderCard];
+    }
     NSArray<NSString *> *files = [[NSFileManager defaultManager]
         contentsOfDirectoryAtPath:self.directoryPath error:nil];
     NSMutableArray<NSString *> *shown = [NSMutableArray array];
@@ -3314,6 +3277,94 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [self.stack addArrangedSubview:note];
 }
 
+- (void)addShaderCard {
+    NSDictionary<NSString *, NSString *> *manifest =
+        NCLRShaderManifest([NCLRShaderPacksPath() stringByAppendingPathComponent:@"horizon_lite"]);
+    if (manifest == nil) {
+        return;
+    }
+    BOOL on = [NCLRPickedShaderId() isEqualToString:@"horizon_lite"];
+    UIView *card = [self card];
+    UIStackView *inside = [[UIStackView alloc] init];
+    inside.axis = UILayoutConstraintAxisVertical;
+    inside.spacing = 10.0;
+    inside.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:inside];
+    [NSLayoutConstraint activateConstraints:@[
+        [inside.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+        [inside.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+        [inside.topAnchor constraintEqualToAnchor:card.topAnchor constant:14.0],
+        [inside.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-14.0],
+    ]];
+
+    UIView *row = [[UIView alloc] init];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    UILabel *name = [self label:[NSString stringWithFormat:@"%@ %@", manifest[@"name"], manifest[@"version"]]
+                            size:15.0 weight:UIFontWeightSemibold color:NCLRColor(0.96, 0.96, 0.96, 1.0)];
+    UILabel *detail = [self label:(on ? @"已启用，进游戏就是这套光影"
+                                     : @"未启用，点右边开启，进游戏生效")
+                             size:11.0 weight:UIFontWeightRegular color:NCLRColor(0.62, 0.62, 0.62, 1.0)];
+    UIButton *toggle = [self button:(on ? @"关闭" : @"启用")
+                             action:@selector(toggleShaderTapped) primary:!on];
+    [row addSubview:name];
+    [row addSubview:detail];
+    [row addSubview:toggle];
+    [NSLayoutConstraint activateConstraints:@[
+        [name.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+        [name.topAnchor constraintEqualToAnchor:row.topAnchor],
+        [name.trailingAnchor constraintLessThanOrEqualToAnchor:toggle.leadingAnchor constant:-12.0],
+        [detail.leadingAnchor constraintEqualToAnchor:name.leadingAnchor],
+        [detail.topAnchor constraintEqualToAnchor:name.bottomAnchor constant:3.0],
+        [detail.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+        [detail.trailingAnchor constraintLessThanOrEqualToAnchor:toggle.leadingAnchor constant:-12.0],
+        [toggle.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [toggle.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [toggle.widthAnchor constraintGreaterThanOrEqualToConstant:88.0],
+    ]];
+    [inside addArrangedSubview:row];
+
+    [inside addArrangedSubview:[self label:@"画质预设" size:10.0 weight:UIFontWeightBold
+                                     color:NCLRColor(0.50, 0.50, 0.50, 1.0)]];
+    UIStackView *presets = [[UIStackView alloc] init];
+    presets.axis = UILayoutConstraintAxisHorizontal;
+    presets.spacing = 8.0;
+    presets.distribution = UIStackViewDistributionFillEqually;
+    NSArray<NSString *> *names = @[ @"流畅", @"均衡", @"精致" ];
+    NSNumber *savedPreset = [[NSUserDefaults standardUserDefaults] objectForKey:@"NCLRShaderPreset"];
+    NSInteger chosen = savedPreset == nil ? 1 : savedPreset.integerValue;
+    if (chosen < 0 || chosen > 2) {
+        chosen = 1;
+    }
+    for (NSInteger i = 0; i < (NSInteger)names.count; i++) {
+        UIButton *preset = [self button:names[i] action:@selector(presetTapped:) primary:(i == chosen)];
+        preset.tag = i;
+        [presets addArrangedSubview:preset];
+    }
+    [inside addArrangedSubview:presets];
+    [inside addArrangedSubview:[self label:@"流畅：手机优先，泛光更弱；均衡：默认；精致：光更强、更亮。\n细项在游戏内改：暂停 → 选项 → 视频设置 → 光影 → 光影包 → 轻光影 Lite → 光影选项。"
+                                     size:10.0 weight:UIFontWeightRegular
+                                    color:NCLRColor(0.50, 0.50, 0.50, 1.0)]];
+    [self.stack addArrangedSubview:card];
+}
+
+- (void)toggleShaderTapped {
+    if ([NCLRPickedShaderId() isEqualToString:@"horizon_lite"]) {
+        NCLRSetGraphicsValue(@"pickedShaderPack", @"");
+    } else {
+        NSInteger preset = [[NSUserDefaults standardUserDefaults] integerForKey:@"NCLRShaderPreset"];
+        NCLRApplyShaderPreset(preset < 0 || preset > 2 ? 1 : preset);
+        NCLRSetGraphicsValue(@"pickedShaderPack", @"horizon:horizon_lite");
+    }
+    if (self.onDataChanged) self.onDataChanged();
+}
+
+- (void)presetTapped:(UIButton *)sender {
+    NSInteger preset = sender.tag;
+    [[NSUserDefaults standardUserDefaults] setInteger:preset forKey:@"NCLRShaderPreset"];
+    NCLRApplyShaderPreset(preset);
+    if (self.onDataChanged) self.onDataChanged();
+}
+
 - (void)importTapped {
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
         initWithDocumentTypes:@[@"public.data"] inMode:UIDocumentPickerModeImport];
@@ -3374,15 +3425,15 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
                             color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
     avatar.textAlignment = NSTextAlignmentCenter;
     avatar.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06];
-    avatar.layer.cornerRadius = 0.0;
-    avatar.layer.masksToBounds = NO;
+    avatar.layer.cornerRadius = 23.0;
+    avatar.layer.masksToBounds = YES;
     avatar.translatesAutoresizingMaskIntoConstraints = NO;
     UIImageView *avatarImage = [[UIImageView alloc] init];
     avatarImage.translatesAutoresizingMaskIntoConstraints = NO;
-    avatarImage.contentMode = UIViewContentModeScaleAspectFit;
-    avatarImage.layer.cornerRadius = 0.0;
-    avatarImage.layer.masksToBounds = NO;
-    avatarImage.hidden = NO;
+    avatarImage.contentMode = UIViewContentModeScaleAspectFill;
+    avatarImage.layer.cornerRadius = 23.0;
+    avatarImage.layer.masksToBounds = YES;
+    avatarImage.hidden = YES;
     [account addSubview:avatarImage];
     NCLRLoadRemoteAvatar(auth.avatarURL, avatarImage, avatar);
     NSString *nameText = premium ? (auth.name ?: @"正版用户") : @"未登录";
@@ -3528,8 +3579,10 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
             [key setTitle:name forState:UIControlStateNormal];
             [key setTitleColor:NCLRColor(0.95, 0.95, 0.95, 1.0) forState:UIControlStateNormal];
             key.titleLabel.font = [UIFont monospacedSystemFontOfSize:13.0 weight:UIFontWeightSemibold];
-            key.backgroundColor = NCLRRaisedSurface();
+            key.backgroundColor = NCLRColor(0.12, 0.12, 0.12, 1.0);
             key.layer.cornerRadius = 8.0;
+            key.layer.borderWidth = 1.0;
+            key.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.16].CGColor;
             [key.heightAnchor constraintEqualToConstant:44.0].active = YES;
             [key addTarget:self action:@selector(pick:) forControlEvents:UIControlEventTouchUpInside];
             [line addArrangedSubview:key];
@@ -3609,7 +3662,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @property (nonatomic, strong) UISlider *keySizeSlider;
 @property (nonatomic, strong) UISlider *keyWidthSlider;
 @property (nonatomic, strong) UISegmentedControl *triggerControl;
-@property (nonatomic, strong) UISwitch *swipeThroughSwitch;
 @property (nonatomic, strong) UIButton *deleteKeyButton;
 @property (nonatomic, strong) UISegmentedControl *layoutScreenControl;
 @property (nonatomic, strong) UISlider *keyXSlider;
@@ -3632,12 +3684,11 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 
     UIView *theme = [self card];
     UILabel *themeTitle = [self eyebrow:@"外观"];
-    UILabel *themeText = [self label:@"选择启动器的跟随系统、深色或浅色配色，设置会保存。"
+    UILabel *themeText = [self label:@"切换启动器的黑夜 / 白天配色，设置会保存。"
                                 size:12.0 weight:UIFontWeightRegular
                                color:NCLRColor(0.70, 0.70, 0.70, 1.0)];
-    UISegmentedControl *themeControl = [[UISegmentedControl alloc]
-        initWithItems:@[@"跟随系统", @"深色", @"浅色"]];
-    themeControl.selectedSegmentIndex = NCLRThemeModeValue;
+    UISegmentedControl *themeControl = [[UISegmentedControl alloc] initWithItems:@[@"黑夜", @"白天"]];
+    themeControl.selectedSegmentIndex = NCLRDarkMode ? 0 : 1;
     [themeControl addTarget:self action:@selector(themeChanged:) forControlEvents:UIControlEventValueChanged];
     UIStackView *themeStack = [[UIStackView alloc] initWithArrangedSubviews:@[themeTitle, themeText, themeControl]];
     themeStack.axis = UILayoutConstraintAxisVertical;
@@ -3651,46 +3702,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [themeStack.bottomAnchor constraintEqualToAnchor:theme.bottomAnchor constant:-14.0],
     ]];
     [self.stack addArrangedSubview:theme];
-
-    UIView *motion = [self card];
-    UILabel *motionTitle = [self eyebrow:@"界面动效"];
-    UILabel *motionText = [self label:@"开启后，切换页面时使用动态高斯模糊过渡；关闭后保留轻量滑动动画，以降低图形渲染开销。"
-                                 size:12.0 weight:UIFontWeightRegular
-                                color:NCLRColor(0.70, 0.70, 0.70, 1.0)];
-    UISwitch *motionSwitch = [[UISwitch alloc] init];
-    motionSwitch.on = NCLRPageTransitionBlurEnabled();
-    motionSwitch.onTintColor = NCLRAccent();
-    motionSwitch.accessibilityLabel = @"页面切换模糊效果";
-    [motionSwitch addTarget:self action:@selector(pageBlurChanged:)
-            forControlEvents:UIControlEventValueChanged];
-    UIStackView *motionRow = [[UIStackView alloc] initWithArrangedSubviews:@[motionTitle, motionText]];
-    motionRow.axis = UILayoutConstraintAxisVertical;
-    motionRow.spacing = 6.0;
-    motionRow.translatesAutoresizingMaskIntoConstraints = NO;
-    UIView *motionContent = [[UIView alloc] init];
-    motionContent.translatesAutoresizingMaskIntoConstraints = NO;
-    [motionContent addSubview:motionRow];
-    [motionContent addSubview:motionSwitch];
-    motionSwitch.translatesAutoresizingMaskIntoConstraints = NO;
-    [NSLayoutConstraint activateConstraints:@[
-        [motionRow.leadingAnchor constraintEqualToAnchor:motionContent.leadingAnchor],
-        [motionRow.trailingAnchor constraintEqualToAnchor:motionSwitch.leadingAnchor constant:-14.0],
-        [motionRow.topAnchor constraintEqualToAnchor:motionContent.topAnchor],
-        [motionRow.bottomAnchor constraintEqualToAnchor:motionContent.bottomAnchor],
-        [motionSwitch.trailingAnchor constraintEqualToAnchor:motionContent.trailingAnchor],
-        [motionSwitch.centerYAnchor constraintEqualToAnchor:motionContent.centerYAnchor],
-    ]];
-    UIStackView *motionStack = [[UIStackView alloc] initWithArrangedSubviews:@[motionContent]];
-    motionStack.axis = UILayoutConstraintAxisVertical;
-    motionStack.translatesAutoresizingMaskIntoConstraints = NO;
-    [motion addSubview:motionStack];
-    [NSLayoutConstraint activateConstraints:@[
-        [motionStack.leadingAnchor constraintEqualToAnchor:motion.leadingAnchor constant:16.0],
-        [motionStack.trailingAnchor constraintEqualToAnchor:motion.trailingAnchor constant:-16.0],
-        [motionStack.topAnchor constraintEqualToAnchor:motion.topAnchor constant:14.0],
-        [motionStack.bottomAnchor constraintEqualToAnchor:motion.bottomAnchor constant:-14.0],
-    ]];
-    [self.stack addArrangedSubview:motion];
 
     UIView *mode = [self card];
     UILabel *modeTitle = [self eyebrow:@"启动器架构"];
@@ -3754,25 +3765,14 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [self.stack addArrangedSubview:keymap];
 
     UIButton *clear = [self button:@"清除本地启动器数据" action:@selector(clearData) primary:NO];
-    clear.backgroundColor = [UIColor colorWithRed:0.75 green:0.12 blue:0.12 alpha:0.10];
-    [clear setTitleColor:[UIColor colorWithRed:0.75 green:0.12 blue:0.12 alpha:1.0]
-                forState:UIControlStateNormal];
+    clear.layer.borderColor = NCLRColor(0.95, 0.35, 0.35, 0.5).CGColor;
     [self.stack addArrangedSubview:clear];
 }
 
-- (void)pageBlurChanged:(UISwitch *)sender {
-    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn
-                                               forKey:kNCLRPageTransitionBlurKey];
-    [[NSNotificationCenter defaultCenter]
-        postNotificationName:NCLRPageTransitionBlurPreferenceChangedNotification
-                      object:nil];
-}
-
 - (void)themeChanged:(UISegmentedControl *)control {
+    NCLRThemeSet(control.selectedSegmentIndex == 0);
     UIWindow *window = self.view.window;
-    NCLRThemeSet((NCLRThemeMode)control.selectedSegmentIndex, window.traitCollection);
-    window.overrideUserInterfaceStyle = NCLRThemeOverrideStyle();
-    NCLRThemeResolveFromTraitCollection(window.traitCollection);
+    window.overrideUserInterfaceStyle = NCLRDarkMode ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
     Class rootClass = NSClassFromString(@"NCLRRootController");
     if (rootClass != Nil) {
         NSInteger page = [[window.rootViewController valueForKey:@"page"] integerValue];
@@ -4051,8 +4051,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.canvasStatus.lineBreakMode = NSLineBreakByTruncatingTail;
     self.undoTool = [self canvasTool:@"arrow.uturn.backward" label:@"撤销" action:@selector(undoTapped)];
     self.redoTool = [self canvasTool:@"arrow.uturn.forward" label:@"重做" action:@selector(redoTapped)];
-    UIButton *keyboardTool = [self canvasTool:@"keyboard" label:@"编辑系统键盘按钮位置"
-                                       action:@selector(editKeyboardOverlay)];
     self.gridTool = [self canvasTool:@"grid" label:@"显示或隐藏网格" action:@selector(toggleGrid)];
     self.canvasClose = [self canvasTool:@"arrow.up.left.and.arrow.down.right" label:@"全屏编辑" action:@selector(toggleCanvas)];
     UIButton *more = [self canvasTool:@"ellipsis" label:@"更多布局操作" action:NULL];
@@ -4069,8 +4067,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     ]];
     more.showsMenuAsPrimaryAction = YES;
     UIStackView *toolbar = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.canvasStatus, self.undoTool, self.redoTool, keyboardTool,
-          self.gridTool, self.canvasClose, more]];
+        @[self.canvasStatus, self.undoTool, self.redoTool, self.gridTool, self.canvasClose, more]];
     toolbar.alignment = UIStackViewAlignmentCenter;
     toolbar.spacing = 2;
     toolbar.translatesAutoresizingMaskIntoConstraints = NO;
@@ -4082,8 +4079,10 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     keyCanvas.layoutKeys = ^{ [weakLayout layoutPreviewKeys]; };
     self.preview = keyCanvas;
     self.preview.translatesAutoresizingMaskIntoConstraints = NO;
-    self.preview.backgroundColor = NCLRSunkenSurface();
+    self.preview.backgroundColor = NCLRCanvas();
     self.preview.layer.cornerRadius = 12.0;
+    self.preview.layer.borderWidth = 1.0;
+    self.preview.layer.borderColor = NCLRBorder().CGColor;
     self.preview.clipsToBounds = YES;
     self.layoutScreenControl = [[UISegmentedControl alloc] initWithItems:@[@"游戏内", @"背包", @"暂停"]];
     self.layoutScreenControl.translatesAutoresizingMaskIntoConstraints = NO;
@@ -4121,7 +4120,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 
     self.selection = [[UIView alloc] initWithFrame:CGRectZero];
     self.selection.userInteractionEnabled = NO;
-    self.selection.backgroundColor = [NCLRAccent() colorWithAlphaComponent:0.16];
+    self.selection.backgroundColor = UIColor.clearColor;
+    self.selection.layer.borderWidth = 2.0;
+    self.selection.layer.borderColor = NCLRAccent().CGColor;
     self.selection.layer.cornerRadius = 10.0;
     self.selection.hidden = YES;
     [self.preview addSubview:self.selection];
@@ -4129,6 +4130,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.resizeHandle = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 24, 24)];
     self.resizeHandle.backgroundColor = NCLRAccent();
     self.resizeHandle.layer.cornerRadius = 12.0;
+    self.resizeHandle.layer.borderWidth = 2.0;
+    self.resizeHandle.layer.borderColor = NCLRColor(0.05, 0.05, 0.05, 0.9).CGColor;
     self.resizeHandle.hidden = YES;
     self.resizeHandle.userInteractionEnabled = YES;
     [self.resizeHandle addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self
@@ -4203,19 +4206,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.triggerControl.enabled = NO;
     self.triggerControl.selectedSegmentIndex = 0;
     [self.triggerControl addTarget:self action:@selector(triggerChanged:) forControlEvents:UIControlEventValueChanged];
-    UILabel *swipeThroughLabel = [self label:@"穿透滑屏" size:12.0 weight:UIFontWeightSemibold
-                                         color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
-    self.swipeThroughSwitch = [[UISwitch alloc] init];
-    self.swipeThroughSwitch.enabled = NO;
-    self.swipeThroughSwitch.onTintColor = NCLRAccent();
-    self.swipeThroughSwitch.accessibilityLabel = @"允许拖动穿过此按键转动视角";
-    [self.swipeThroughSwitch addTarget:self action:@selector(swipeThroughChanged:)
-                      forControlEvents:UIControlEventValueChanged];
-    UIStackView *swipeThroughRow = [[UIStackView alloc] initWithArrangedSubviews:
-        @[swipeThroughLabel, [UIView new], self.swipeThroughSwitch]];
-    swipeThroughRow.axis = UILayoutConstraintAxisHorizontal;
-    swipeThroughRow.alignment = UIStackViewAlignmentCenter;
-    swipeThroughRow.spacing = 8;
     UILabel *inspectorTitle = [self eyebrow:@"选中按键"];
     inspectorTitle.textColor = NCLRAccent();
     self.keyEditTitle.numberOfLines = 1;
@@ -4247,8 +4237,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         row.spacing = 10;
         [inspector addObject:row];
     }
-    [inspector addObjectsFromArray:@[keyWidthRow, keySizeRow, keyVisibleRow,
-                                      self.triggerControl, swipeThroughRow, self.deleteKeyButton]];
+    [inspector addObjectsFromArray:@[keyWidthRow, keySizeRow, keyVisibleRow, self.triggerControl, self.deleteKeyButton]];
     UIStackView *keyStack = [[UIStackView alloc] initWithArrangedSubviews:inspector];
     keyStack.axis = UILayoutConstraintAxisVertical;
     keyStack.spacing = 9.0;
@@ -4266,9 +4255,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.editorWorkspace.axis = UILayoutConstraintAxisVertical;
     self.editorWorkspace.spacing = 12;
     [self.stack addArrangedSubview:self.editorWorkspace];
-    UIButton *keyboardLayout = [self button:@"编辑系统键盘按钮位置"
-                                     action:@selector(editKeyboardOverlay) primary:NO];
-    [self.stack addArrangedSubview:keyboardLayout];
     [self.stack addArrangedSubview:[self gyroCard]];
     [self.stack addArrangedSubview:[self mouseCard]];
     [self.stack addArrangedSubview:menu];
@@ -4298,7 +4284,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         BOOL move = [key isEqualToString:@"move"];
         if (move) {
             [button setTitle:nil forState:UIControlStateNormal];
-            button.backgroundColor = NCLRSurface();
+            button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.08];
+            button.layer.borderWidth = 2.0;
+            button.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.35].CGColor;
             UIView *knob = [[UIView alloc] initWithFrame:CGRectZero];
             knob.tag = 991;
             knob.userInteractionEnabled = NO;
@@ -4661,6 +4649,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         button.titleLabel.minimumScaleFactor = 0.65;
         button.accessibilityValue = hidden ? @"游戏中隐藏" : @"游戏中显示";
         button.layer.cornerRadius = move ? size / 2.0 : 8.0;
+        button.layer.borderWidth = selected || move ? 2.0 : hidden ? 1.0 : 0.0;
+        button.layer.borderColor = (selected ? NCLRAccent() : NCLRBorder()).CGColor;
         UIView *knob = [button viewWithTag:991];
         UILabel *caption = (UILabel *)[button viewWithTag:992];
         if (move) {
@@ -4682,11 +4672,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.triggerControl.enabled = key.length > 0 && !NCLRIsMenuKey(key) && !menuCanvasKey && ![key isEqualToString:@"move"];
     self.triggerControl.selectedSegmentIndex = key.length > 0 &&
         [NCLRKeymap.shared.triggerModes[key] isEqualToString:@"toggle"] ? 1 : 0;
-    self.swipeThroughSwitch.enabled = key.length > 0 && !NCLRIsMenuKey(key) &&
-        !menuCanvasKey && ![key isEqualToString:@"move"] &&
-        ![key isEqualToString:@"keyboard"];
-    self.swipeThroughSwitch.on = key.length > 0 &&
-        [NCLRKeymap.shared.swipeThroughKeys containsObject:key];
     self.keySizeSlider.enabled = key.length > 0;
     self.keyVisibleSwitch.enabled = key.length > 0 && !NCLRIsMenuKey(key) && !menuCanvasKey;
     NSDictionary *position = key.length ? NCLRKeymap.shared.positions[key] : nil;
@@ -4712,8 +4697,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     return @{@"positions": [keymap.positions copy], @"hidden": [keymap.hiddenKeys copy],
              @"bindings": [keymap.bindings copy], @"deletedKeys": [keymap.deletedKeys copy],
              @"menuKeys": [keymap.menuKeys mutableCopy],
-             @"triggerModes": [keymap.triggerModes copy] ?: @{},
-             @"swipeThrough": [keymap.swipeThroughKeys copy] ?: [NSSet set]};
+             @"triggerModes": [keymap.triggerModes copy] ?: @{}};
 }
 
 - (void)deleteSelectedKey {
@@ -4730,7 +4714,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     } else {
         [NCLRKeymap.shared.deletedKeys addObject:key];
     }
-    [NCLRKeymap.shared.swipeThroughKeys removeObject:key];
     [self pushUndo:before];
     [NCLRKeymap.shared save];
     [self selectKey:nil];
@@ -4744,7 +4727,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     keys.deletedKeys = [snapshot[@"deletedKeys"] mutableCopy];
     keys.menuKeys = [snapshot[@"menuKeys"] mutableCopy] ?: [NSMutableArray array];
     keys.triggerModes = [snapshot[@"triggerModes"] mutableCopy];
-    keys.swipeThroughKeys = [snapshot[@"swipeThrough"] mutableCopy] ?: [NSMutableSet set];
     [keys save];
     [self refreshPreviewButtons];
     [self selectKey:self.selectedKey];
@@ -4756,17 +4738,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NSDictionary *before = [self keyLayoutSnapshot];
     if (!keymap.triggerModes) keymap.triggerModes = [NSMutableDictionary dictionary];
     keymap.triggerModes[self.selectedKey] = sender.selectedSegmentIndex == 1 ? @"toggle" : @"tap";
-    [self pushUndo:before];
-    [keymap save];
-}
-
-- (void)swipeThroughChanged:(UISwitch *)sender {
-    if (!sender.enabled || self.selectedKey.length == 0) return;
-    NCLRKeymap *keymap = NCLRKeymap.shared;
-    NSDictionary *before = [self keyLayoutSnapshot];
-    if (!keymap.swipeThroughKeys) keymap.swipeThroughKeys = [NSMutableSet set];
-    if (sender.on) [keymap.swipeThroughKeys addObject:self.selectedKey];
-    else [keymap.swipeThroughKeys removeObject:self.selectedKey];
     [self pushUndo:before];
     [keymap save];
 }
@@ -5095,27 +5066,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 - (void)dynamicChanged:(UISwitch *)sender {
 }
 
-- (void)editKeyboardOverlay {
-    NCLRKeymap *keys = NCLRKeymap.shared;
-    [keys.hiddenKeys removeObject:@"keyboard"];
-    [keys.deletedKeys removeObject:@"keyboard"];
-    if (keys.bindings[@"keyboard"] == nil) keys.bindings[@"keyboard"] = @"键盘";
-    if (keys.positions[@"keyboard"] == nil) {
-        keys.positions[@"keyboard"] = @{ @"x" : @0.66, @"y" : @0.12,
-                                          @"size" : @0.075, @"width" : @0.075 };
-    }
-    [keys save];
-    [self refreshPreviewButtons];
-    [self selectKey:@"keyboard"];
-    [self.preview setNeedsLayout];
-    [self.view layoutIfNeeded];
-    UIButton *button = self.previewButtons[@"keyboard"];
-    if (button) {
-        CGRect target = [button convertRect:button.bounds toView:self.scroll];
-        [self.scroll scrollRectToVisible:CGRectInset(target, -20.0, -20.0) animated:YES];
-    }
-}
-
 - (void)addKeyTapped {
     [NCLRKeyPickerController presentFrom:self title:@"添加触控键" onPick:^(NSString *picked) {
         NSString *keyId = [picked isEqualToString:@"键盘"] ? @"keyboard" : picked;
@@ -5193,16 +5143,20 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     if (self.canvasFullscreen) {
         self.previewCard.backgroundColor = NCLRSurface();
         self.previewCard.layer.cornerRadius = 0.0;
-        self.preview.backgroundColor = NCLRSunkenSurface();
+        self.previewCard.layer.borderWidth = 0.0;
+        self.preview.backgroundColor = NCLRCanvas();
         self.preview.layer.cornerRadius = 0.0;
+        self.preview.layer.borderWidth = 0.0;
         self.stackLeading.constant = 0.0;
         self.stackTrailing.constant = 0.0;
         self.previewHeight.constant = MAX(150.0, self.scroll.bounds.size.height - 110.0);
     } else {
         self.previewCard.backgroundColor = NCLRSurface();
         self.previewCard.layer.cornerRadius = 16.0;
-        self.preview.backgroundColor = NCLRSunkenSurface();
+        self.previewCard.layer.borderWidth = 1.0;
+        self.preview.backgroundColor = NCLRCanvas();
         self.preview.layer.cornerRadius = 12.0;
+        self.preview.layer.borderWidth = 1.0;
         self.stackLeading.constant = 24.0;
         self.stackTrailing.constant = -24.0;
         self.previewHeight.constant = MAX(170.0, MIN(410.0, self.view.bounds.size.height * 0.58));
@@ -5616,191 +5570,6 @@ static NSString *NCLRSHA1Hex(NSData *data) {
 
 @end
 
-static CGFloat NCLRSmoothstep(CGFloat x) {
-    x = MAX(0.0, MIN(1.0, x));
-    return x * x * (3.0 - 2.0 * x);
-}
-
-static CIContext *NCLRTransitionCIContext(void) {
-    static CIContext *context;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        context = [CIContext contextWithOptions:@{
-            kCIContextUseSoftwareRenderer : @NO,
-        }];
-    });
-    return context;
-}
-
-@interface NCLRPageTransitionCoordinator : NSObject
-@property (nonatomic, weak) UIView *containerView;
-@property (nonatomic, strong) UIImageView *snapshotView;
-@property (nonatomic, strong) UIImage *sourceImage;
-@property (nonatomic, strong) CIImage *sourceCIImage;
-@property (nonatomic, strong) CIContext *context;
-@property (nonatomic, strong) CIFilter *clampFilter;
-@property (nonatomic, strong) CIFilter *blurFilter;
-@property (nonatomic, strong) CADisplayLink *displayLink;
-@property (nonatomic, assign) CFTimeInterval startedAt;
-@property (nonatomic, assign) NSInteger direction;
-@property (nonatomic, assign) BOOL active;
-- (instancetype)initWithContainerView:(UIView *)containerView;
-- (UIImage *)captureSnapshotFromView:(UIView *)rootView;
-- (BOOL)installSnapshot:(UIImage *)image;
-- (void)startBlur;
-- (void)cancel;
-- (void)updateSnapshotFrame;
-@end
-
-@implementation NCLRPageTransitionCoordinator
-
-- (instancetype)initWithContainerView:(UIView *)containerView {
-    self = [super init];
-    if (self) {
-        _containerView = containerView;
-        _context = NCLRTransitionCIContext();
-    }
-    return self;
-}
-
-- (UIImage *)captureSnapshotFromView:(UIView *)rootView {
-    UIView *container = self.containerView;
-    if (rootView == nil || container == nil || container.bounds.size.width <= 0.0 ||
-        container.bounds.size.height <= 0.0) {
-        return nil;
-    }
-    [rootView layoutIfNeeded];
-    CGRect rect = [container convertRect:container.bounds toView:rootView];
-    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
-    format.scale = 1.0;
-    format.opaque = YES;
-    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc]
-        initWithSize:container.bounds.size format:format];
-    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *rendererContext) {
-        CGContextRef context = rendererContext.CGContext;
-        CGContextSaveGState(context);
-        CGContextTranslateCTM(context, -CGRectGetMinX(rect), -CGRectGetMinY(rect));
-        [rootView drawViewHierarchyInRect:rootView.bounds afterScreenUpdates:NO];
-        CGContextRestoreGState(context);
-    }];
-}
-
-- (BOOL)installSnapshot:(UIImage *)image {
-    UIView *container = self.containerView;
-    if (container == nil || image.CGImage == nil || self.context == nil) {
-        return NO;
-    }
-    CIFilter *clamp = [CIFilter filterWithName:@"CIAffineClamp"];
-    CIFilter *blur = [CIFilter filterWithName:@"CIGaussianBlur"];
-    CIImage *source = [CIImage imageWithCGImage:image.CGImage];
-    if (clamp == nil || blur == nil || source == nil) {
-        return NO;
-    }
-
-    self.sourceImage = image;
-    self.sourceCIImage = source;
-    self.clampFilter = clamp;
-    self.blurFilter = blur;
-    self.snapshotView = [[UIImageView alloc] initWithImage:image];
-    self.snapshotView.userInteractionEnabled = NO;
-    self.snapshotView.contentMode = UIViewContentModeScaleToFill;
-    self.snapshotView.clipsToBounds = YES;
-    self.snapshotView.translatesAutoresizingMaskIntoConstraints = YES;
-    self.snapshotView.frame = container.bounds;
-    self.snapshotView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-                                          UIViewAutoresizingFlexibleHeight;
-    [container addSubview:self.snapshotView];
-    self.active = YES;
-    return YES;
-}
-
-- (void)startBlur {
-    if (!self.active || self.snapshotView == nil || self.sourceCIImage == nil) {
-        return;
-    }
-    self.startedAt = CACurrentMediaTime();
-    self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(displayLinkTick:)];
-    if (@available(iOS 10.0, *)) {
-        self.displayLink.preferredFramesPerSecond = 60;
-    }
-    [self.displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
-}
-
-- (void)displayLinkTick:(CADisplayLink *)displayLink {
-    if (!self.active || self.snapshotView == nil || self.containerView == nil) {
-        [self cancel];
-        return;
-    }
-    CGFloat progress = (CGFloat)((CACurrentMediaTime() - self.startedAt) / 0.270);
-    progress = MAX(0.0, MIN(1.0, progress));
-    CGFloat radius = 0.0;
-    if (progress <= 0.45) {
-        radius = 16.0 * NCLRSmoothstep(progress / 0.45);
-    } else {
-        radius = 16.0 * (1.0 - NCLRSmoothstep((progress - 0.45) / 0.55));
-    }
-    CGFloat alpha = progress <= 0.28
-        ? 1.0
-        : 1.0 - NCLRSmoothstep((progress - 0.28) / 0.72);
-    CGFloat drift = 22.0 * progress * (self.direction >= 0 ? -1.0 : 1.0);
-    CGFloat height = MAX(CGRectGetHeight(self.containerView.bounds), 1.0);
-    CGFloat verticalScale = 1.0 + (44.0 * progress / height);
-    CGAffineTransform scale = CGAffineTransformMakeScale(1.0, verticalScale);
-    self.snapshotView.transform = CGAffineTransformConcat(CGAffineTransformMakeTranslation(0.0, drift), scale);
-    self.snapshotView.alpha = alpha;
-
-    BOOL rendered = YES;
-    if (radius < 0.05) {
-        self.snapshotView.image = self.sourceImage;
-        self.snapshotView.layer.contents = nil;
-    } else {
-        [self.clampFilter setValue:self.sourceCIImage forKey:kCIInputImageKey];
-        [self.clampFilter setValue:[NSValue valueWithCGAffineTransform:CGAffineTransformIdentity]
-                            forKey:kCIInputTransformKey];
-        CIImage *clamped = self.clampFilter.outputImage;
-        [self.blurFilter setValue:clamped forKey:kCIInputImageKey];
-        [self.blurFilter setValue:@(radius) forKey:kCIInputRadiusKey];
-        CIImage *blurred = self.blurFilter.outputImage;
-        CGImageRef renderedImage = blurred == nil
-            ? NULL
-            : [self.context createCGImage:blurred fromRect:self.sourceCIImage.extent];
-        if (renderedImage == NULL) {
-            rendered = NO;
-        } else {
-            self.snapshotView.image = nil;
-            self.snapshotView.layer.contents = (__bridge id)renderedImage;
-            CGImageRelease(renderedImage);
-        }
-    }
-    if (!rendered || progress >= 1.0) {
-        [self cancel];
-    }
-}
-
-- (void)updateSnapshotFrame {
-    if (self.snapshotView != nil && self.containerView != nil) {
-        self.snapshotView.frame = self.containerView.bounds;
-    }
-}
-
-- (void)cancel {
-    [self.displayLink invalidate];
-    self.displayLink = nil;
-    self.active = NO;
-    self.snapshotView.layer.contents = nil;
-    [self.snapshotView removeFromSuperview];
-    self.snapshotView = nil;
-    self.sourceImage = nil;
-    self.sourceCIImage = nil;
-    self.clampFilter = nil;
-    self.blurFilter = nil;
-}
-
-- (void)dealloc {
-    [self.displayLink invalidate];
-}
-@end
-
 @interface NCLRRootController : UIViewController <UITableViewDataSource, UITableViewDelegate>
 @property (nonatomic, strong) UIView *sidebar;
 @property (nonatomic, strong) UIView *content;
@@ -5821,25 +5590,27 @@ static CIContext *NCLRTransitionCIContext(void) {
 @property (nonatomic, strong) UITableView *navTable;
 @property (nonatomic, copy) NSArray<NSString *> *navNames;
 @property (nonatomic, copy) NSArray<NSString *> *navSymbols;
-@property (nonatomic, strong) UIView *selectionIndicator;
-@property (nonatomic, strong) NSArray<NSLayoutConstraint *> *selectionIndicatorConstraints;
-@property (nonatomic, strong) NCLRPageTransitionCoordinator *pageTransitionCoordinator;
-@property (nonatomic, strong) UIViewController *currentPageController;
-@property (nonatomic, strong) UIViewController *outgoingPageController;
-@property (nonatomic, assign) NSUInteger transitionGeneration;
-@property (nonatomic, assign) BOOL hasDisplayedPage;
-@property (nonatomic, assign) BOOL transitionInFlight;
 @end
 
 @implementation NCLRRootController
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = NCLRCanvas();
+    CAGradientLayer *gradient = [CAGradientLayer layer];
+    gradient.colors = @[
+        (__bridge id)NCLRCanvas().CGColor,
+        (__bridge id)NCLRSurface().CGColor,
+        (__bridge id)NCLRCanvas().CGColor,
+    ];
+    gradient.startPoint = CGPointMake(0.1, 0.0);
+    gradient.endPoint = CGPointMake(0.9, 1.0);
+    [self.view.layer insertSublayer:gradient atIndex:0];
 
     self.sidebar = [[UIView alloc] init];
     self.sidebar.translatesAutoresizingMaskIntoConstraints = NO;
-    self.sidebar.backgroundColor = NCLRCanvas();
-    self.sidebar.clipsToBounds = YES;
+    self.sidebar.backgroundColor = NCLRSurface();
+    self.sidebar.layer.borderWidth = 1.0;
+    self.sidebar.layer.borderColor = NCLRBorder().CGColor;
     [self.view addSubview:self.sidebar];
 
     self.content = [[UIView alloc] init];
@@ -5850,8 +5621,10 @@ static CIContext *NCLRTransitionCIContext(void) {
     // horizontal navigation bar instead of the 228 pt sidebar.
     self.compactBar = [[UIView alloc] init];
     self.compactBar.translatesAutoresizingMaskIntoConstraints = NO;
-    self.compactBar.backgroundColor = NCLRSurface();
+    self.compactBar.backgroundColor = NCLRColor(0.02, 0.02, 0.02, 0.45);
     NCLRAddBlur(self.compactBar, NCLRDarkMode);
+    self.compactBar.layer.borderWidth = 1.0;
+    self.compactBar.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.06].CGColor;
     [self.view addSubview:self.compactBar];
     UIStackView *compactNav = [[UIStackView alloc] init];
     compactNav.axis = UILayoutConstraintAxisHorizontal;
@@ -5867,6 +5640,8 @@ static CIContext *NCLRTransitionCIContext(void) {
         button.translatesAutoresizingMaskIntoConstraints = NO;
         button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.035];
         button.layer.cornerRadius = 10.0;
+        button.layer.borderWidth = 1.0;
+        button.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.05].CGColor;
         button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
         button.contentEdgeInsets = UIEdgeInsetsMake(0, 10, 0, 6);
         button.titleLabel.font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightSemibold];
@@ -5967,25 +5742,16 @@ static CIContext *NCLRTransitionCIContext(void) {
     navScroll.backgroundColor = UIColor.clearColor;
     navScroll.showsVerticalScrollIndicator = YES;
     navScroll.alwaysBounceVertical = NO;
-    navScroll.clipsToBounds = NO;
-    navScroll.layer.masksToBounds = NO;
+    navScroll.clipsToBounds = YES;
     navScroll.contentInset = UIEdgeInsetsMake(0, 0, 8, 0);
     [self.sidebar addSubview:navScroll];
-
-    self.selectionIndicator = [[UIView alloc] init];
-    self.selectionIndicator.translatesAutoresizingMaskIntoConstraints = NO;
-    self.selectionIndicator.userInteractionEnabled = NO;
-    self.selectionIndicator.backgroundColor = NCLRSidebarSelectionColor();
-    self.selectionIndicator.layer.cornerRadius = 11.0;
-    self.selectionIndicator.layer.masksToBounds = YES;
 
     UIStackView *nav = [[UIStackView alloc] init];
     self.navStack = nav;
     nav.axis = UILayoutConstraintAxisVertical;
-    nav.distribution = UIStackViewDistributionFill;
+    nav.distribution = UIStackViewDistributionFillEqually;
     nav.spacing = 2.0;
     nav.translatesAutoresizingMaskIntoConstraints = NO;
-    [nav addSubview:self.selectionIndicator];
     NSArray *names = @[@"主页", @"版本", @"模组", @"光影", @"资源包", @"设置"];
     NSArray *symbols = @[@"house.fill", @"square.stack.3d.up.fill", @"puzzlepiece.extension.fill", @"sun.max.fill", @"square.grid.2x2.fill", @"gearshape.fill"];
     NSMutableArray *buttons = [NSMutableArray array];
@@ -5998,7 +5764,8 @@ static CIContext *NCLRTransitionCIContext(void) {
         button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
         button.titleLabel.lineBreakMode = NSLineBreakByClipping;
         button.layer.cornerRadius = 11.0;
-        [button.heightAnchor constraintEqualToConstant:52.0].active = YES;
+        button.layer.borderWidth = 1.0;
+        button.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.045].CGColor;
         [button setImage:[UIImage systemImageNamed:symbols[i]] forState:UIControlStateNormal];
         button.imageView.contentMode = UIViewContentModeScaleAspectFit;
         button.imageEdgeInsets = UIEdgeInsetsMake(0, 0, 0, 8);
@@ -6011,14 +5778,6 @@ static CIContext *NCLRTransitionCIContext(void) {
     }
     self.navButtons = buttons;
     [navScroll addSubview:nav];
-    UIButton *initialButton = self.navButtons.firstObject;
-    self.selectionIndicatorConstraints = @[
-        [self.selectionIndicator.leadingAnchor constraintEqualToAnchor:initialButton.leadingAnchor],
-        [self.selectionIndicator.trailingAnchor constraintEqualToAnchor:initialButton.trailingAnchor],
-        [self.selectionIndicator.topAnchor constraintEqualToAnchor:initialButton.topAnchor],
-        [self.selectionIndicator.bottomAnchor constraintEqualToAnchor:initialButton.bottomAnchor],
-    ];
-    [NSLayoutConstraint activateConstraints:self.selectionIndicatorConstraints];
     navScroll.hidden = NO;
 
     self.navNames = names;
@@ -6045,8 +5804,8 @@ static CIContext *NCLRTransitionCIContext(void) {
     self.accountAvatarLabel = avatar;
     avatar.textAlignment = NSTextAlignmentCenter;
     avatar.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06];
-    avatar.layer.cornerRadius = 0.0;
-    avatar.layer.masksToBounds = NO;
+    avatar.layer.cornerRadius = 16.0;
+    avatar.layer.masksToBounds = YES;
     avatar.translatesAutoresizingMaskIntoConstraints = NO;
     self.accountLabel = [self label:@"未登录" size:11.0 weight:UIFontWeightSemibold
                               color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
@@ -6054,10 +5813,10 @@ static CIContext *NCLRTransitionCIContext(void) {
                                     color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
     UIImageView *avatarImage = [[UIImageView alloc] init];
     avatarImage.translatesAutoresizingMaskIntoConstraints = NO;
-    avatarImage.contentMode = UIViewContentModeScaleAspectFit;
-    avatarImage.layer.cornerRadius = 0.0;
-    avatarImage.layer.masksToBounds = NO;
-    avatarImage.hidden = NO;
+    avatarImage.contentMode = UIViewContentModeScaleAspectFill;
+    avatarImage.layer.cornerRadius = 16.0;
+    avatarImage.layer.masksToBounds = YES;
+    avatarImage.hidden = YES;
     self.accountAvatarImage = avatarImage;
     [account addSubview:avatar];
     [account addSubview:avatarImage];
@@ -6096,8 +5855,8 @@ static CIContext *NCLRTransitionCIContext(void) {
         [nav.leadingAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.leadingAnchor],
         [nav.trailingAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.trailingAnchor],
         [nav.topAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.topAnchor],
-        [nav.bottomAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.bottomAnchor],
         [nav.widthAnchor constraintEqualToAnchor:navScroll.frameLayoutGuide.widthAnchor],
+        [nav.heightAnchor constraintEqualToAnchor:navScroll.frameLayoutGuide.heightAnchor],
         [account.leadingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.leadingAnchor constant:12.0],
         [account.trailingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.trailingAnchor constant:-12.0],
         [account.bottomAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.bottomAnchor constant:-14.0],
@@ -6108,26 +5867,7 @@ static CIContext *NCLRTransitionCIContext(void) {
                                              selector:@selector(refreshAccount)
                                                  name:NCLRAvatarUpdatedNotification
                                                object:nil];
-    self.pageTransitionCoordinator = [[NCLRPageTransitionCoordinator alloc]
-        initWithContainerView:self.content];
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(cancelPageTransitionNotification:)
-                                                 name:UIApplicationDidEnterBackgroundNotification
-                                               object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(cancelPageTransitionNotification:)
-                                                 name:UIAccessibilityReduceMotionStatusDidChangeNotification
-                                               object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(pageBlurPreferenceChanged:)
-                                                 name:NCLRPageTransitionBlurPreferenceChangedNotification
-                                               object:nil];
     [self showPage:self.initialPage];
-}
-
-- (void)dealloc {
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
-    [self.pageTransitionCoordinator cancel];
 }
 
 - (UILabel *)label:(NSString *)text size:(CGFloat)size weight:(UIFontWeight)weight color:(UIColor *)color {
@@ -6162,40 +5902,19 @@ static CIContext *NCLRTransitionCIContext(void) {
 
 - (void)viewSafeAreaInsetsDidChange {
     [super viewSafeAreaInsetsDidChange];
-    if (self.transitionInFlight) {
-        [self cancelPageTransition];
-    }
     [self updateAdaptiveLayout];
 }
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     [self updateAdaptiveLayout];
-    [self.pageTransitionCoordinator updateSnapshotFrame];
-}
-
-- (void)viewWillTransitionToSize:(CGSize)size
-       withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
-    [self cancelPageTransition];
-    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
-}
-
-- (void)viewWillDisappear:(BOOL)animated {
-    [self cancelPageTransition];
-    [super viewWillDisappear:animated];
-}
-
-- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
-    [super traitCollectionDidChange:previousTraitCollection];
-    if (previousTraitCollection != nil &&
-        self.traitCollection.userInterfaceStyle != previousTraitCollection.userInterfaceStyle) {
-        [self cancelPageTransition];
-        if (NCLRThemeModeValue == NCLRThemeModeSystem && self.view.window.rootViewController == self) {
-            NCLRThemeResolveFromTraitCollection(self.traitCollection);
-            NSInteger page = self.page;
-            NCLRRootController *root = [[NCLRRootController alloc] init];
-            root.initialPage = page;
-            self.view.window.rootViewController = root;
+    if (self.navScroll != nil) {
+        CGFloat navHeight = self.navScroll.bounds.size.height;
+        self.navScroll.contentSize = CGSizeMake(MAX(1.0, self.navScroll.bounds.size.width), navHeight);
+    }
+    for (CALayer *layer in self.view.layer.sublayers) {
+        if ([layer isKindOfClass:[CAGradientLayer class]]) {
+            layer.frame = self.view.bounds;
         }
     }
 }
@@ -6238,17 +5957,7 @@ static CIContext *NCLRTransitionCIContext(void) {
 }
 
 - (void)showPage:(NSInteger)page {
-    if (self.hasDisplayedPage && page == self.page) {
-        return;
-    }
-    [self transitionToPage:page forceReload:NO];
-}
-
-- (void)reloadCurrentPage {
-    [self transitionToPage:self.page forceReload:YES];
-}
-
-- (void)updateNavigationSelectionForPage:(NSInteger)page animated:(BOOL)animated {
+    self.page = page;
     if (page >= 0 && page < (NSInteger)self.navNames.count) {
         [self.navTable selectRowAtIndexPath:[NSIndexPath indexPathForRow:page inSection:0]
                                   animated:NO scrollPosition:UITableViewScrollPositionNone];
@@ -6256,81 +5965,33 @@ static CIContext *NCLRTransitionCIContext(void) {
     for (NSInteger i = 0; i < self.navButtons.count; i++) {
         UIButton *button = self.navButtons[i];
         BOOL selected = i == page;
-        button.backgroundColor = selected ? UIColor.clearColor
+        button.backgroundColor = selected ? NCLRColor(0.96, 0.96, 0.96, 1.0)
                                           : [UIColor colorWithWhite:1.0 alpha:0.035];
-        [button setTitleColor:(selected ? NCLRSidebarSelectedForeground()
-                                        : NCLRSidebarUnselectedForeground())
+        [button setTitleColor:(selected ? NCLRColor(0.06, 0.06, 0.06, 1.0)
+                                        : NCLRColor(0.92, 0.92, 0.92, 1.0))
                      forState:UIControlStateNormal];
-        button.tintColor = selected ? NCLRSidebarSelectedForeground()
-                                    : NCLRSidebarUnselectedForeground();
+        button.tintColor = selected ? NCLRColor(0.06, 0.06, 0.06, 1.0)
+                                    : NCLRColor(0.92, 0.92, 0.92, 1.0);
+        button.layer.borderColor = selected ? UIColor.clearColor.CGColor
+                                            : [UIColor colorWithWhite:1.0 alpha:0.045].CGColor;
         button.alpha = selected ? 1.0 : 0.82;
-    }
-    if (page >= 0 && page < (NSInteger)self.navButtons.count) {
-        [NSLayoutConstraint deactivateConstraints:self.selectionIndicatorConstraints];
-        UIButton *target = self.navButtons[page];
-        self.selectionIndicatorConstraints = @[
-            [self.selectionIndicator.leadingAnchor constraintEqualToAnchor:target.leadingAnchor],
-            [self.selectionIndicator.trailingAnchor constraintEqualToAnchor:target.trailingAnchor],
-            [self.selectionIndicator.topAnchor constraintEqualToAnchor:target.topAnchor],
-            [self.selectionIndicator.bottomAnchor constraintEqualToAnchor:target.bottomAnchor],
-        ];
-        [NSLayoutConstraint activateConstraints:self.selectionIndicatorConstraints];
-        void (^layout)(void) = ^{ [self.view layoutIfNeeded]; };
-        if (animated) {
-            [UIView animateWithDuration:0.460
-                                  delay:0.0
-                 usingSpringWithDamping:0.62
-                  initialSpringVelocity:0.5
-                                options:UIViewAnimationOptionBeginFromCurrentState |
-                                        UIViewAnimationOptionAllowUserInteraction |
-                                        UIViewAnimationOptionCurveEaseInOut
-                            animations:layout
-                            completion:nil];
-        } else {
-            [UIView performWithoutAnimation:layout];
-        }
     }
     for (NSInteger i = 0; i < self.compactButtons.count; i++) {
         UIButton *button = self.compactButtons[i];
         BOOL selected = i == page;
-        button.backgroundColor = selected ? NCLRSidebarSelectionColor() : UIColor.clearColor;
-        button.tintColor = selected ? NCLRSidebarSelectedForeground()
-                                    : NCLRSidebarUnselectedForeground();
+        button.backgroundColor = selected ? [UIColor colorWithWhite:1.0 alpha:0.10] : UIColor.clearColor;
+        button.tintColor = selected ? NCLRColor(0.98, 0.98, 0.98, 1.0)
+                                    : NCLRColor(0.85, 0.85, 0.85, 1.0);
+        button.layer.borderColor = selected ? [UIColor colorWithWhite:1.0 alpha:0.16].CGColor
+                                            : [UIColor colorWithWhite:1.0 alpha:0.05].CGColor;
         button.alpha = selected ? 1.0 : 0.72;
     }
-}
-
-- (void)detachController:(UIViewController *)controller {
-    if (controller == nil || controller.parentViewController != self) {
-        return;
+    if (self.childViewControllers.count > 0) {
+        UIViewController *old = self.childViewControllers.firstObject;
+        [old willMoveToParentViewController:nil];
+        [old.view removeFromSuperview];
+        [old removeFromParentViewController];
     }
-    [controller willMoveToParentViewController:nil];
-    [controller.view removeFromSuperview];
-    [controller removeFromParentViewController];
-}
-
-- (void)cancelPageTransition {
-    self.transitionGeneration += 1;
-    self.transitionInFlight = NO;
-    [self.pageTransitionCoordinator cancel];
-    [self.currentPageController.view.layer removeAllAnimations];
-    self.currentPageController.view.alpha = 1.0;
-    self.currentPageController.view.transform = CGAffineTransformIdentity;
-    [self detachController:self.outgoingPageController];
-    self.outgoingPageController = nil;
-}
-
-- (void)cancelPageTransitionNotification:(NSNotification *)notification {
-    [self cancelPageTransition];
-}
-
-- (void)pageBlurPreferenceChanged:(NSNotification *)notification {
-    if (self.transitionInFlight) {
-        [self cancelPageTransition];
-    }
-}
-
-- (UIViewController *)controllerForPage:(NSInteger)page {
     UIViewController *controller = nil;
     switch (page) {
         case 1: controller = [[NCLRVersionsController alloc] init]; break;
@@ -6338,11 +5999,12 @@ static CIContext *NCLRTransitionCIContext(void) {
         case 3: {
             NCLRPackController *c = [[NCLRPackController alloc] init];
             c.pageTitle = @"光影包";
-            c.pageSubtitle = @"导入和管理本地光影包";
+            c.pageSubtitle = @"内置轻光影与本地光影包";
             c.directoryName = @"shaderpacks";
             c.emptyText = @"还没有光影包。点击右上角导入 .zip / .hshader，或直接放入 shaderpacks 文件夹。";
             c.extensions = @[@"zip", @"hshader"];
-            c.noteText = @"目录：Documents/shaderpacks。经典 shaders/ 文件夹、.zip 或 .hshader 都可被 Horizon 读取。";
+            c.noteText = @"目录：Documents/shaderpacks。内置「轻光影 Lite」随应用安装；经典 shaders/ 文件夹、.zip 或 .hshader 也都能被 Horizon 读取。";
+            c.shaderMode = YES;
             controller = c;
             break;
         }
@@ -6361,40 +6023,9 @@ static CIContext *NCLRTransitionCIContext(void) {
         case 6: controller = [[NCLRAccountController alloc] init]; break;
         default: controller = [[NCLRHomeController alloc] init]; break;
     }
-    return controller;
-}
-
-- (void)transitionToPage:(NSInteger)page forceReload:(BOOL)forceReload {
-    NSInteger previousPage = self.page;
-    BOOL firstPage = !self.hasDisplayedPage;
-    BOOL reducedMotion = UIAccessibilityIsReduceMotionEnabled();
-    BOOL animated = !firstPage && !forceReload;
-    NSInteger direction = page >= previousPage ? 1 : -1;
-
-    self.page = page;
-    [self updateNavigationSelectionForPage:page animated:animated];
-    [self cancelPageTransition];
-
-    UIViewController *oldController = self.currentPageController;
-    BOOL useBlur = animated && !reducedMotion && NCLRPageTransitionBlurEnabled();
-    UIImage *snapshot = useBlur
-        ? [self.pageTransitionCoordinator captureSnapshotFromView:self.view]
-        : nil;
-    if (snapshot == nil || ![self.pageTransitionCoordinator installSnapshot:snapshot]) {
-        useBlur = NO;
-        [self.pageTransitionCoordinator cancel];
-    }
-
-    if (oldController != nil && (firstPage || forceReload || useBlur)) {
-        [self detachController:oldController];
-    }
-
-    UIViewController *controller = [self controllerForPage:page];
     if ([controller isKindOfClass:[NCLRPageController class]]) {
         __weak typeof(self) weakSelf = self;
-        ((NCLRPageController *)controller).onDataChanged = ^{
-            [weakSelf reloadCurrentPage];
-        };
+        ((NCLRPageController *)controller).onDataChanged = ^{ [weakSelf showPage:weakSelf.page]; };
     }
     [self addChildViewController:controller];
     controller.view.translatesAutoresizingMaskIntoConstraints = NO;
@@ -6406,72 +6037,17 @@ static CIContext *NCLRTransitionCIContext(void) {
         [controller.view.bottomAnchor constraintEqualToAnchor:self.content.bottomAnchor],
     ]];
     [controller didMoveToParentViewController:self];
-
-    self.outgoingPageController = oldController;
-    self.currentPageController = controller;
-    self.hasDisplayedPage = YES;
-    if (!animated) {
-        controller.view.alpha = 1.0;
-        controller.view.transform = CGAffineTransformIdentity;
-        [self detachController:self.outgoingPageController];
-        self.outgoingPageController = nil;
-        [self refreshAccount];
-        return;
-    }
-
-    CGFloat enterOffset = reducedMotion ? 12.0 : 46.0;
-    CGFloat enterDuration = reducedMotion ? 0.240 : 0.420;
-    controller.view.alpha = 0.0;
-    controller.view.transform = CGAffineTransformMakeTranslation(0.0,
-                                                                  enterOffset * direction);
-
-    NSUInteger generation = self.transitionGeneration;
-    if (useBlur) {
-        self.pageTransitionCoordinator.direction = direction;
-        [self.pageTransitionCoordinator startBlur];
-    } else if (oldController != nil) {
-        CGFloat exitOffset = reducedMotion ? 8.0 : 16.0;
-        oldController.view.alpha = 1.0;
-        oldController.view.transform = CGAffineTransformIdentity;
-        [UIView animateWithDuration:(reducedMotion ? 0.080 : 0.120)
-                              delay:0.0
-                            options:UIViewAnimationOptionBeginFromCurrentState |
-                                    UIViewAnimationOptionAllowUserInteraction |
-                                    UIViewAnimationOptionCurveEaseIn
+    if (!UIAccessibilityIsReduceMotionEnabled()) {
+        controller.view.alpha = 0.0;
+        controller.view.transform = CGAffineTransformMakeTranslation(0, 10.0);
+        [UIView animateWithDuration:0.24 delay:0.0
+                            options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction
                          animations:^{
-            oldController.view.alpha = 0.0;
-            oldController.view.transform = CGAffineTransformMakeTranslation(0.0,
-                                                                              -exitOffset * direction);
-        } completion:^(BOOL finished) {
-            if (self.transitionGeneration == generation &&
-                self.outgoingPageController == oldController) {
-                [self detachController:oldController];
-                self.outgoingPageController = nil;
-            }
-        }];
-    }
-
-    self.transitionInFlight = YES;
-    [UIView animateWithDuration:enterDuration
-                          delay:useBlur || reducedMotion ? 0.0 : 0.090
-         usingSpringWithDamping:reducedMotion ? 1.0 : 0.82
-          initialSpringVelocity:reducedMotion ? 0.0 : 0.5
-                        options:UIViewAnimationOptionBeginFromCurrentState |
-                                UIViewAnimationOptionAllowUserInteraction |
-                                UIViewAnimationOptionCurveEaseInOut
-                    animations:^{
-        controller.view.alpha = 1.0;
-        controller.view.transform = CGAffineTransformIdentity;
-    } completion:^(BOOL finished) {
-        if (self.transitionGeneration == generation &&
-            self.currentPageController == controller) {
             controller.view.alpha = 1.0;
             controller.view.transform = CGAffineTransformIdentity;
-            self.transitionInFlight = NO;
-            [self detachController:self.outgoingPageController];
-            self.outgoingPageController = nil;
-        }
-    }];
+        } completion:nil];
+    }
+    [self refreshAccount];
 }
 
 - (void)refreshAccount {
@@ -6498,10 +6074,9 @@ static CIContext *NCLRTransitionCIContext(void) {
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     NCLRThemeLoad();
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
-    self.window.overrideUserInterfaceStyle = NCLRThemeOverrideStyle();
-    NCLRThemeResolveFromTraitCollection(self.window.traitCollection);
     self.window.rootViewController = [[NCLRRootController alloc] init];
     self.window.windowLevel = UIWindowLevelNormal;
+    self.window.overrideUserInterfaceStyle = NCLRDarkMode ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
     [self.window makeKeyAndVisible];
 }
 @end
