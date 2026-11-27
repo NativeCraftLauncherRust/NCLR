@@ -346,16 +346,17 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
  }
  
  /// The on-screen controls' input state. The game feeds it touches with
-@@ -66,6 +77,8 @@
+@@ -66,6 +77,9 @@
  #[derive(Default)]
  pub struct TouchControls {
      pub settings: Settings,
 +    toggled: std::collections::BTreeSet<usize>,
 +    extra_latched: std::collections::BTreeSet<usize>,
++    swipe_fingers: std::collections::BTreeSet<u64>,
      /// The game needs the crosshair whatever the scheme.
      pub force_crosshair: bool,
      /// The held item is aimed along the crosshair ([`projectile_crosshair`]).
-@@ -100,6 +113,7 @@
+@@ -100,6 +114,7 @@
      /// A button was pressed; the game plays the click and clears it.
      pub clicked: bool,
      pub chat_requested: bool,
@@ -363,7 +364,7 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
      pub settings_requested: bool,
      pub debug_requested: bool,
      pub perspective_requested: bool,
-@@ -128,6 +142,14 @@
+@@ -128,6 +143,14 @@
          self.aspect = width.max(1) as f32 / height.max(1) as f32;
      }
  
@@ -378,7 +379,7 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
      fn aspect(&self) -> f32 {
          if self.aspect > 0.0 {
              self.aspect
-@@ -174,7 +196,7 @@
+@@ -174,7 +197,7 @@
          Control::ALL.into_iter().any(|c| {
              Self::auxiliary_control(c)
                  && self.visible(c)
@@ -387,7 +388,7 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
          })
      }
  
-@@ -191,7 +213,7 @@
+@@ -191,7 +214,7 @@
                      && !self.moving()
                      && layout::contains(area, point);
              }
@@ -396,7 +397,15 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
          })
      }
  
-@@ -287,9 +309,9 @@
+@@ -208,6 +231,7 @@
+ 
+     /// Hands a finger to something else (a menu) until it lifts.
+     pub fn ignore(&mut self, id: u64) {
++        self.swipe_fingers.remove(&id);
+         self.fingers.insert(id, (Role::Ignore, [0.0; 2]));
+     }
+ 
+@@ -287,9 +311,9 @@
              // so it never covers the jump, sneak or sprint buttons.
              let inventory = self.placement(Control::Inventory);
              let side = if self.settings.left_handed { -1.0 } else { 1.0 };
@@ -408,7 +417,7 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
                  .clamp(half, 1.0 - half);
          }
          p
-@@ -298,8 +320,15 @@
+@@ -298,8 +322,15 @@
      /// Scales a placement by `button_scale` and keeps it inside the surface.
      fn fit(&self, mut p: Placement) -> Placement {
          let aspect = self.aspect();
@@ -425,7 +434,7 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
          for (c, half) in p.center.iter_mut().zip(half) {
              *c = c.clamp(half, 1.0 - half);
          }
-@@ -324,10 +353,10 @@
+@@ -324,10 +355,10 @@
      pub fn shield_held(&self) -> bool {
          self.settings.shield_button
              && self.shield_available
@@ -438,18 +447,21 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
      }
  
      /// Where the touch marker goes in the tap schemes: under a look finger, or
-@@ -392,6 +421,7 @@
+@@ -392,14 +423,22 @@
              }
              // In the crosshair schemes the attack button can steer while it mines.
              Role::Button(Button::RightTrigger) => attack_look,
 +            Role::Extra(_) => false,
              _ => false,
-         };
+-        };
++        } || self.swipe_fingers.contains(&id);
          let delta = [point[0] - previous[0], point[1] - previous[1]];
-@@ -400,6 +430,12 @@
+         *previous = point;
+         if turns { delta } else { [0.0; 2] }
      }
  
      fn lift(&mut self, id: u64) {
++        self.swipe_fingers.remove(&id);
 +        if let Some((Role::Extra(index), _)) = self.fingers.get(&id) {
 +            let index = *index;
 +            self.fingers.remove(&id);
@@ -459,11 +471,12 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
          let Some((
              Role::Look {
                  start,
-@@ -420,8 +456,62 @@
+@@ -420,8 +459,74 @@
          }
      }
  
 +    pub fn cancel(&mut self, id: u64) {
++        self.swipe_fingers.remove(&id);
 +        if let Some((Role::Extra(index), _)) = self.fingers.remove(&id) {
 +            self.extra_release(index);
 +        }
@@ -486,10 +499,12 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
 +
      fn land(&mut self, id: u64, point: [f32; 2]) {
 -        let role = match self.control_at(point) {
++        self.swipe_fingers.remove(&id);
 +        if !self.auxiliary_only && let Some(index) = (0..self.settings.extra_buttons.len()).rev()
 +            .find(|&index| layout::contains(self.extra_placement(index).rect(self.aspect()), point))
 +        {
 +            let button = &self.settings.extra_buttons[index];
++            let swipe_through = button.swipe_through;
 +            self.clicked = true;
 +            if button.toggle {
 +                let down = if self.extra_latched.remove(&index) {
@@ -500,13 +515,22 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
 +                };
 +                self.key_events.push((button.label.clone(), down));
 +                self.fingers.insert(id, (Role::Ignore, point));
++                if swipe_through {
++                    self.swipe_fingers.insert(id);
++                }
 +            } else if !self.fingers.values().any(|(role, _)| matches!(role, Role::Extra(i) if *i == index)) {
 +                self.key_events.push((button.label.clone(), true));
 +                self.fingers.insert(id, (Role::Extra(index), point));
++                if swipe_through {
++                    self.swipe_fingers.insert(id);
++                }
 +            }
 +            return;
 +        }
 +        let control = self.control_at(point);
++        let swipe_through = control.is_some_and(|c| {
++            c != Control::Move && self.settings.swipe_buttons.contains(&(c as usize))
++        });
 +        let mut toggle = false;
 +        if let Some(c) = control
 +            && c != Control::Move
@@ -523,7 +547,7 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
              Some(Control::Move) if !self.moving() => Role::Move(if self.dynamic_joystick() {
                  point
              } else {
-@@ -454,8 +544,14 @@
+@@ -454,8 +559,14 @@
                  self.perspective_requested = true;
                  Role::Ignore
              }
@@ -539,16 +563,19 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
                      && !self.vertical_movement
                      && !self.swimming
                      && !self.mounted =>
-@@ -486,7 +582,7 @@
+@@ -486,7 +597,10 @@
                  committed: false,
              },
          };
 -        self.fingers.insert(id, (role, point));
 +        self.fingers.insert(id, (if toggle { Role::Ignore } else { role }, point));
++        if swipe_through {
++            self.swipe_fingers.insert(id);
++        }
          // Latch the press so a tap shorter than a tick still reaches the game.
          match role {
              Role::Button(Button::LeftTrigger) => self.pending.triggers[0] = 1.0,
-@@ -498,7 +594,17 @@
+@@ -498,7 +612,18 @@
  
      /// Lets go of everything: fingers, latched presses, requests.
      pub fn clear(&mut self) {
@@ -562,11 +589,12 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
 +            self.extra_release(index);
 +        }
          self.fingers.clear();
++        self.swipe_fingers.clear();
 +        self.toggled.clear();
          self.last_sneak_tap = None;
          self.sprint_latched = false;
          self.pending = PadState::default();
-@@ -509,6 +615,7 @@
+@@ -509,6 +634,7 @@
          self.holding_use = false;
          self.holding = false;
          self.chat_requested = false;
@@ -574,7 +602,7 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
          self.settings_requested = false;
          self.debug_requested = false;
          self.perspective_requested = false;
-@@ -517,11 +624,53 @@
+@@ -517,11 +643,53 @@
      /// A short world tap since the last call, and whether it uses the item.
      /// A tap never holds attack or use into the next tick: the game acts once
      /// at [`Self::aim`].
@@ -628,7 +656,7 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
      pub fn key_events(&mut self) -> Vec<(String, bool)> {
          std::mem::take(&mut self.key_events)
      }
-@@ -588,6 +737,17 @@
+@@ -588,6 +756,17 @@
      /// The controller state the fingers hold right now.
      pub fn state(&self) -> PadState {
          let mut state = PadState::default();
@@ -646,7 +674,7 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
          if self.settings.sprint_toggle && self.settings.sprint_button && self.sprint_latched {
              state.set(Button::LeftStick, true);
          }
-@@ -595,21 +755,37 @@
+@@ -595,21 +774,37 @@
              match role {
                  Role::Move(anchor) => {
                      let radius = self.placement(Control::Move).size / 2.0;
@@ -691,7 +719,7 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
                      {
                          state.set(Button::LeftStick, true);
                      }
-@@ -617,7 +793,7 @@
+@@ -617,7 +812,7 @@
                  Role::Button(Button::LeftTrigger) | Role::Shield => state.triggers[0] = 1.0,
                  Role::Button(Button::RightTrigger) => state.triggers[1] = 1.0,
                  Role::Button(b) => state.set(*b, true),
@@ -1000,6 +1028,537 @@ diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-cli
  }
  
  /// How far the mining disc reaches inside a marker of `radius`, by progress.
+diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
+--- a/crates/horizon-client-render/src/touch/layout.rs
++++ b/crates/horizon-client-render/src/touch/layout.rs
+@@ -58,13 +58,14 @@
+     Perspective,
+     Offhand,
+     Shield,
++    Keyboard,
+ }
+ 
+ /// How many built-in controls a layout row holds.
+ pub const CONTROLS: usize = Control::ALL.len();
+ 
+ impl Control {
+-    pub const ALL: [Self; 14] = [
++    pub const ALL: [Self; 15] = [
+         Self::Move,
+         Self::Sprint,
+         Self::Jump,
+@@ -79,6 +80,7 @@
+         Self::Perspective,
+         Self::Offhand,
+         Self::Shield,
++        Self::Keyboard,
+     ];
+ 
+     /// The name the layout editor shows.
+@@ -98,16 +100,45 @@
+             Self::Perspective => "Camera perspective (F5)",
+             Self::Offhand => "Swap hands",
+             Self::Shield => "Raise shield",
+-        }
+-    }
+-}
+-
+-/// Where one control sits: its centre (0..1 of the surface), its size (a
+-/// fraction of the surface height) and its opacity.
++            Self::Keyboard => "System keyboard",
++        }
++    }
++
++    /// The control the NCLR launcher's `keymap.json` id moves, if it maps to
++    /// one of the built-in touch controls. The four movement ids share the
++    /// joystick: the launcher draws them as one pad, the game has one stick.
++    fn from_launcher_id(id: &str) -> Option<Self> {
++        match id {
++            "move" | "forward" | "back" | "left" | "right" => Some(Self::Move),
++            "sprint" => Some(Self::Sprint),
++            "jump" => Some(Self::Jump),
++            "sneak" => Some(Self::Sneak),
++            "attack" => Some(Self::Attack),
++            "use" => Some(Self::Use),
++            "inventory" => Some(Self::Inventory),
++            "chat" => Some(Self::Chat),
++            "pause" => Some(Self::Pause),
++            "settings" => Some(Self::Settings),
++            "debug" => Some(Self::Debug),
++            "perspective" => Some(Self::Perspective),
++            "offhand" => Some(Self::Offhand),
++            "shield" => Some(Self::Shield),
++            "keyboard" => Some(Self::Keyboard),
++            _ => None,
++        }
++    }
++}
++
++/// Where one control sits: its centre (0..1 of the surface), its height
++/// (a fraction of the surface height), its width in the same height units,
++/// and its opacity. A width of zero means a square control, so layouts saved
++/// before independent width was supported keep their original shape.
+ #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+ pub struct Placement {
+     pub center: [f32; 2],
+     pub size: f32,
++    #[serde(default)]
++    pub width: f32,
+     pub opacity: f32,
+ }
+ 
+@@ -116,14 +147,25 @@
+         Self {
+             center: [x, y],
+             size,
++            width: size,
+             opacity: 0.65,
+         }
+     }
+ 
+-    /// The square control as `[x, y, w, h]` in normalized surface coordinates,
+-    /// for a surface `aspect` (width / height) wide.
++    /// Width as a fraction of the surface height. Older layouts have no width
++    /// field, so they remain square.
++    pub fn effective_width(self) -> f32 {
++        if self.width.is_finite() && self.width > 0.0 {
++            self.width
++        } else {
++            self.size
++        }
++    }
++
++    /// The control as `[x, y, w, h]` in normalized surface coordinates, for a
++    /// surface `aspect` (width / height) wide.
+     pub fn rect(self, aspect: f32) -> [f32; 4] {
+-        let w = self.size / aspect.max(0.1);
++        let w = self.effective_width() / aspect.max(0.1);
+         [
+             self.center[0] - w / 2.0,
+             self.center[1] - self.size / 2.0,
+@@ -135,6 +177,11 @@
+     /// Brings a value read from disk back on screen and into range.
+     pub fn sanitize(&mut self) {
+         self.size = finite_or(self.size, 0.15).clamp(0.045, 0.45);
++        self.width = if self.width.is_finite() && self.width > 0.0 {
++            self.width.clamp(0.045, 1.0)
++        } else {
++            self.size
++        };
+         self.opacity = finite_or(self.opacity, 0.65).clamp(0.0, 1.0);
+         for c in &mut self.center {
+             *c = finite_or(*c, 0.5).clamp(0.025, 0.975);
+@@ -146,6 +193,32 @@
+ pub const FOLLOW_SCHEME: u8 = 0;
+ pub const SHOWN: u8 = 1;
+ pub const HIDDEN: u8 = 2;
++
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
++pub struct ExtraButton {
++    pub label: String,
++    pub placement: Placement,
++    pub toggle: bool,
++    #[serde(default)]
++    pub swipe_through: bool,
++}
++
++/// A key button on the inventory or pause menu. Menu buttons are taps; the
++/// keyboard label toggles the system keyboard and other labels deliver their
++/// key once.
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
++pub struct MenuButton {
++    pub screen: u8,
++    pub label: String,
++    pub placement: Placement,
++}
++
++fn launcher_key(label: &str) -> bool {
++    let bytes = label.as_bytes();
++    (bytes.len() == 1 && bytes[0].is_ascii_alphanumeric())
++        || matches!(label, "Esc" | "Tab" | "Shift" | "Ctrl" | "Space" | "F1" | "F3" | "F5"
++            | "MouseLeft" | "MouseRight" | "MouseMiddle")
++}
+ 
+ /// The player's touch layout, saved as JSON. Missing fields take their
+ /// defaults, so later options can be added without resetting a saved file.
+@@ -170,6 +243,27 @@
+     pub layouts: [[Placement; CONTROLS]; 3],
+     /// Camera turn speed for look drags; scales both axes.
+     pub sensitivity: f32,
++    /// Joystick centre dead zone (0.05..0.35), as a fraction of its radius.
++    pub joystick_deadzone: f32,
++    /// Button look: 0 disc, 1 square outline, 2 minimal filled disc.
++    pub button_style: u8,
++    /// Use short symbol labels instead of key names.
++    pub icon_labels: bool,
++    /// Touch buttons that keep their pressed state after lifting.
++    #[serde(default)]
++    pub toggle_buttons: Vec<usize>,
++    /// Touch buttons whose drag gestures continue to camera look.
++    #[serde(default)]
++    pub swipe_buttons: Vec<usize>,
++    #[serde(default)]
++    pub launcher_trigger_modes: bool,
++    #[serde(default)]
++    pub extra_buttons: Vec<ExtraButton>,
++    #[serde(default)]
++    pub menu_buttons: Vec<MenuButton>,
++    pub menu_escape: [Placement; 2],
++    /// The keyboard toggle shown beside the back button in every menu.
++    pub menu_keyboard: [Placement; 2],
+     /// Extra scale on the yaw (left and right) turn.
+     pub sensitivity_horizontal: f32,
+     /// Extra scale on the pitch (up and down) turn.
+@@ -214,6 +308,7 @@
+             Placement::new(0.58, 0.055, 0.075), // Perspective
+             Placement::new(0.80, 0.96, 0.075),  // Offhand
+             Placement::new(0.92, 0.36, 0.12),   // Shield
++            Placement::new(0.66, 0.12, 0.075),  // Keyboard
+         ];
+         let mut layouts = [row; 3];
+         // The D-pad sits where the joystick does; sneak becomes its centre.
+@@ -231,6 +326,16 @@
+             button_visibility: [FOLLOW_SCHEME; CONTROLS],
+             layouts,
+             sensitivity: 1.0,
++            joystick_deadzone: 0.16,
++            button_style: 0,
++            icon_labels: false,
++            toggle_buttons: Vec::new(),
++            swipe_buttons: Vec::new(),
++            launcher_trigger_modes: false,
++            extra_buttons: Vec::new(),
++            menu_buttons: Vec::new(),
++            menu_escape: [Placement { center: [0.057, 0.066], size: 0.092, width: 0.2024, opacity: 1.0 }; 2],
++            menu_keyboard: [Placement { center: [0.18, 0.066], size: 0.092, width: 0.2024, opacity: 1.0 }; 2],
+             sensitivity_horizontal: 1.0,
+             sensitivity_vertical: 1.0,
+             sprint_toggle: false,
+@@ -264,6 +369,242 @@
+         std::fs::rename(temp, path)
+     }
+ 
++    /// Applies the NCLR launcher's `keymap.json` (`buttonSize` and `layout`)
++    /// to the built-in controls. New ids the launcher adds stay in the file;
++    /// this game version has no extra touch controls to bind them to.
++    pub fn apply_launcher_keymap(&mut self, path: &Path) {
++        let Ok(bytes) = std::fs::read(path) else {
++            return;
++        };
++        let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
++            return;
++        };
++        if let Some(scale) = json.get("buttonSize").and_then(|v| v.as_f64()) {
++            self.button_scale = (scale as f32).clamp(0.5, 2.5);
++        }
++        let opacity = json
++            .get("opacity")
++            .and_then(|v| v.as_f64())
++            .map(|v| (v as f32).clamp(0.0, 1.0))
++            .unwrap_or(0.65);
++        if let Some(mode) = json.get("touchMode").and_then(|v| v.as_str()) {
++            self.mode = match mode {
++                "tap" => Mode::Tap,
++                "dpad" => Mode::Dpad,
++                _ => Mode::Crosshair,
++            };
++        }
++        if let Some(dynamic) = json.get("dynamicJoystick").and_then(|v| v.as_bool()) {
++            self.dynamic_joystick = dynamic;
++        }
++        if let Some(left) = json.get("leftHanded").and_then(|v| v.as_bool()) {
++            self.left_handed = left;
++        }
++        if let Some(sprint) = json.get("joystickSprint").and_then(|v| v.as_bool()) {
++            self.sprint_with_joystick = sprint;
++        }
++        if let Some(sensitivity) = json.get("sensitivity").and_then(|v| v.as_f64()) {
++            self.sensitivity = (sensitivity as f32).clamp(0.3, 2.5);
++        }
++        if let Some(deadzone) = json.get("joystickDeadzone").and_then(|v| v.as_f64()) {
++            self.joystick_deadzone = (deadzone as f32).clamp(0.05, 0.35);
++        }
++        if let Some(swap) = json.get("swapJumpSneak").and_then(|v| v.as_bool()) {
++            self.swap_jump_sneak = swap;
++        }
++        if let Some(button) = json.get("sprintButton").and_then(|v| v.as_bool()) {
++            self.sprint_button = button;
++        }
++        if let Some(toggle) = json.get("sprintToggle").and_then(|v| v.as_bool()) {
++            self.sprint_toggle = toggle;
++        }
++        if let Some(style) = json.get("buttonStyle").and_then(|v| v.as_u64()) {
++            self.button_style = (style as u8).min(2);
++        }
++        if let Some(icons) = json.get("iconLabels").and_then(|v| v.as_bool()) {
++            self.icon_labels = icons;
++        }
++        if let Some(modes) = json.get("triggerModes").and_then(|v| v.as_object()) {
++            self.launcher_trigger_modes = true;
++            self.sprint_toggle = false;
++            self.toggle_buttons = modes.iter().filter_map(|(id, mode)| {
++                let control = Control::from_launcher_id(id)?;
++                (control != Control::Move && mode.as_str() == Some("toggle"))
++                    .then_some(control as usize)
++            }).collect();
++        }
++        let swipe_ids: std::collections::HashSet<&str> = json
++            .get("swipeThrough")
++            .and_then(|v| v.as_array())
++            .map(|items| items.iter().filter_map(|v| v.as_str()).collect())
++            .unwrap_or_default();
++        self.swipe_buttons = swipe_ids
++            .iter()
++            .filter_map(|id| Control::from_launcher_id(id))
++            .filter(|control| !matches!(control, Control::Move | Control::Keyboard))
++            .map(|control| control as usize)
++            .collect();
++        self.menu_buttons.clear();
++        if let Some(items) = json.get("menuKeys").and_then(|v| v.as_array()) {
++            let layout = json.get("layout").and_then(|v| v.as_object());
++            for item in items {
++                let Some(item) = item.as_object() else {
++                    continue;
++                };
++                let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
++                    continue;
++                };
++                let screen = match item.get("screen").and_then(|v| v.as_str()) {
++                    Some("inventory") => 0,
++                    Some("pause") => 1,
++                    _ => continue,
++                };
++                let Some(label) = item.get("label").and_then(|v| v.as_str()) else {
++                    continue;
++                };
++                let position = layout
++                    .and_then(|layout| layout.get(id))
++                    .and_then(|v| v.as_object())
++                    .or(Some(item));
++                let Some(position) = position else {
++                    continue;
++                };
++                let x = position.get("x").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
++                let y = position.get("y").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
++                let size = position.get("size").and_then(|v| v.as_f64()).unwrap_or(0.12) as f32;
++                let width = position.get("width").and_then(|v| v.as_f64()).unwrap_or(size as f64) as f32;
++                let mut placement = Placement { center: [x, y], size, width, opacity };
++                placement.sanitize();
++                self.menu_buttons.push(MenuButton {
++                    screen,
++                    label: label.to_owned(),
++                    placement,
++                });
++            }
++        }
++        let Some(layout) = json.get("layout").and_then(|v| v.as_object()) else {
++            return;
++        };
++        let joystick = layout.contains_key("move");
++        let deleted = json.get("deletedKeys").and_then(|v| v.as_array());
++        let deleted_key = |id: &str| deleted.is_some_and(|keys| keys.iter().any(|key| key.as_str() == Some(id)));
++        self.extra_buttons.clear();
++        for (id, value) in layout {
++            if id.starts_with("menu.") {
++                continue;
++            }
++            if let Some(index) = match id.as_str() {
++                "inventoryEscape" => Some(0),
++                "pauseEscape" => Some(1),
++                _ => None,
++            } {
++                if let Some(value) = value.as_object() {
++                    let mut placement = self.menu_escape[index];
++                    for (axis, key) in ["x", "y"].into_iter().enumerate() {
++                        if let Some(v) = value.get(key).and_then(|v| v.as_f64()) {
++                            placement.center[axis] = v as f32;
++                        }
++                    }
++                    if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
++                        placement.size = v as f32;
++                    }
++                    if let Some(v) = value.get("width").and_then(|v| v.as_f64()) {
++                        placement.width = v as f32;
++                    } else if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
++                        // Old menu layouts were wide by 2.2; preserve that shape.
++                        placement.width = (v as f32) * 2.2;
++                    }
++                    placement.sanitize();
++                    self.menu_escape[index] = placement;
++                }
++                continue;
++            }
++            if let Some(index) = match id.as_str() {
++                "inventoryKeyboard" => Some(0),
++                "pauseKeyboard" => Some(1),
++                _ => None,
++            } {
++                if let Some(value) = value.as_object() {
++                    let mut placement = self.menu_keyboard[index];
++                    for (axis, key) in ["x", "y"].into_iter().enumerate() {
++                        if let Some(v) = value.get(key).and_then(|v| v.as_f64()) {
++                            placement.center[axis] = v as f32;
++                        }
++                    }
++                    if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
++                        placement.size = v as f32;
++                    }
++                    if let Some(v) = value.get("width").and_then(|v| v.as_f64()) {
++                        placement.width = v as f32;
++                    } else if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
++                        placement.width = (v as f32) * 2.2;
++                    }
++                    placement.sanitize();
++                    self.menu_keyboard[index] = placement;
++                }
++                continue;
++            }
++            if deleted_key(id) {
++                continue;
++            }
++            if joystick && matches!(id.as_str(), "forward" | "back" | "left" | "right") {
++                continue;
++            }
++            let control = Control::from_launcher_id(id);
++            let Some(value) = value.as_object() else {
++                continue;
++            };
++            let x = value.get("x").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
++            let y = value.get("y").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
++            let size = value.get("size").and_then(|v| v.as_f64()).unwrap_or(0.12) as f32;
++            let width = value.get("width").and_then(|v| v.as_f64()).unwrap_or(size as f64) as f32;
++            let placement = Placement {
++                center: [x, y],
++                size,
++                width,
++                opacity,
++            };
++            if let Some(control) = control {
++                for row in &mut self.layouts {
++                    row[control as usize] = placement;
++                }
++                self.button_visibility[control as usize] = SHOWN;
++            } else if self.extra_buttons.len() < 48 {
++                let hidden = json.get("hidden").and_then(|v| v.as_array())
++                    .is_some_and(|ids| ids.iter().any(|v| v.as_str() == Some(id.as_str())));
++                let label = json.get("bindings").and_then(|v| v.get(id)).and_then(|v| v.as_str())
++                    .unwrap_or(id.as_str());
++                if !hidden && launcher_key(label) && !self.extra_buttons.iter().any(|p| p.label == label) {
++                    let mut placement = placement;
++                    placement.sanitize();
++                    let toggle = json.get("triggerModes").and_then(|v| v.get(id)).and_then(|v| v.as_str())
++                        == Some("toggle");
++                    self.extra_buttons.push(ExtraButton {
++                        label: label.to_owned(),
++                        placement,
++                        toggle,
++                        swipe_through: swipe_ids.contains(id.as_str()),
++                    });
++                }
++            }
++        }
++        if let Some(deleted) = deleted {
++            for id in deleted.iter().filter_map(|v| v.as_str()) {
++                if let Some(control) = Control::from_launcher_id(id) {
++                    self.button_visibility[control as usize] = HIDDEN;
++                }
++            }
++        }
++        if let Some(hidden) = json.get("hidden").and_then(|v| v.as_array()) {
++            for id in hidden.iter().filter_map(|v| v.as_str()) {
++                if let Some(control) = Control::from_launcher_id(id) {
++                    self.button_visibility[control as usize] = HIDDEN;
++                }
++            }
++        }
++        self.sanitize();
++    }
++
+     pub fn sanitize(&mut self) {
+         // Only the D-pad has a split variant (see `Mode::SCHEMES`).
+         if self.mode != Mode::Dpad {
+@@ -284,7 +625,9 @@
+         ] {
+             *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
+         }
+-        self.button_scale = finite_or(self.button_scale, 1.0).clamp(0.5, 2.0);
++        self.joystick_deadzone = finite_or(self.joystick_deadzone, 0.16).clamp(0.05, 0.35);
++        self.button_style = self.button_style.min(2);
++        self.button_scale = finite_or(self.button_scale, 1.0).clamp(0.5, 2.5);
+         self.circle_size = finite_or(self.circle_size, 32.0).clamp(16.0, 64.0);
+         self.dynamic_area_x = finite_or(self.dynamic_area_x, 0.25).clamp(0.0, 1.0);
+         self.dynamic_area_y = finite_or(self.dynamic_area_y, 1.0).clamp(0.0, 1.0);
+@@ -310,6 +653,26 @@
+             }
+             _ => true,
+         }
++    }
++
++    /// Shared bounds, in GUI units, for drawing and tapping the menu back button.
++    pub fn menu_escape_rect(&self, inventory: bool, width: f32, height: f32) -> [f32; 4] {
++        let placement = self.menu_escape[if inventory { 0 } else { 1 }];
++        let h = (placement.size * height).min(height);
++        let w = (placement.effective_width() * height).min(width);
++        let [x, y] = placement.center;
++        [(x * width - w / 2.0).clamp(0.0, (width - w).max(0.0)),
++         (y * height - h / 2.0).clamp(0.0, (height - h).max(0.0)), w, h]
++    }
++
++    /// Shared bounds for the keyboard toggle in a menu.
++    pub fn menu_keyboard_rect(&self, inventory: bool, width: f32, height: f32) -> [f32; 4] {
++        let placement = self.menu_keyboard[if inventory { 0 } else { 1 }];
++        let h = (placement.size * height).min(height);
++        let w = (placement.effective_width() * height).min(width);
++        let [x, y] = placement.center;
++        [(x * width - w / 2.0).clamp(0.0, (width - w).max(0.0)),
++         (y * height - h / 2.0).clamp(0.0, (height - h).max(0.0)), w, h]
+     }
+ 
+     /// The layout slot a control is drawn in (jump and sneak may trade places).
+@@ -400,6 +763,26 @@
+     }
+ 
+     #[test]
++    fn menu_keyboard_positions_are_edited_per_screen() {
++        let file = temp_file("menu-keyboard");
++        std::fs::write(
++            &file,
++            br#"{"layout":{"inventoryKeyboard":{"x":0.25,"y":0.1,"size":0.08,"width":0.3},"pauseKeyboard":{"x":0.7,"y":0.2,"size":0.1}}}"#,
++        )
++        .unwrap();
++        let mut s = Settings::default();
++        s.apply_launcher_keymap(&file);
++        std::fs::remove_file(&file).unwrap();
++        assert_eq!(s.menu_keyboard[0].center, [0.25, 0.1]);
++        assert!((s.menu_keyboard[0].width - 0.3).abs() < 0.0001);
++        assert_eq!(s.menu_keyboard[1].center, [0.7, 0.2]);
++        assert!((s.menu_keyboard[1].width - 0.22).abs() < 0.0001);
++        let [x, y, w, h] = s.menu_keyboard_rect(true, 1600.0, 900.0);
++        assert!((x + w / 2.0 - 400.0).abs() < 0.1);
++        assert!((y + h / 2.0 - 90.0).abs() < 0.1);
++    }
++
++    #[test]
+     fn missing_bad_or_partial_files_fall_back_to_defaults() {
+         assert_eq!(Settings::load(&temp_file("absent")), Settings::default());
+         let file = temp_file("bad");
+@@ -424,6 +807,7 @@
+         s.layouts[0][0] = Placement {
+             center: [f32::NAN, 7.0],
+             size: 0.0,
++            width: 0.0,
+             opacity: f32::INFINITY,
+         };
+         s.sanitize();
+@@ -475,7 +859,7 @@
+         );
+         s.button_scale = 9.0;
+         s.sanitize();
+-        assert_eq!(s.button_scale, 2.0);
++        assert_eq!(s.button_scale, 2.5);
+     }
+ 
+     #[test]
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
@@ -1669,512 +2228,6 @@ diff --git a/crates/horizon-client/src/game/runtime/loading_screen.rs b/crates/h
          match self {
              App::Loading(loading) => loading.window_event(event_loop, id, event),
              App::Ready(game) => game.window_event(event_loop, id, event),
-diff --git a/crates/horizon-client-render/src/touch/layout.rs b/crates/horizon-client-render/src/touch/layout.rs
-index e57f2d8..af4d16d 100644
---- a/crates/horizon-client-render/src/touch/layout.rs
-+++ b/crates/horizon-client-render/src/touch/layout.rs
-@@ -58,13 +58,14 @@ pub enum Control {
-     Perspective,
-     Offhand,
-     Shield,
-+    Keyboard,
- }
- 
- /// How many built-in controls a layout row holds.
- pub const CONTROLS: usize = Control::ALL.len();
- 
- impl Control {
--    pub const ALL: [Self; 14] = [
-+    pub const ALL: [Self; 15] = [
-         Self::Move,
-         Self::Sprint,
-         Self::Jump,
-@@ -79,6 +80,7 @@ impl Control {
-         Self::Perspective,
-         Self::Offhand,
-         Self::Shield,
-+        Self::Keyboard,
-     ];
- 
-     /// The name the layout editor shows.
-@@ -98,16 +100,45 @@ impl Control {
-             Self::Perspective => "Camera perspective (F5)",
-             Self::Offhand => "Swap hands",
-             Self::Shield => "Raise shield",
-+            Self::Keyboard => "System keyboard",
-+        }
-+    }
-+
-+    /// The control the NCLR launcher's `keymap.json` id moves, if it maps to
-+    /// one of the built-in touch controls. The four movement ids share the
-+    /// joystick: the launcher draws them as one pad, the game has one stick.
-+    fn from_launcher_id(id: &str) -> Option<Self> {
-+        match id {
-+            "move" | "forward" | "back" | "left" | "right" => Some(Self::Move),
-+            "sprint" => Some(Self::Sprint),
-+            "jump" => Some(Self::Jump),
-+            "sneak" => Some(Self::Sneak),
-+            "attack" => Some(Self::Attack),
-+            "use" => Some(Self::Use),
-+            "inventory" => Some(Self::Inventory),
-+            "chat" => Some(Self::Chat),
-+            "pause" => Some(Self::Pause),
-+            "settings" => Some(Self::Settings),
-+            "debug" => Some(Self::Debug),
-+            "perspective" => Some(Self::Perspective),
-+            "offhand" => Some(Self::Offhand),
-+            "shield" => Some(Self::Shield),
-+            "keyboard" => Some(Self::Keyboard),
-+            _ => None,
-         }
-     }
- }
- 
--/// Where one control sits: its centre (0..1 of the surface), its size (a
--/// fraction of the surface height) and its opacity.
-+/// Where one control sits: its centre (0..1 of the surface), its height
-+/// (a fraction of the surface height), its width in the same height units,
-+/// and its opacity. A width of zero means a square control, so layouts saved
-+/// before independent width was supported keep their original shape.
- #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
- pub struct Placement {
-     pub center: [f32; 2],
-     pub size: f32,
-+    #[serde(default)]
-+    pub width: f32,
-     pub opacity: f32,
- }
- 
-@@ -116,14 +147,25 @@ impl Placement {
-         Self {
-             center: [x, y],
-             size,
-+            width: size,
-             opacity: 0.65,
-         }
-     }
- 
--    /// The square control as `[x, y, w, h]` in normalized surface coordinates,
--    /// for a surface `aspect` (width / height) wide.
-+    /// Width as a fraction of the surface height. Older layouts have no width
-+    /// field, so they remain square.
-+    pub fn effective_width(self) -> f32 {
-+        if self.width.is_finite() && self.width > 0.0 {
-+            self.width
-+        } else {
-+            self.size
-+        }
-+    }
-+
-+    /// The control as `[x, y, w, h]` in normalized surface coordinates, for a
-+    /// surface `aspect` (width / height) wide.
-     pub fn rect(self, aspect: f32) -> [f32; 4] {
--        let w = self.size / aspect.max(0.1);
-+        let w = self.effective_width() / aspect.max(0.1);
-         [
-             self.center[0] - w / 2.0,
-             self.center[1] - self.size / 2.0,
-@@ -135,6 +177,11 @@ impl Placement {
-     /// Brings a value read from disk back on screen and into range.
-     pub fn sanitize(&mut self) {
-         self.size = finite_or(self.size, 0.15).clamp(0.045, 0.45);
-+        self.width = if self.width.is_finite() && self.width > 0.0 {
-+            self.width.clamp(0.045, 1.0)
-+        } else {
-+            self.size
-+        };
-         self.opacity = finite_or(self.opacity, 0.65).clamp(0.0, 1.0);
-         for c in &mut self.center {
-             *c = finite_or(*c, 0.5).clamp(0.025, 0.975);
-@@ -147,6 +194,30 @@ pub const FOLLOW_SCHEME: u8 = 0;
- pub const SHOWN: u8 = 1;
- pub const HIDDEN: u8 = 2;
- 
-+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-+pub struct ExtraButton {
-+    pub label: String,
-+    pub placement: Placement,
-+    pub toggle: bool,
-+}
-+
-+/// A key button on the inventory or pause menu. Menu buttons are taps; the
-+/// keyboard label toggles the system keyboard and other labels deliver their
-+/// key once.
-+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-+pub struct MenuButton {
-+    pub screen: u8,
-+    pub label: String,
-+    pub placement: Placement,
-+}
-+
-+fn launcher_key(label: &str) -> bool {
-+    let bytes = label.as_bytes();
-+    (bytes.len() == 1 && bytes[0].is_ascii_alphanumeric())
-+        || matches!(label, "Esc" | "Tab" | "Shift" | "Ctrl" | "Space" | "F1" | "F3" | "F5"
-+            | "MouseLeft" | "MouseRight" | "MouseMiddle")
-+}
-+
- /// The player's touch layout, saved as JSON. Missing fields take their
- /// defaults, so later options can be added without resetting a saved file.
- #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-@@ -170,6 +241,24 @@ pub struct Settings {
-     pub layouts: [[Placement; CONTROLS]; 3],
-     /// Camera turn speed for look drags; scales both axes.
-     pub sensitivity: f32,
-+    /// Joystick centre dead zone (0.05..0.35), as a fraction of its radius.
-+    pub joystick_deadzone: f32,
-+    /// Button look: 0 disc, 1 square outline, 2 minimal filled disc.
-+    pub button_style: u8,
-+    /// Use short symbol labels instead of key names.
-+    pub icon_labels: bool,
-+    /// Touch buttons that keep their pressed state after lifting.
-+    #[serde(default)]
-+    pub toggle_buttons: Vec<usize>,
-+    #[serde(default)]
-+    pub launcher_trigger_modes: bool,
-+    #[serde(default)]
-+    pub extra_buttons: Vec<ExtraButton>,
-+    #[serde(default)]
-+    pub menu_buttons: Vec<MenuButton>,
-+    pub menu_escape: [Placement; 2],
-+    /// The keyboard toggle shown beside the back button in every menu.
-+    pub menu_keyboard: [Placement; 2],
-     /// Extra scale on the yaw (left and right) turn.
-     pub sensitivity_horizontal: f32,
-     /// Extra scale on the pitch (up and down) turn.
-@@ -214,6 +303,7 @@ impl Default for Settings {
-             Placement::new(0.58, 0.055, 0.075), // Perspective
-             Placement::new(0.80, 0.96, 0.075),  // Offhand
-             Placement::new(0.92, 0.36, 0.12),   // Shield
-+            Placement::new(0.66, 0.12, 0.075),  // Keyboard
-         ];
-         let mut layouts = [row; 3];
-         // The D-pad sits where the joystick does; sneak becomes its centre.
-@@ -231,6 +321,15 @@ impl Default for Settings {
-             button_visibility: [FOLLOW_SCHEME; CONTROLS],
-             layouts,
-             sensitivity: 1.0,
-+            joystick_deadzone: 0.16,
-+            button_style: 0,
-+            icon_labels: false,
-+            toggle_buttons: Vec::new(),
-+            launcher_trigger_modes: false,
-+            extra_buttons: Vec::new(),
-+            menu_buttons: Vec::new(),
-+            menu_escape: [Placement { center: [0.057, 0.066], size: 0.092, width: 0.2024, opacity: 1.0 }; 2],
-+            menu_keyboard: [Placement { center: [0.18, 0.066], size: 0.092, width: 0.2024, opacity: 1.0 }; 2],
-             sensitivity_horizontal: 1.0,
-             sensitivity_vertical: 1.0,
-             sprint_toggle: false,
-@@ -264,6 +363,226 @@ impl Settings {
-         std::fs::rename(temp, path)
-     }
- 
-+    /// Applies the NCLR launcher's `keymap.json` (`buttonSize` and `layout`)
-+    /// to the built-in controls. New ids the launcher adds stay in the file;
-+    /// this game version has no extra touch controls to bind them to.
-+    pub fn apply_launcher_keymap(&mut self, path: &Path) {
-+        let Ok(bytes) = std::fs::read(path) else {
-+            return;
-+        };
-+        let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-+            return;
-+        };
-+        if let Some(scale) = json.get("buttonSize").and_then(|v| v.as_f64()) {
-+            self.button_scale = (scale as f32).clamp(0.5, 2.5);
-+        }
-+        let opacity = json
-+            .get("opacity")
-+            .and_then(|v| v.as_f64())
-+            .map(|v| (v as f32).clamp(0.0, 1.0))
-+            .unwrap_or(0.65);
-+        if let Some(mode) = json.get("touchMode").and_then(|v| v.as_str()) {
-+            self.mode = match mode {
-+                "tap" => Mode::Tap,
-+                "dpad" => Mode::Dpad,
-+                _ => Mode::Crosshair,
-+            };
-+        }
-+        if let Some(dynamic) = json.get("dynamicJoystick").and_then(|v| v.as_bool()) {
-+            self.dynamic_joystick = dynamic;
-+        }
-+        if let Some(left) = json.get("leftHanded").and_then(|v| v.as_bool()) {
-+            self.left_handed = left;
-+        }
-+        if let Some(sprint) = json.get("joystickSprint").and_then(|v| v.as_bool()) {
-+            self.sprint_with_joystick = sprint;
-+        }
-+        if let Some(sensitivity) = json.get("sensitivity").and_then(|v| v.as_f64()) {
-+            self.sensitivity = (sensitivity as f32).clamp(0.3, 2.5);
-+        }
-+        if let Some(deadzone) = json.get("joystickDeadzone").and_then(|v| v.as_f64()) {
-+            self.joystick_deadzone = (deadzone as f32).clamp(0.05, 0.35);
-+        }
-+        if let Some(swap) = json.get("swapJumpSneak").and_then(|v| v.as_bool()) {
-+            self.swap_jump_sneak = swap;
-+        }
-+        if let Some(button) = json.get("sprintButton").and_then(|v| v.as_bool()) {
-+            self.sprint_button = button;
-+        }
-+        if let Some(toggle) = json.get("sprintToggle").and_then(|v| v.as_bool()) {
-+            self.sprint_toggle = toggle;
-+        }
-+        if let Some(style) = json.get("buttonStyle").and_then(|v| v.as_u64()) {
-+            self.button_style = (style as u8).min(2);
-+        }
-+        if let Some(icons) = json.get("iconLabels").and_then(|v| v.as_bool()) {
-+            self.icon_labels = icons;
-+        }
-+        if let Some(modes) = json.get("triggerModes").and_then(|v| v.as_object()) {
-+            self.launcher_trigger_modes = true;
-+            self.sprint_toggle = false;
-+            self.toggle_buttons = modes.iter().filter_map(|(id, mode)| {
-+                let control = Control::from_launcher_id(id)?;
-+                (control != Control::Move && mode.as_str() == Some("toggle"))
-+                    .then_some(control as usize)
-+            }).collect();
-+        }
-+        self.menu_buttons.clear();
-+        if let Some(items) = json.get("menuKeys").and_then(|v| v.as_array()) {
-+            let layout = json.get("layout").and_then(|v| v.as_object());
-+            for item in items {
-+                let Some(item) = item.as_object() else {
-+                    continue;
-+                };
-+                let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
-+                    continue;
-+                };
-+                let screen = match item.get("screen").and_then(|v| v.as_str()) {
-+                    Some("inventory") => 0,
-+                    Some("pause") => 1,
-+                    _ => continue,
-+                };
-+                let Some(label) = item.get("label").and_then(|v| v.as_str()) else {
-+                    continue;
-+                };
-+                let position = layout
-+                    .and_then(|layout| layout.get(id))
-+                    .and_then(|v| v.as_object())
-+                    .or(Some(item));
-+                let Some(position) = position else {
-+                    continue;
-+                };
-+                let x = position.get("x").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
-+                let y = position.get("y").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
-+                let size = position.get("size").and_then(|v| v.as_f64()).unwrap_or(0.12) as f32;
-+                let width = position.get("width").and_then(|v| v.as_f64()).unwrap_or(size as f64) as f32;
-+                let mut placement = Placement { center: [x, y], size, width, opacity };
-+                placement.sanitize();
-+                self.menu_buttons.push(MenuButton {
-+                    screen,
-+                    label: label.to_owned(),
-+                    placement,
-+                });
-+            }
-+        }
-+        let Some(layout) = json.get("layout").and_then(|v| v.as_object()) else {
-+            return;
-+        };
-+        let joystick = layout.contains_key("move");
-+        let deleted = json.get("deletedKeys").and_then(|v| v.as_array());
-+        let deleted_key = |id: &str| deleted.is_some_and(|keys| keys.iter().any(|key| key.as_str() == Some(id)));
-+        self.extra_buttons.clear();
-+        for (id, value) in layout {
-+            if id.starts_with("menu.") {
-+                continue;
-+            }
-+            if let Some(index) = match id.as_str() {
-+                "inventoryEscape" => Some(0),
-+                "pauseEscape" => Some(1),
-+                _ => None,
-+            } {
-+                if let Some(value) = value.as_object() {
-+                    let mut placement = self.menu_escape[index];
-+                    for (axis, key) in ["x", "y"].into_iter().enumerate() {
-+                        if let Some(v) = value.get(key).and_then(|v| v.as_f64()) {
-+                            placement.center[axis] = v as f32;
-+                        }
-+                    }
-+                    if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
-+                        placement.size = v as f32;
-+                    }
-+                    if let Some(v) = value.get("width").and_then(|v| v.as_f64()) {
-+                        placement.width = v as f32;
-+                    } else if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
-+                        // Old menu layouts were wide by 2.2; preserve that shape.
-+                        placement.width = (v as f32) * 2.2;
-+                    }
-+                    placement.sanitize();
-+                    self.menu_escape[index] = placement;
-+                }
-+                continue;
-+            }
-+            if let Some(index) = match id.as_str() {
-+                "inventoryKeyboard" => Some(0),
-+                "pauseKeyboard" => Some(1),
-+                _ => None,
-+            } {
-+                if let Some(value) = value.as_object() {
-+                    let mut placement = self.menu_keyboard[index];
-+                    for (axis, key) in ["x", "y"].into_iter().enumerate() {
-+                        if let Some(v) = value.get(key).and_then(|v| v.as_f64()) {
-+                            placement.center[axis] = v as f32;
-+                        }
-+                    }
-+                    if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
-+                        placement.size = v as f32;
-+                    }
-+                    if let Some(v) = value.get("width").and_then(|v| v.as_f64()) {
-+                        placement.width = v as f32;
-+                    } else if let Some(v) = value.get("size").and_then(|v| v.as_f64()) {
-+                        placement.width = (v as f32) * 2.2;
-+                    }
-+                    placement.sanitize();
-+                    self.menu_keyboard[index] = placement;
-+                }
-+                continue;
-+            }
-+            if deleted_key(id) {
-+                continue;
-+            }
-+            if joystick && matches!(id.as_str(), "forward" | "back" | "left" | "right") {
-+                continue;
-+            }
-+            let control = Control::from_launcher_id(id);
-+            let Some(value) = value.as_object() else {
-+                continue;
-+            };
-+            let x = value.get("x").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
-+            let y = value.get("y").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
-+            let size = value.get("size").and_then(|v| v.as_f64()).unwrap_or(0.12) as f32;
-+            let width = value.get("width").and_then(|v| v.as_f64()).unwrap_or(size as f64) as f32;
-+            let placement = Placement {
-+                center: [x, y],
-+                size,
-+                width,
-+                opacity,
-+            };
-+            if let Some(control) = control {
-+                for row in &mut self.layouts {
-+                    row[control as usize] = placement;
-+                }
-+                self.button_visibility[control as usize] = SHOWN;
-+            } else if self.extra_buttons.len() < 48 {
-+                let hidden = json.get("hidden").and_then(|v| v.as_array())
-+                    .is_some_and(|ids| ids.iter().any(|v| v.as_str() == Some(id.as_str())));
-+                let label = json.get("bindings").and_then(|v| v.get(id)).and_then(|v| v.as_str())
-+                    .unwrap_or(id.as_str());
-+                if !hidden && launcher_key(label) && !self.extra_buttons.iter().any(|p| p.label == label) {
-+                    let mut placement = placement;
-+                    placement.sanitize();
-+                    let toggle = json.get("triggerModes").and_then(|v| v.get(id)).and_then(|v| v.as_str())
-+                        == Some("toggle");
-+                    self.extra_buttons.push(ExtraButton { label: label.to_owned(), placement, toggle });
-+                }
-+            }
-+        }
-+        if let Some(deleted) = deleted {
-+            for id in deleted.iter().filter_map(|v| v.as_str()) {
-+                if let Some(control) = Control::from_launcher_id(id) {
-+                    self.button_visibility[control as usize] = HIDDEN;
-+                }
-+            }
-+        }
-+        if let Some(hidden) = json.get("hidden").and_then(|v| v.as_array()) {
-+            for id in hidden.iter().filter_map(|v| v.as_str()) {
-+                if let Some(control) = Control::from_launcher_id(id) {
-+                    self.button_visibility[control as usize] = HIDDEN;
-+                }
-+            }
-+        }
-+        self.sanitize();
-+    }
-+
-     pub fn sanitize(&mut self) {
-         // Only the D-pad has a split variant (see `Mode::SCHEMES`).
-         if self.mode != Mode::Dpad {
-@@ -284,7 +603,9 @@ impl Settings {
-         ] {
-             *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
-         }
--        self.button_scale = finite_or(self.button_scale, 1.0).clamp(0.5, 2.0);
-+        self.joystick_deadzone = finite_or(self.joystick_deadzone, 0.16).clamp(0.05, 0.35);
-+        self.button_style = self.button_style.min(2);
-+        self.button_scale = finite_or(self.button_scale, 1.0).clamp(0.5, 2.5);
-         self.circle_size = finite_or(self.circle_size, 32.0).clamp(16.0, 64.0);
-         self.dynamic_area_x = finite_or(self.dynamic_area_x, 0.25).clamp(0.0, 1.0);
-         self.dynamic_area_y = finite_or(self.dynamic_area_y, 1.0).clamp(0.0, 1.0);
-@@ -312,6 +633,26 @@ impl Settings {
-         }
-     }
- 
-+    /// Shared bounds, in GUI units, for drawing and tapping the menu back button.
-+    pub fn menu_escape_rect(&self, inventory: bool, width: f32, height: f32) -> [f32; 4] {
-+        let placement = self.menu_escape[if inventory { 0 } else { 1 }];
-+        let h = (placement.size * height).min(height);
-+        let w = (placement.effective_width() * height).min(width);
-+        let [x, y] = placement.center;
-+        [(x * width - w / 2.0).clamp(0.0, (width - w).max(0.0)),
-+         (y * height - h / 2.0).clamp(0.0, (height - h).max(0.0)), w, h]
-+    }
-+
-+    /// Shared bounds for the keyboard toggle in a menu.
-+    pub fn menu_keyboard_rect(&self, inventory: bool, width: f32, height: f32) -> [f32; 4] {
-+        let placement = self.menu_keyboard[if inventory { 0 } else { 1 }];
-+        let h = (placement.size * height).min(height);
-+        let w = (placement.effective_width() * height).min(width);
-+        let [x, y] = placement.center;
-+        [(x * width - w / 2.0).clamp(0.0, (width - w).max(0.0)),
-+         (y * height - h / 2.0).clamp(0.0, (height - h).max(0.0)), w, h]
-+    }
-+
-     /// The layout slot a control is drawn in (jump and sneak may trade places).
-     pub fn slot(&self, c: Control) -> usize {
-         let swap = self.mode == Mode::Dpad && self.swap_jump_sneak;
-@@ -399,6 +740,26 @@ mod tests {
-         assert_eq!(read, s);
-     }
- 
-+    #[test]
-+    fn menu_keyboard_positions_are_edited_per_screen() {
-+        let file = temp_file("menu-keyboard");
-+        std::fs::write(
-+            &file,
-+            br#"{"layout":{"inventoryKeyboard":{"x":0.25,"y":0.1,"size":0.08,"width":0.3},"pauseKeyboard":{"x":0.7,"y":0.2,"size":0.1}}}"#,
-+        )
-+        .unwrap();
-+        let mut s = Settings::default();
-+        s.apply_launcher_keymap(&file);
-+        std::fs::remove_file(&file).unwrap();
-+        assert_eq!(s.menu_keyboard[0].center, [0.25, 0.1]);
-+        assert!((s.menu_keyboard[0].width - 0.3).abs() < 0.0001);
-+        assert_eq!(s.menu_keyboard[1].center, [0.7, 0.2]);
-+        assert!((s.menu_keyboard[1].width - 0.22).abs() < 0.0001);
-+        let [x, y, w, h] = s.menu_keyboard_rect(true, 1600.0, 900.0);
-+        assert!((x + w / 2.0 - 400.0).abs() < 0.1);
-+        assert!((y + h / 2.0 - 90.0).abs() < 0.1);
-+    }
-+
-     #[test]
-     fn missing_bad_or_partial_files_fall_back_to_defaults() {
-         assert_eq!(Settings::load(&temp_file("absent")), Settings::default());
-@@ -424,6 +785,7 @@ mod tests {
-         s.layouts[0][0] = Placement {
-             center: [f32::NAN, 7.0],
-             size: 0.0,
-+            width: 0.0,
-             opacity: f32::INFINITY,
-         };
-         s.sanitize();
-@@ -475,7 +837,7 @@ mod tests {
-         );
-         s.button_scale = 9.0;
-         s.sanitize();
--        assert_eq!(s.button_scale, 2.0);
-+        assert_eq!(s.button_scale, 2.5);
-     }
- 
-     #[test]
 diff --git a/crates/horizon-client/Cargo.toml b/crates/horizon-client/Cargo.toml
 index 7b7a557..8b097d7 100644
 --- a/crates/horizon-client/Cargo.toml

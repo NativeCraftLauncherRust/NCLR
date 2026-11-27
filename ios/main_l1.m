@@ -1019,6 +1019,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *positions;
 @property (nonatomic, strong) NSMutableSet<NSString *> *deletedKeys;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *triggerModes;
+@property (nonatomic, strong) NSMutableSet<NSString *> *swipeThroughKeys;
 @property (nonatomic, assign) CGFloat buttonSize;
 @property (nonatomic, assign) CGFloat opacity;
 @property (nonatomic, copy) NSString *touchMode;
@@ -1098,6 +1099,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     self.opacity = 0.55;
     self.layoutVersion = 2;
     self.deletedKeys = [NSMutableSet set];
+    self.swipeThroughKeys = [NSMutableSet set];
     self.menuKeys = [NSMutableArray array];
     self.leftHanded = NO;
     self.joystickSprint = NO;
@@ -1195,6 +1197,13 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     }
     if ([json[@"triggerModes"] isKindOfClass:NSDictionary.class]) {
         self.triggerModes = [json[@"triggerModes"] mutableCopy];
+    }
+    NSArray *swipeThrough = json[@"swipeThrough"];
+    if ([swipeThrough isKindOfClass:NSArray.class]) {
+        [self.swipeThroughKeys removeAllObjects];
+        for (id key in swipeThrough) {
+            if ([key isKindOfClass:NSString.class]) [self.swipeThroughKeys addObject:key];
+        }
     }
     NSNumber *deadzone = json[@"joystickDeadzone"];
     if ([deadzone isKindOfClass:[NSNumber class]]) {
@@ -1374,6 +1383,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         @"move" : @{ @"x" : @0.14, @"y" : @0.74, @"size" : @0.28 },
     } mutableCopy];
     [self.hiddenKeys setSet:[NSSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]]];
+    [self.swipeThroughKeys removeAllObjects];
 }
 
 - (BOOL)isHidden:(NSString *)key {
@@ -1456,6 +1466,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         @"bindings" : self.bindings ?: @{},
         @"layout" : self.positions ?: @{},
         @"triggerModes" : self.triggerModes ?: @{},
+        @"swipeThrough" : self.swipeThroughKeys.allObjects ?: @[],
     };
     NSData *data = [NSJSONSerialization dataWithJSONObject:json
                                                    options:NSJSONWritingPrettyPrinted
@@ -3599,6 +3610,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @property (nonatomic, strong) UISlider *keySizeSlider;
 @property (nonatomic, strong) UISlider *keyWidthSlider;
 @property (nonatomic, strong) UISegmentedControl *triggerControl;
+@property (nonatomic, strong) UISwitch *swipeThroughSwitch;
 @property (nonatomic, strong) UIButton *deleteKeyButton;
 @property (nonatomic, strong) UISegmentedControl *layoutScreenControl;
 @property (nonatomic, strong) UISlider *keyXSlider;
@@ -4192,6 +4204,19 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.triggerControl.enabled = NO;
     self.triggerControl.selectedSegmentIndex = 0;
     [self.triggerControl addTarget:self action:@selector(triggerChanged:) forControlEvents:UIControlEventValueChanged];
+    UILabel *swipeThroughLabel = [self label:@"穿透滑屏" size:12.0 weight:UIFontWeightSemibold
+                                         color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
+    self.swipeThroughSwitch = [[UISwitch alloc] init];
+    self.swipeThroughSwitch.enabled = NO;
+    self.swipeThroughSwitch.onTintColor = NCLRAccent();
+    self.swipeThroughSwitch.accessibilityLabel = @"允许拖动穿过此按键转动视角";
+    [self.swipeThroughSwitch addTarget:self action:@selector(swipeThroughChanged:)
+                      forControlEvents:UIControlEventValueChanged];
+    UIStackView *swipeThroughRow = [[UIStackView alloc] initWithArrangedSubviews:
+        @[swipeThroughLabel, [UIView new], self.swipeThroughSwitch]];
+    swipeThroughRow.axis = UILayoutConstraintAxisHorizontal;
+    swipeThroughRow.alignment = UIStackViewAlignmentCenter;
+    swipeThroughRow.spacing = 8;
     UILabel *inspectorTitle = [self eyebrow:@"选中按键"];
     inspectorTitle.textColor = NCLRAccent();
     self.keyEditTitle.numberOfLines = 1;
@@ -4223,7 +4248,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         row.spacing = 10;
         [inspector addObject:row];
     }
-    [inspector addObjectsFromArray:@[keyWidthRow, keySizeRow, keyVisibleRow, self.triggerControl, self.deleteKeyButton]];
+    [inspector addObjectsFromArray:@[keyWidthRow, keySizeRow, keyVisibleRow,
+                                      self.triggerControl, swipeThroughRow, self.deleteKeyButton]];
     UIStackView *keyStack = [[UIStackView alloc] initWithArrangedSubviews:inspector];
     keyStack.axis = UILayoutConstraintAxisVertical;
     keyStack.spacing = 9.0;
@@ -4657,6 +4683,11 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.triggerControl.enabled = key.length > 0 && !NCLRIsMenuKey(key) && !menuCanvasKey && ![key isEqualToString:@"move"];
     self.triggerControl.selectedSegmentIndex = key.length > 0 &&
         [NCLRKeymap.shared.triggerModes[key] isEqualToString:@"toggle"] ? 1 : 0;
+    self.swipeThroughSwitch.enabled = key.length > 0 && !NCLRIsMenuKey(key) &&
+        !menuCanvasKey && ![key isEqualToString:@"move"] &&
+        ![key isEqualToString:@"keyboard"];
+    self.swipeThroughSwitch.on = key.length > 0 &&
+        [NCLRKeymap.shared.swipeThroughKeys containsObject:key];
     self.keySizeSlider.enabled = key.length > 0;
     self.keyVisibleSwitch.enabled = key.length > 0 && !NCLRIsMenuKey(key) && !menuCanvasKey;
     NSDictionary *position = key.length ? NCLRKeymap.shared.positions[key] : nil;
@@ -4682,7 +4713,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     return @{@"positions": [keymap.positions copy], @"hidden": [keymap.hiddenKeys copy],
              @"bindings": [keymap.bindings copy], @"deletedKeys": [keymap.deletedKeys copy],
              @"menuKeys": [keymap.menuKeys mutableCopy],
-             @"triggerModes": [keymap.triggerModes copy] ?: @{}};
+             @"triggerModes": [keymap.triggerModes copy] ?: @{},
+             @"swipeThrough": [keymap.swipeThroughKeys copy] ?: [NSSet set]};
 }
 
 - (void)deleteSelectedKey {
@@ -4699,6 +4731,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     } else {
         [NCLRKeymap.shared.deletedKeys addObject:key];
     }
+    [NCLRKeymap.shared.swipeThroughKeys removeObject:key];
     [self pushUndo:before];
     [NCLRKeymap.shared save];
     [self selectKey:nil];
@@ -4712,6 +4745,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     keys.deletedKeys = [snapshot[@"deletedKeys"] mutableCopy];
     keys.menuKeys = [snapshot[@"menuKeys"] mutableCopy] ?: [NSMutableArray array];
     keys.triggerModes = [snapshot[@"triggerModes"] mutableCopy];
+    keys.swipeThroughKeys = [snapshot[@"swipeThrough"] mutableCopy] ?: [NSMutableSet set];
     [keys save];
     [self refreshPreviewButtons];
     [self selectKey:self.selectedKey];
@@ -4723,6 +4757,17 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NSDictionary *before = [self keyLayoutSnapshot];
     if (!keymap.triggerModes) keymap.triggerModes = [NSMutableDictionary dictionary];
     keymap.triggerModes[self.selectedKey] = sender.selectedSegmentIndex == 1 ? @"toggle" : @"tap";
+    [self pushUndo:before];
+    [keymap save];
+}
+
+- (void)swipeThroughChanged:(UISwitch *)sender {
+    if (!sender.enabled || self.selectedKey.length == 0) return;
+    NCLRKeymap *keymap = NCLRKeymap.shared;
+    NSDictionary *before = [self keyLayoutSnapshot];
+    if (!keymap.swipeThroughKeys) keymap.swipeThroughKeys = [NSMutableSet set];
+    if (sender.on) [keymap.swipeThroughKeys addObject:self.selectedKey];
+    else [keymap.swipeThroughKeys removeObject:self.selectedKey];
     [self pushUndo:before];
     [keymap save];
 }
