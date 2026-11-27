@@ -480,7 +480,9 @@ static NSString *NCLRModIdentifier(NSString *path) {
 @interface NCLRGyro : NSObject
 @property (nonatomic, strong) CMMotionManager *motion;
 @property (nonatomic, strong) NSTimer *retry;
-@property (nonatomic, weak) UIWindowScene *scene;
+@property (nonatomic, strong) UIWindowScene *scene;
+@property (nonatomic, strong) NSOperationQueue *motionQueue;
+@property (nonatomic, assign) UIInterfaceOrientation orientation;
 @property (nonatomic, assign) CGFloat sensitivity;
 @property (nonatomic, assign) BOOL invertX;
 @property (nonatomic, assign) BOOL invertY;
@@ -504,6 +506,10 @@ static NSString *NCLRModIdentifier(NSString *path) {
 - (instancetype)init {
     self = [super init];
     if (self) {
+        _motionQueue = [[NSOperationQueue alloc] init];
+        _motionQueue.maxConcurrentOperationCount = 1;
+        _motionQueue.qualityOfService = NSQualityOfServiceUserInteractive;
+        _orientation = UIInterfaceOrientationLandscapeRight;
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
         [center addObserver:self selector:@selector(appBecameActive)
                        name:UIApplicationDidBecomeActiveNotification object:nil];
@@ -518,6 +524,17 @@ static NSString *NCLRModIdentifier(NSString *path) {
                invertX:(BOOL)invertX
                invertY:(BOOL)invertY {
     self.scene = scene;
+    if (!scene) {
+        for (UIScene *connected in UIApplication.sharedApplication.connectedScenes) {
+            if ([connected isKindOfClass:UIWindowScene.class]) {
+                self.scene = (UIWindowScene *)connected;
+                break;
+            }
+        }
+    }
+    UIInterfaceOrientation orientation = self.scene.interfaceOrientation;
+    self.orientation = UIInterfaceOrientationIsLandscape(orientation)
+        ? orientation : UIInterfaceOrientationLandscapeRight;
     self.sensitivity = sensitivity;
     self.invertX = invertX;
     self.invertY = invertY;
@@ -559,6 +576,17 @@ static NSString *NCLRModIdentifier(NSString *path) {
 - (void)attach {
     if (!self.enabled) return;
     if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+    if (!self.scene) {
+        for (UIScene *connected in UIApplication.sharedApplication.connectedScenes) {
+            if ([connected isKindOfClass:UIWindowScene.class]) {
+                self.scene = (UIWindowScene *)connected;
+                break;
+            }
+        }
+    }
+    UIInterfaceOrientation sceneOrientation = self.scene.interfaceOrientation;
+    self.orientation = UIInterfaceOrientationIsLandscape(sceneOrientation)
+        ? sceneOrientation : UIInterfaceOrientationLandscapeRight;
     if (!self.motion) {
         self.motion = [CMMotionManager new];
     }
@@ -573,26 +601,31 @@ static NSString *NCLRModIdentifier(NSString *path) {
     __block double smoothPitch = 0.0;
     __block UIInterfaceOrientation lastOrientation = UIInterfaceOrientationUnknown;
     __weak typeof(self) weakSelf = self;
-    __weak UIWindowScene *gameScene = self.scene;
-    [self.motion startDeviceMotionUpdatesToQueue:NSOperationQueue.mainQueue
+    [self.motion startDeviceMotionUpdatesToQueue:self.motionQueue
                                      withHandler:^(CMDeviceMotion *sample, NSError *error) {
         NCLRGyro *strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf.enabled) return;
         if (error) {
             previous = 0;
             smoothYaw = smoothPitch = 0.0;
             lastOrientation = UIInterfaceOrientationUnknown;
-            [strongSelf stopUpdates];
-            [strongSelf scheduleRetry];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NCLRGyro *retrySelf = weakSelf;
+                [retrySelf stopUpdates];
+                [retrySelf scheduleRetry];
+            });
             return;
         }
-        if (!sample || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+        if (!sample) {
             previous = 0;
             smoothYaw = smoothPitch = 0.0;
             lastOrientation = UIInterfaceOrientationUnknown;
             return;
         }
-        UIInterfaceOrientation orientation = gameScene.interfaceOrientation;
-        if (!UIInterfaceOrientationIsLandscape(orientation)) return;
+        UIInterfaceOrientation orientation = strongSelf.orientation;
+        if (!UIInterfaceOrientationIsLandscape(orientation)) {
+            orientation = UIInterfaceOrientationLandscapeRight;
+        }
         if (orientation != lastOrientation) {
             lastOrientation = orientation;
             previous = 0;
@@ -601,8 +634,11 @@ static NSString *NCLRModIdentifier(NSString *path) {
         }
         NSTimeInterval elapsed = previous > 0 ? sample.timestamp - previous : 0;
         previous = sample.timestamp;
-        if (elapsed <= 0 || elapsed > 0.04 ||
-            NSProcessInfo.processInfo.systemUptime - sample.timestamp > 0.08) {
+        // Motion runs on its own queue so rendering cannot starve it. A busy
+        // main thread may still deliver samples somewhat late, so tolerate a
+        // few frames rather than discarding every one of them.
+        if (elapsed <= 0 || elapsed > 0.15 ||
+            NSProcessInfo.processInfo.systemUptime - sample.timestamp > 0.35) {
             previous = 0;
             smoothYaw = smoothPitch = 0.0;
             return;
@@ -1113,7 +1149,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     self.sprintButton = YES;
     self.buttonStyle = 0;
     self.iconLabels = NO;
-    self.hiddenKeys = [NSMutableSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield", @"keyboard"]];
+    self.hiddenKeys = [NSMutableSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]];
     self.touchMode = @"crosshair";
     self.dynamicJoystick = NO;
     self.positions = [@{
@@ -1272,6 +1308,16 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
             if ([key isKindOfClass:[NSString class]]) [self.hiddenKeys addObject:key];
         }
     }
+    // The system-keyboard control is now a persistent, editable overlay.
+    [self.hiddenKeys removeObject:@"keyboard"];
+    [self.deletedKeys removeObject:@"keyboard"];
+    if (self.bindings[@"keyboard"] == nil) {
+        self.bindings[@"keyboard"] = @"键盘";
+    }
+    if (self.positions[@"keyboard"] == nil) {
+        self.positions[@"keyboard"] = @{ @"x" : @0.66, @"y" : @0.12,
+                                         @"size" : @0.075, @"width" : @0.075 };
+    }
     if (self.bindings[@"move"] == nil) {
         self.bindings[@"move"] = @"移动";
     }
@@ -1363,7 +1409,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         @"keyboard" : @{ @"x" : @0.66, @"y" : @0.12, @"size" : @0.065 },
         @"move" : @{ @"x" : @0.14, @"y" : @0.74, @"size" : @0.28 },
     } mutableCopy];
-    [self.hiddenKeys setSet:[NSSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield", @"keyboard"]]];
+    [self.hiddenKeys setSet:[NSSet setWithArray:@[@"settings", @"debug", @"perspective", @"offhand", @"shield"]]];
 }
 
 - (BOOL)isHidden:(NSString *)key {
@@ -4030,6 +4076,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.canvasStatus.lineBreakMode = NSLineBreakByTruncatingTail;
     self.undoTool = [self canvasTool:@"arrow.uturn.backward" label:@"撤销" action:@selector(undoTapped)];
     self.redoTool = [self canvasTool:@"arrow.uturn.forward" label:@"重做" action:@selector(redoTapped)];
+    UIButton *keyboardTool = [self canvasTool:@"keyboard" label:@"编辑系统键盘按钮位置"
+                                       action:@selector(editKeyboardOverlay)];
     self.gridTool = [self canvasTool:@"grid" label:@"显示或隐藏网格" action:@selector(toggleGrid)];
     self.canvasClose = [self canvasTool:@"arrow.up.left.and.arrow.down.right" label:@"全屏编辑" action:@selector(toggleCanvas)];
     UIButton *more = [self canvasTool:@"ellipsis" label:@"更多布局操作" action:NULL];
@@ -4046,7 +4094,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     ]];
     more.showsMenuAsPrimaryAction = YES;
     UIStackView *toolbar = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.canvasStatus, self.undoTool, self.redoTool, self.gridTool, self.canvasClose, more]];
+        @[self.canvasStatus, self.undoTool, self.redoTool, keyboardTool,
+          self.gridTool, self.canvasClose, more]];
     toolbar.alignment = UIStackViewAlignmentCenter;
     toolbar.spacing = 2;
     toolbar.translatesAutoresizingMaskIntoConstraints = NO;
@@ -5033,6 +5082,27 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 }
 
 - (void)dynamicChanged:(UISwitch *)sender {
+}
+
+- (void)editKeyboardOverlay {
+    NCLRKeymap *keys = NCLRKeymap.shared;
+    [keys.hiddenKeys removeObject:@"keyboard"];
+    [keys.deletedKeys removeObject:@"keyboard"];
+    if (keys.bindings[@"keyboard"] == nil) keys.bindings[@"keyboard"] = @"键盘";
+    if (keys.positions[@"keyboard"] == nil) {
+        keys.positions[@"keyboard"] = @{ @"x" : @0.66, @"y" : @0.12,
+                                          @"size" : @0.075, @"width" : @0.075 };
+    }
+    [keys save];
+    [self refreshPreviewButtons];
+    [self selectKey:@"keyboard"];
+    [self.preview setNeedsLayout];
+    [self.view layoutIfNeeded];
+    UIButton *button = self.previewButtons[@"keyboard"];
+    if (button) {
+        CGRect target = [button convertRect:button.bounds toView:self.scroll];
+        [self.scroll scrollRectToVisible:CGRectInset(target, -20.0, -20.0) animated:YES];
+    }
 }
 
 - (void)addKeyTapped {
