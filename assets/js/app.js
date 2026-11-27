@@ -5,9 +5,9 @@
   "use strict";
 
   var ROUTES = [
-    { id: "home", label: "主页", title: "NCLR — Horizon 26.3 的 macOS 启动器" },
+    { id: "home", label: "主页", title: "NCLR — iOS 上的 Minecraft: Java Edition 启动器" },
     { id: "engine", label: "引擎", title: "引擎 — NCLR" },
-    { id: "resources", label: "资源", title: "资源账本 — NCLR" },
+    { id: "resources", label: "资源", title: "设备端资源 — NCLR" },
     { id: "security", label: "边界", title: "边界 — NCLR" },
     { id: "ios", label: "iOS", title: "iOS — NCLR" },
     { id: "about", label: "关于", title: "关于 — NCLR" },
