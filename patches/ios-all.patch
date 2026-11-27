@@ -1634,7 +1634,7 @@ index 7b7a557..8b097d7 100644
  # DirectX 12 driver (`graphicsApi`, graphics.rs).
  wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 diff --git a/crates/horizon-client/src/entry.rs b/crates/horizon-client/src/entry.rs
-index 78cfdee..213c4a2 100644
+index 78cfdee..b20da24 100644
 --- a/crates/horizon-client/src/entry.rs
 +++ b/crates/horizon-client/src/entry.rs
 @@ -3,6 +3,9 @@
@@ -1666,7 +1666,7 @@ index 78cfdee..213c4a2 100644
      Startup {
          launch,
          options,
-@@ -47,6 +54,71 @@ pub fn prepare() -> Startup {
+@@ -47,6 +54,86 @@ pub fn prepare() -> Startup {
      }
  }
  
@@ -1711,6 +1711,21 @@ index 78cfdee..213c4a2 100644
 +    IOS_HARDWARE_MOUSE.load(Ordering::SeqCst)
 +}
 +
++#[cfg(target_os = "ios")]
++static IOS_POINTER_HIDDEN: AtomicBool = AtomicBool::new(false);
++
++/// Whether the game currently holds the pointer (playing) and the shell
++/// should hide the system cursor. Menus release it so their cursor returns.
++#[cfg(target_os = "ios")]
++pub fn set_ios_pointer_hidden(hidden: bool) {
++    IOS_POINTER_HIDDEN.store(hidden, Ordering::SeqCst);
++}
++
++#[cfg(target_os = "ios")]
++pub fn ios_pointer_hidden() -> bool {
++    IOS_POINTER_HIDDEN.load(Ordering::SeqCst)
++}
++
 +/// iOS startup: the app has no command line, so the shell supplies the resource
 +/// directory and the writable game directory. The synthetic command line is
 +/// accepted by the same parser the desktop executable uses.
@@ -1739,7 +1754,7 @@ index 78cfdee..213c4a2 100644
  /// Cells cannot roll back: each copy merges all requesting rows, so stopping the whole
  /// start is how we ensure none of a refused mod's rows run.
 diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.rs
-index 55bd735..39198c4 100644
+index 55bd735..9f49e1a 100644
 --- a/crates/horizon-client/src/game.rs
 +++ b/crates/horizon-client/src/game.rs
 @@ -1113,6 +1113,10 @@ struct Game<'a> {
@@ -1820,7 +1835,7 @@ index 55bd735..39198c4 100644
          }
          batch
      }
-@@ -10262,6 +10312,28 @@ impl Game<'_> {
+@@ -10262,6 +10312,35 @@ impl Game<'_> {
                      horizon_client::spans::time("recover_device", || self.recover_device())?;
                      self.observe_fullscreen();
                      self.sync_ime();
@@ -1845,11 +1860,18 @@ index 55bd735..39198c4 100644
 +                        {
 +                            self.captured = true;
 +                        }
++                        // The shell hides its system pointer while the game
++                        // holds the pointer, and brings it back for menus.
++                        crate::entry::set_ios_pointer_hidden(
++                            self.captured
++                                && self.screen == Screen::Playing
++                                && self.title.is_none(),
++                        );
 +                    }
                      let now = Instant::now();
                      horizon_threads::work::tick_start();
                      let elapsed = now.duration_since(self.previous);
-@@ -10701,6 +10773,8 @@ impl<'a> Game<'a> {
+@@ -10701,6 +10780,8 @@ impl<'a> Game<'a> {
              unclaimed_modifiers: None,
              focus_after_run: None,
              ime_allowed: false,
@@ -1858,7 +1880,7 @@ index 55bd735..39198c4 100644
              ime_area: None,
              focus_lost: None,
              modifiers: winit::keyboard::ModifiersState::empty(),
-@@ -10741,6 +10815,20 @@ impl<'a> Game<'a> {
+@@ -10741,6 +10822,20 @@ impl<'a> Game<'a> {
              previous: now,
              last_input: now,
              pad: Default::default(),

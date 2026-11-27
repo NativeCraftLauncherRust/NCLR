@@ -28,6 +28,20 @@ pub extern "C" fn horizon_ios_set_hardware_input(attached: i32, mouse: i32) {
     let _ = (attached, mouse);
 }
 
+/// Whether the game currently holds the pointer, so the shell can hide its
+/// system cursor while playing and restore it for menus.
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_pointer_hidden() -> i32 {
+    #[cfg(target_os = "ios")]
+    {
+        i32::from(horizon_client::entry::ios_pointer_hidden())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        0
+    }
+}
+
 /// A hardware key from GCKeyboard. `usage` is a USB HID keyboard usage code.
 #[unsafe(no_mangle)]
 pub extern "C" fn horizon_ios_hardware_key(
