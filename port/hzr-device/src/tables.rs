@@ -41,14 +41,25 @@ pub const COMMANDS: [&str; 28] = [
 
 /// Run every table command with `out` as the resource root.
 pub fn generate(client_jar: &Path, out: &Path) -> Result<(), String> {
+    generate_with_progress(client_jar, out, &|_, _| {})
+}
+
+/// Same, reporting `(done, total)` before each command runs.
+pub fn generate_with_progress(
+    client_jar: &Path,
+    out: &Path,
+    progress: &dyn Fn(usize, usize),
+) -> Result<(), String> {
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    for command in COMMANDS {
+    for (index, command) in COMMANDS.iter().enumerate() {
+        progress(index, COMMANDS.len());
         let target = target(command, out);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
         run(command, client_jar, &target)?;
     }
+    progress(COMMANDS.len(), COMMANDS.len());
     Ok(())
 }
 

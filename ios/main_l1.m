@@ -98,6 +98,21 @@ static void NCLRLoadRemoteAvatar(NSString *url, UIImageView *imageView, UILabel 
 @property (atomic, strong) NSURLSession *downloadSession;
 - (void)cancel;
 @end
+
+/// Called from the Rust assembler once per generated table, so the launcher
+/// shows real progress while the phone builds the resource tree.
+void NCLRAssemblyProgress(int done, int total) {
+    if (total <= 0) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NCLRResourcePreparer *preparer = NCLRResourcePreparer.shared;
+        NSString *line = [NSString stringWithFormat:@"生成资源表 %d/%d…", done, total];
+        preparer.lastLine = line;
+        preparer.progressValue = 0.90f + 0.06f * ((float)done / (float)total);
+        [[NSNotificationCenter defaultCenter] postNotificationName:NCLRPrepareProgressNotification
+                                                            object:preparer
+                                                          userInfo:@{@"line": line}];
+    });
+}
 extern const char *horizon_ios_assemble_from_jar(const char *client_jar, const char *index,
                                                  const char *store, const char *out);
 

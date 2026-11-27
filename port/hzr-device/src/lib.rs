@@ -418,6 +418,20 @@ fn finish(
 /// every table is generated on device first, then the same asset and derived
 /// pipeline runs. This is the path that lets the app stop distributing
 /// Minecraft's derived data.
+#[cfg(target_os = "ios")]
+unsafe extern "C" {
+    fn NCLRAssemblyProgress(done: i32, total: i32);
+}
+
+fn assembly_progress(done: usize, total: usize) {
+    #[cfg(target_os = "ios")]
+    unsafe {
+        NCLRAssemblyProgress(done as i32, total as i32);
+    }
+    #[cfg(not(target_os = "ios"))]
+    let _ = (done, total);
+}
+
 pub fn assemble_from_jar(
     client_jar: &Path,
     index: &Path,
@@ -429,7 +443,10 @@ pub fn assemble_from_jar(
         return Err(format!("{} is not empty", out.display()));
     }
     fs::create_dir_all(out).map_err(|e| format!("{}: {}", out.display(), explain(&e)))?;
-    tables::generate(client_jar, out)?;
+    tables::generate_with_progress(client_jar, out, &|done, total| {
+        assembly_progress(done, total)
+    })?;
+    restore_generated_tables(out)?;
     finish(out, client_jar, index, store, &mut done)?;
     Ok(done)
 }
