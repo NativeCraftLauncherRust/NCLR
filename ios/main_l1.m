@@ -771,9 +771,6 @@ static void NCLRRestoreVisibleKeyWindow(void) {
 - (void)refreshDevices {
     NCLRRestoreVisibleKeyWindow();
     GCKeyboard *keyboard = GCKeyboard.coalescedKeyboard;
-    if (!keyboard) {
-        keyboard = GCKeyboard.keyboards.firstObject;
-    }
     GCMouse *mouse = GCMouse.current;
     if (!mouse) {
         mouse = GCMouse.mice.firstObject;
