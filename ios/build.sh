@@ -54,6 +54,7 @@ xcrun --sdk iphoneos clang \
     -framework Foundation \
     -framework CoreFoundation \
     -framework CoreGraphics \
+    -framework CoreImage \
     -framework Metal \
     -framework QuartzCore \
     -framework Security \
@@ -101,7 +102,8 @@ if [ -n "${SHIP_BUNDLE:-}" ]; then
 fi
 
 # The wasm loader finds one or more std members beside the executable.
-if [ -n "${WASM_STD_DIR:-}" ]; then    test -d "$WASM_STD_DIR"
+if [ -n "${WASM_STD_DIR:-}" ]; then
+    test -d "$WASM_STD_DIR"
     mkdir -p "$APP/horizon-wasm-std"
     cp "$WASM_STD_DIR/"*.wasm "$APP/horizon-wasm-std/"
     ls -lh "$APP/horizon-wasm-std/"
@@ -110,15 +112,6 @@ if [ -n "${WASM_STD:-}" ]; then
     test -f "$WASM_STD"
     cp "$WASM_STD" "$APP/horizon-wasm-std.wasm"
     ls -lh "$APP/horizon-wasm-std.wasm"
-fi
-
-# The shader packs the app ships (SHADER_PACK_DIR): the launcher copies them into
-# Documents/shaderpacks on the first start, where the game lists them.
-if [ -n "${SHADER_PACK_DIR:-}" ]; then
-    test -d "$SHADER_PACK_DIR"
-    mkdir -p "$APP/shaderpacks"
-    cp -R "$SHADER_PACK_DIR/." "$APP/shaderpacks/"
-    ls -lh "$APP/shaderpacks/"
 fi
 
 # Ad-hoc signature only: the IPA stays re-signable by Sideloadly/AltStore.
