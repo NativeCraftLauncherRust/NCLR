@@ -480,9 +480,7 @@ static NSString *NCLRModIdentifier(NSString *path) {
 @interface NCLRGyro : NSObject
 @property (nonatomic, strong) CMMotionManager *motion;
 @property (nonatomic, strong) NSTimer *retry;
-@property (nonatomic, strong) UIWindowScene *scene;
-@property (nonatomic, strong) NSOperationQueue *motionQueue;
-@property (assign) UIInterfaceOrientation orientation;
+@property (nonatomic, weak) UIWindowScene *scene;
 @property (nonatomic, assign) CGFloat sensitivity;
 @property (nonatomic, assign) BOOL invertX;
 @property (nonatomic, assign) BOOL invertY;
@@ -506,10 +504,6 @@ static NSString *NCLRModIdentifier(NSString *path) {
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _motionQueue = [[NSOperationQueue alloc] init];
-        _motionQueue.maxConcurrentOperationCount = 1;
-        _motionQueue.qualityOfService = NSQualityOfServiceUserInteractive;
-        _orientation = UIInterfaceOrientationLandscapeRight;
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
         [center addObserver:self selector:@selector(appBecameActive)
                        name:UIApplicationDidBecomeActiveNotification object:nil];
@@ -524,17 +518,6 @@ static NSString *NCLRModIdentifier(NSString *path) {
                invertX:(BOOL)invertX
                invertY:(BOOL)invertY {
     self.scene = scene;
-    if (!scene) {
-        for (UIScene *connected in UIApplication.sharedApplication.connectedScenes) {
-            if ([connected isKindOfClass:UIWindowScene.class]) {
-                self.scene = (UIWindowScene *)connected;
-                break;
-            }
-        }
-    }
-    UIInterfaceOrientation orientation = self.scene.interfaceOrientation;
-    self.orientation = UIInterfaceOrientationIsLandscape(orientation)
-        ? orientation : UIInterfaceOrientationLandscapeRight;
     self.sensitivity = sensitivity;
     self.invertX = invertX;
     self.invertY = invertY;
@@ -576,17 +559,6 @@ static NSString *NCLRModIdentifier(NSString *path) {
 - (void)attach {
     if (!self.enabled) return;
     if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
-    if (!self.scene) {
-        for (UIScene *connected in UIApplication.sharedApplication.connectedScenes) {
-            if ([connected isKindOfClass:UIWindowScene.class]) {
-                self.scene = (UIWindowScene *)connected;
-                break;
-            }
-        }
-    }
-    UIInterfaceOrientation sceneOrientation = self.scene.interfaceOrientation;
-    self.orientation = UIInterfaceOrientationIsLandscape(sceneOrientation)
-        ? sceneOrientation : UIInterfaceOrientationLandscapeRight;
     if (!self.motion) {
         self.motion = [CMMotionManager new];
     }
@@ -601,31 +573,26 @@ static NSString *NCLRModIdentifier(NSString *path) {
     __block double smoothPitch = 0.0;
     __block UIInterfaceOrientation lastOrientation = UIInterfaceOrientationUnknown;
     __weak typeof(self) weakSelf = self;
-    [self.motion startDeviceMotionUpdatesToQueue:self.motionQueue
+    __weak UIWindowScene *gameScene = self.scene;
+    [self.motion startDeviceMotionUpdatesToQueue:NSOperationQueue.mainQueue
                                      withHandler:^(CMDeviceMotion *sample, NSError *error) {
         NCLRGyro *strongSelf = weakSelf;
-        if (!strongSelf || !strongSelf.enabled) return;
         if (error) {
             previous = 0;
             smoothYaw = smoothPitch = 0.0;
             lastOrientation = UIInterfaceOrientationUnknown;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                NCLRGyro *retrySelf = weakSelf;
-                [retrySelf stopUpdates];
-                [retrySelf scheduleRetry];
-            });
+            [strongSelf stopUpdates];
+            [strongSelf scheduleRetry];
             return;
         }
-        if (!sample) {
+        if (!sample || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
             previous = 0;
             smoothYaw = smoothPitch = 0.0;
             lastOrientation = UIInterfaceOrientationUnknown;
             return;
         }
-        UIInterfaceOrientation orientation = strongSelf.orientation;
-        if (!UIInterfaceOrientationIsLandscape(orientation)) {
-            orientation = UIInterfaceOrientationLandscapeRight;
-        }
+        UIInterfaceOrientation orientation = gameScene.interfaceOrientation;
+        if (!UIInterfaceOrientationIsLandscape(orientation)) return;
         if (orientation != lastOrientation) {
             lastOrientation = orientation;
             previous = 0;
@@ -634,11 +601,8 @@ static NSString *NCLRModIdentifier(NSString *path) {
         }
         NSTimeInterval elapsed = previous > 0 ? sample.timestamp - previous : 0;
         previous = sample.timestamp;
-        // Motion runs on its own queue so rendering cannot starve it. A busy
-        // main thread may still deliver samples somewhat late, so tolerate a
-        // few frames rather than discarding every one of them.
-        if (elapsed <= 0 || elapsed > 0.15 ||
-            NSProcessInfo.processInfo.systemUptime - sample.timestamp > 0.35) {
+        if (elapsed <= 0 || elapsed > 0.04 ||
+            NSProcessInfo.processInfo.systemUptime - sample.timestamp > 0.08) {
             previous = 0;
             smoothYaw = smoothPitch = 0.0;
             return;

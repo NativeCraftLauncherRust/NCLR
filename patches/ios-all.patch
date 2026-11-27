@@ -774,7 +774,30 @@ diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-cli
          }
          if let Some(point) = self.pointer() {
              let center = [point[0] * b.width, point[1] * b.height];
-@@ -64,30 +100,47 @@
+@@ -52,6 +88,22 @@
+         }
+     }
+ 
++    /// The persistent keyboard button, using the same atlas, shape, opacity
++    /// and label treatment as every other touch control.
++    pub fn draw_keyboard_overlay(&self, b: &mut HudBatch, a: &HudAtlas) {
++        let p = self.placement(Control::Keyboard);
++        let bounds = control_bounds(b, p.center, p.effective_width(), p.size);
++        button(
++            b,
++            a,
++            bounds,
++            "键盘",
++            false,
++            rgba(255, 255, 255, alpha(p.opacity)),
++            self.settings.button_style,
++        );
++    }
++
+     /// Whether a control shows as held: its button is down, or it latched.
+     fn held(&self, control: Control, state: &PadState) -> bool {
+         if control == Control::Sneak && self.sneaking {
+@@ -64,30 +116,47 @@
          })
      }
  
@@ -843,7 +866,7 @@ diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-cli
      }
  
      /// The joystick (a rim and a knob) or the D-pad (four arrow buttons).
-@@ -109,16 +162,17 @@
+@@ -109,16 +178,17 @@
              None if self.dynamic_joystick() => return,
              _ => p.center,
          };
@@ -866,7 +889,7 @@ diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-cli
          let [r, g, blue, opacity] = color.to_le_bytes();
          ring(b, a, middle, size / 2.0, color);
          disc(b, a, middle, size / 2.0, rgba(0, 0, 0, opacity / 3));
-@@ -147,14 +201,16 @@
+@@ -147,14 +217,16 @@
      ]
  }
  
@@ -890,7 +913,7 @@ diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-cli
      ]
  }
  
-@@ -171,42 +227,36 @@
+@@ -171,42 +243,36 @@
      label: &str,
      pressed: bool,
      color: u32,
@@ -952,7 +975,7 @@ diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-cli
      };
      let drop = if pressed { (h / 18.0).min(2.0) } else { 0.0 };
      let width = HudBatch::text_width(a, label);
-@@ -219,13 +269,21 @@
+@@ -219,13 +285,21 @@
          text,
          true,
      );
@@ -1242,7 +1265,18 @@ diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.
      frames: u64,
      /// The glint clock and options, read once per frame (game/interface/item_draw.rs).
      glint_frame: horizon_client::item_render::GlintFrame,
-@@ -5306,6 +5319,62 @@
+@@ -4823,6 +4836,10 @@
+         self.frame_graph
+             .draw(self.settings.horizon.overlay, &mut batch, &self.gui.atlas);
+         self.draw_pad_over_hud(&mut batch);
++        self.touch.viewport(batch.width as u32, batch.height as u32);
++        if !self.hardware_input_attached() {
++            self.touch.draw_keyboard_overlay(&mut batch, &self.gui.atlas);
++        }
+         batch
+     }
+     fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
+@@ -5306,6 +5323,39 @@
          self.draw_studio_bars(&mut batch);
          if show_hud {
              self.draw_pad_guide(&mut batch, guide_from);
@@ -1279,33 +1313,10 @@ diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.
 +            let (x, y) = self.cursor;
 +            batch.fill(&self.gui.atlas, x - 3.0, y - 3.0, 6.0, 6.0, rgba(0, 0, 0, 190));
 +            batch.fill(&self.gui.atlas, x - 2.0, y - 2.0, 4.0, 4.0, rgba(255, 255, 255, 230));
-+        }
-+        // The editable on-screen keyboard button is available on every UI,
-+        // including title, server-address, inventory, pause and play screens.
-+        self.touch.viewport(batch.width as u32, batch.height as u32);
-+        if let Some([kx, ky, kw, kh]) = self.keyboard_button_rect(batch.width, batch.height) {
-+            batch.fill(&self.gui.atlas, kx, ky, kw, kh, rgba(0, 0, 0, 220));
-+            if kw > 2.0 && kh > 2.0 {
-+                batch.fill(
-+                    &self.gui.atlas,
-+                    kx + 1.0,
-+                    ky + 1.0,
-+                    kw - 2.0,
-+                    kh - 2.0,
-+                    rgba(90, 90, 90, 235),
-+                );
-+            }
-+            self.native_text(
-+                &mut batch,
-+                "键盘",
-+                [kx + kw * 0.18, ky + (kh - 8.0).max(0.0) / 2.0],
-+                0xFFFFFFFF,
-+                true,
-+            );
          }
          batch
      }
-@@ -10262,6 +10331,28 @@
+@@ -10262,6 +10312,28 @@
                      horizon_client::spans::time("recover_device", || self.recover_device())?;
                      self.observe_fullscreen();
                      self.sync_ime();
@@ -1334,7 +1345,7 @@ diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.
                      let now = Instant::now();
                      horizon_threads::work::tick_start();
                      let elapsed = now.duration_since(self.previous);
-@@ -10701,6 +10792,8 @@
+@@ -10701,6 +10773,8 @@
              unclaimed_modifiers: None,
              focus_after_run: None,
              ime_allowed: false,
@@ -1343,7 +1354,7 @@ diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.
              ime_area: None,
              focus_lost: None,
              modifiers: winit::keyboard::ModifiersState::empty(),
-@@ -10741,6 +10834,20 @@
+@@ -10741,6 +10815,20 @@
              previous: now,
              last_input: now,
              pad: Default::default(),
@@ -1562,7 +1573,7 @@ diff --git a/crates/horizon-client/src/game/runtime/loading_screen.rs b/crates/h
 +        };
 +        if let App::Ready(game) = self {
 +            if let WindowEvent::Touch(touch) = &event
-+                && game.host.screen != Screen::Playing
++                && (game.host.screen != Screen::Playing || game.host.title.is_some())
 +                && touch.phase == winit::event::TouchPhase::Started
 +            {
 +                let size = game
