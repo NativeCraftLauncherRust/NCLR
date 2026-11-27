@@ -206,26 +206,6 @@ static NSDictionary *NCLRActiveOfflineProfile(void) {
     return profiles.firstObject;
 }
 
-static NSString *const NCLROfflineReadme =
-    @"Offline accounts: one JSON file per player in this folder.\n"
-     "\n"
-     "{\n"
-     "  \"name\": \"Steve\",\n"
-     "  \"uuid\": \"\",\n"
-     "  \"skin\": \"steve.png\",\n"
-     "  \"cape\": \"cape.png\",\n"
-     "  \"slim\": false,\n"
-     "  \"active\": true\n"
-     "}\n"
-     "\n"
-     "name  : 1-16 letters, digits or underscore (required).\n"
-     "uuid  : optional 32 hex digits; empty means OfflinePlayer:<name>.\n"
-     "skin  : optional PNG path, relative to this folder or absolute.\n"
-     "cape  : optional PNG path, relative to this folder or absolute.\n"
-     "slim  : true for the slim (Alex) arm model.\n"
-     "active: when no Microsoft account is signed in, this profile is used;\n"
-     "        otherwise the first file by name is used.\n";
-
 @class NCLRRootController;
 typedef NS_ENUM(NSInteger, NCLRThemeMode) {
     NCLRThemeModeSystem = 0,
@@ -1814,10 +1794,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                                                    attributes:nil
                                                         error:nil];
         NSString *readme = [accountDirectory stringByAppendingPathComponent:@"README.txt"];
-        if (![NSFileManager.defaultManager fileExistsAtPath:readme]) {
-            [NCLROfflineReadme writeToFile:readme atomically:YES
-                                  encoding:NSUTF8StringEncoding error:nil];
-        }
+        [NSFileManager.defaultManager removeItemAtPath:readme error:nil];
         if (_token.length == 0) {
             NSDictionary *profile = NCLRActiveOfflineProfile();
             if (profile) {
