@@ -449,8 +449,10 @@ diff --git a/crates/horizon-client-render/src/touch.rs b/crates/horizon-client-r
      /// Where the touch marker goes in the tap schemes: under a look finger, or
 @@ -392,14 +423,22 @@
              }
-             // In the crosshair schemes the attack button can steer while it mines.
-             Role::Button(Button::RightTrigger) => attack_look,
+-            // In the crosshair schemes the attack button can steer while it mines.
++            // The attack button steers only through the per-key swipe toggle below.
+-            Role::Button(Button::RightTrigger) => attack_look,
++            Role::Button(Button::RightTrigger) => false,
 +            Role::Extra(_) => false,
              _ => false,
 -        };
@@ -3436,3 +3438,28 @@ index b1ef89e..c2dbf14 100644
      let entries = value
          .get("fluid_state_definitions")
          .ok_or_else(|| {
+diff --git a/crates/horizon-client-render/src/touch/tests/gestures.rs b/crates/horizon-client-render/src/touch/tests/gestures.rs
+--- a/crates/horizon-client-render/src/touch/tests/gestures.rs
++++ b/crates/horizon-client-render/src/touch/tests/gestures.rs
+@@ -191,15 +191,17 @@
+ #[test]
+-fn the_attack_button_can_turn_the_camera_while_mining() {
+-    for enabled in [true, false] {
++fn the_attack_button_turns_the_camera_only_when_swipe_through_is_on() {
++    for swipe_through in [true, false] {
+         let mut t = TouchControls::default();
+-        t.settings.attack_button_look = enabled;
++        if swipe_through {
++            t.settings.swipe_buttons.push(Control::Attack as usize);
++        }
+         let start = t.placement(Control::Attack).center;
+         t.update(1, start, true, false);
+         assert_eq!(t.poll_state().triggers[1], 1.0);
+         let end = [start[0] - 0.2, start[1] - 0.1];
+-        assert_eq!(t.update(1, end, false, false) != [0.0; 2], enabled);
++        assert_eq!(t.update(1, end, false, false) != [0.0; 2], swipe_through);
+         assert_eq!(t.poll_state().triggers[1], 1.0);
+         t.update(1, end, false, true);
+         assert_eq!(t.poll_state().triggers[1], 0.0);
+     }
+ }

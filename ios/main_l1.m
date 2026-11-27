@@ -226,6 +226,7 @@ static BOOL NCLRPageTransitionBlurEnabled(void) {
     NSNumber *saved = [defaults objectForKey:kNCLRPageTransitionBlurKey];
     return saved == nil ? NO : saved.boolValue;
 }
+
 static void NCLRThemeResolveFromTraitCollection(UITraitCollection *traitCollection) {
     if (NCLRThemeModeValue == NCLRThemeModeDark) {
         NCLRDarkMode = YES;
@@ -471,19 +472,22 @@ static NSString *NCLRModIdentifier(NSString *path) {
 }
 @end
 
-// Runs on the main queue. Device motion is fused and low-pass filtered, then
-// integrated with hardware timestamps so frame drops do not change the turn.
-// The manager can report unavailable for a moment right after launch, and iOS
-// stops updates in the background, so this controller keeps retrying while a
-// game is running instead of giving up for the whole session.
+// Runs on a dedicated queue so the 120 FPS render loop cannot starve the
+// samples. Device motion is fused and low-pass filtered, then integrated with
+// hardware timestamps so frame drops do not change the turn. The manager can
+// report unavailable for a moment right after launch, and iOS stops updates
+// in the background, so this controller keeps retrying while a game is
+// running instead of giving up for the whole session.
 @interface NCLRGyro : NSObject
 @property (nonatomic, strong) CMMotionManager *motion;
+@property (nonatomic, strong) NSOperationQueue *queue;
 @property (nonatomic, strong) NSTimer *retry;
 @property (nonatomic, weak) UIWindowScene *scene;
 @property (nonatomic, assign) CGFloat sensitivity;
 @property (nonatomic, assign) BOOL invertX;
 @property (nonatomic, assign) BOOL invertY;
 @property (nonatomic, assign) BOOL enabled;
+@property (nonatomic, assign) double direction;
 + (instancetype)shared;
 - (void)startWithScene:(UIWindowScene *)scene
            sensitivity:(CGFloat)sensitivity
@@ -503,11 +507,16 @@ static NSString *NCLRModIdentifier(NSString *path) {
 - (instancetype)init {
     self = [super init];
     if (self) {
+        self.queue = [NSOperationQueue new];
+        self.queue.maxConcurrentOperationCount = 1;
+        self.queue.qualityOfService = NSQualityOfServiceUserInteractive;
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
         [center addObserver:self selector:@selector(appBecameActive)
                        name:UIApplicationDidBecomeActiveNotification object:nil];
         [center addObserver:self selector:@selector(appResignedActive)
                        name:UIApplicationWillResignActiveNotification object:nil];
+        [center addObserver:self selector:@selector(orientationChanged)
+                       name:UIDeviceOrientationDidChangeNotification object:nil];
     }
     return self;
 }
@@ -521,6 +530,7 @@ static NSString *NCLRModIdentifier(NSString *path) {
     self.invertX = invertX;
     self.invertY = invertY;
     self.enabled = YES;
+    [self readDirection];
     [self attach];
 }
 
@@ -530,11 +540,25 @@ static NSString *NCLRModIdentifier(NSString *path) {
 }
 
 - (void)appBecameActive {
-    if (self.enabled) [self attach];
+    if (self.enabled) {
+        [self readDirection];
+        [self attach];
+    }
 }
 
 - (void)appResignedActive {
     [self stopUpdates];
+}
+
+- (void)orientationChanged {
+    if (self.enabled) [self readDirection];
+}
+
+// Interface orientation must be read on the main queue. The app is locked to
+// landscape, so this sign only flips when the device is rotated 180 degrees.
+- (void)readDirection {
+    UIInterfaceOrientation orientation = self.scene.interfaceOrientation;
+    self.direction = orientation == UIInterfaceOrientationLandscapeLeft ? 1.0 : -1.0;
 }
 
 - (void)stopUpdates {
@@ -570,43 +594,29 @@ static NSString *NCLRModIdentifier(NSString *path) {
     __block NSTimeInterval previous = 0;
     __block double smoothYaw = 0.0;
     __block double smoothPitch = 0.0;
-    __block UIInterfaceOrientation lastOrientation = UIInterfaceOrientationUnknown;
     __weak typeof(self) weakSelf = self;
-    __weak UIWindowScene *gameScene = self.scene;
-    [self.motion startDeviceMotionUpdatesToQueue:NSOperationQueue.mainQueue
+    [self.motion startDeviceMotionUpdatesToQueue:self.queue
                                      withHandler:^(CMDeviceMotion *sample, NSError *error) {
         NCLRGyro *strongSelf = weakSelf;
-        if (error) {
+        if (error || !sample || !strongSelf || !strongSelf.enabled) {
             previous = 0;
             smoothYaw = smoothPitch = 0.0;
-            lastOrientation = UIInterfaceOrientationUnknown;
-            [strongSelf stopUpdates];
-            [strongSelf scheduleRetry];
-            return;
-        }
-        if (!sample || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
-            previous = 0;
-            smoothYaw = smoothPitch = 0.0;
-            lastOrientation = UIInterfaceOrientationUnknown;
-            return;
-        }
-        UIInterfaceOrientation orientation = gameScene.interfaceOrientation;
-        if (!UIInterfaceOrientationIsLandscape(orientation)) return;
-        if (orientation != lastOrientation) {
-            lastOrientation = orientation;
-            previous = 0;
-            smoothYaw = smoothPitch = 0.0;
+            if (error) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [NCLRGyro.shared stopUpdates];
+                    [NCLRGyro.shared scheduleRetry];
+                });
+            }
             return;
         }
         NSTimeInterval elapsed = previous > 0 ? sample.timestamp - previous : 0;
         previous = sample.timestamp;
-        if (elapsed <= 0 || elapsed > 0.04 ||
-            NSProcessInfo.processInfo.systemUptime - sample.timestamp > 0.08) {
+        if (elapsed <= 0 || elapsed > 0.1) {
             previous = 0;
             smoothYaw = smoothPitch = 0.0;
             return;
         }
-        double direction = orientation == UIInterfaceOrientationLandscapeLeft ? 1.0 : -1.0;
+        double direction = strongSelf.direction;
         double yawRate = sample.rotationRate.x;
         double pitchRate = sample.rotationRate.y;
         // Follow quick turns closely, while settling sensor noise when still.
@@ -683,6 +693,8 @@ static void NCLRRestoreVisibleKeyWindow(void) {
 @property (nonatomic, assign) CGSize cursorBounds;
 @property (nonatomic, assign) BOOL running;
 @property (nonatomic, strong) NSTimer *watchdog;
+@property (nonatomic, assign) NSInteger keyboardMissTicks;
+@property (nonatomic, assign) NSInteger mouseMissTicks;
 + (instancetype)shared;
 - (void)start;
 - (void)stop;
@@ -759,16 +771,31 @@ static void NCLRRestoreVisibleKeyWindow(void) {
 - (void)refreshDevices {
     NCLRRestoreVisibleKeyWindow();
     GCKeyboard *keyboard = GCKeyboard.coalescedKeyboard;
-    if (keyboard != self.keyboard || (keyboard && keyboard.keyboardInput.keyChangedHandler == nil)) {
-        [self detachKeyboard:YES];
-        self.keyboard = keyboard;
-        [self attachKeyboard:keyboard];
+    if (!keyboard) {
+        keyboard = GCKeyboard.keyboards.firstObject;
     }
     GCMouse *mouse = GCMouse.current;
-    if (mouse != self.mouse || (mouse && mouse.mouseInput.mouseMovedHandler == nil)) {
+    if (!mouse) {
+        mouse = GCMouse.mice.firstObject;
+    }
+    self.keyboardMissTicks = keyboard ? 0 : self.keyboardMissTicks + 1;
+    self.mouseMissTicks = mouse ? 0 : self.mouseMissTicks + 1;
+    // A Bluetooth device can briefly drop off GameController while it rekeys.
+    // Keep the last device and its handlers for a few watchdog ticks so a
+    // transient miss does not flap the touch controls or the mouse capture.
+    GCKeyboard *wantedKeyboard = keyboard ?: (self.keyboardMissTicks >= 3 ? nil : self.keyboard);
+    GCMouse *wantedMouse = mouse ?: (self.mouseMissTicks >= 3 ? nil : self.mouse);
+    if (wantedKeyboard != self.keyboard ||
+        (wantedKeyboard && wantedKeyboard.keyboardInput.keyChangedHandler == nil)) {
+        [self detachKeyboard:YES];
+        self.keyboard = wantedKeyboard;
+        [self attachKeyboard:wantedKeyboard];
+    }
+    if (wantedMouse != self.mouse ||
+        (wantedMouse && wantedMouse.mouseInput.mouseMovedHandler == nil)) {
         [self detachMouse];
-        self.mouse = mouse;
-        [self attachMouse:mouse];
+        self.mouse = wantedMouse;
+        [self attachMouse:wantedMouse];
     }
     BOOL hasKeyboard = self.keyboard != nil;
     BOOL hasMouse = self.mouse != nil;
@@ -909,12 +936,22 @@ static void NCLRRestoreVisibleKeyWindow(void) {
 }
 
 - (void)applyMotionDX:(float)deltaX dy:(float)deltaY {
-    UIWindow *window = UIApplication.sharedApplication.keyWindow;
+    UIWindow *window = nil;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
+            if (candidate.isKeyWindow && !candidate.hidden) {
+                window = candidate;
+                break;
+            }
+        }
+        if (window) break;
+    }
     if (!window) {
         for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
             if (![scene isKindOfClass:UIWindowScene.class]) continue;
             for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
-                if (!candidate.hidden) {
+                if (!candidate.hidden && candidate.alpha > 0.01) {
                     window = candidate;
                     break;
                 }
