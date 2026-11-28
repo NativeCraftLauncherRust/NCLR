@@ -64,6 +64,17 @@ NCLR 包含作者移植并整合的 Rust 资源导出与设备端组装链路。
 
 这条资源导出链是 NCLR 无 Mojang 资源分发的技术基础。仓库保留转换和组装代码，官方 JAR、资源文件和生成后的数据表都留在用户设备上，不进入 Git 历史、CI artifact 或公开发布包。
 
+## TouchController 触控模组
+
+`mods/touch-controller/` 是 [TouchController](https://github.com/TouchController/TouchController) 核心触控操作的 `.hmod` 移植（LGPL-3.0-or-later）。模组 API 原本没有触摸钩子，因此这次移植同时给引擎加了一个 `touch_input` 钩子，把每根手指的 id、阶段和坐标交给模组，并允许模组认领自己的控件；内建触控层只在没被认领的手指上工作。
+
+```bash
+HORIZON_DIR="$PWD/.local/horizon" bash scripts/prepare-horizon.sh   # 引擎补丁（含 touch_input）
+bash mods/touch-controller/build.sh                                 # 产出 touch_controller.hmod
+```
+
+细节、配置项与已知限制见 [docs/touch-controller.md](docs/touch-controller.md)。
+
 ## 权利人联系
 
 如果权利人认为仓库中的某个文件侵犯其权利，请通过仓库维护者公布的 GitHub 联系方式提交具体文件路径、权利说明和处理请求。维护者会检查相关内容，并及时删除、替换或停止分发有争议的材料。
@@ -85,6 +96,7 @@ NCLR 包含作者移植并整合的 Rust 资源导出与设备端组装链路。
 - 外接键盘与鼠标
 - 局域网与服务器联机
 - Metal 渲染与高刷新率显示
+- TouchController 触控模组：`touch_controller.hmod` 提供摇杆/方向键、攻击使用、跳跃潜行疾跑等按钮，位置由配置文件决定
 
 ## 环境要求
 
@@ -108,15 +120,25 @@ rustup target add aarch64-apple-ios wasm32-unknown-unknown
 HORIZON_DIR="$PWD/.local/horizon" bash scripts/prepare-horizon.sh
 ```
 
-生成 iOS 静态库与应用时，请保持资源注入为空。
+生成新版启动器时，请使用完整引擎构建脚本。它固定使用 `ios/main_l1.m`，包含游戏大厅、版本库和主题设置。
 
 ```bash
 RESOURCE_DIR="" \
 SHIP_BUNDLE="" \
-MAIN_SOURCE="$PWD/ios/main_l1.m" \
-INFO_PLIST="$PWD/ios/Info-launcher.plist" \
 bash ios/build.sh
 ```
+
+发布前使用统一构建脚本。它会先检查新版入口的关键实现，再构建并验证 IPA 内的符号，最后写出带提交号、工作区改动和 SHA-256 的清单文件。
+
+```bash
+HORIZON_DIR="$PWD/.local/horizon" PROFILE=fast bash scripts/build-launcher.sh
+```
+
+产物位于 `dist/`，同时生成同名的 `.manifest.json`。源码检查可以单独运行 `bash scripts/check-launcher-source.sh`，已有 IPA 可以运行 `bash scripts/verify-launcher-ipa.sh dist/<文件名>.ipa` 复核。
+
+仓库管理约定：`main` 只保留可发布的入口和已验证功能。新的 UI、下载器或模组工作先放在独立分支，完成构建与产物检查后合入。CI 和本地发布都使用 `ios/main_l1.m`；旧入口脚本只在明确测试旧启动器时使用。
+
+`ios/build-launcher.sh` 用于独立的旧版启动器入口 `ios/main_launcher_only.m`。完整引擎构建需要先构建 `horizon-ios` 静态库。两个脚本都会在构建输出中打印实际使用的入口文件。
 
 如需自行准备测试资源，请将文件保存在本机被忽略的目录中，并确认你的使用行为符合相关协议。这类文件不应提交到仓库，也不应上传到 CI、Issue 或 Pull Request。
 

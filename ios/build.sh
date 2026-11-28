@@ -1,17 +1,23 @@
 #!/bin/bash
-# Build an unsigned development IPA for the Horizon iOS shell or engine app.
+# Build the full Horizon iOS shell or engine app.
+#
+# The standalone legacy launcher UI is built by ios/build-launcher.sh.
+# This script builds the complete launcher or a custom engine-linked entrypoint.
 #
 # Inputs:
 #   HORIZON_DIR       checkout of horizon-rust/horizon with horizon-ios added
 #   CARGO_TARGET_DIR  cargo target directory (default: $HORIZON_DIR/target)
 #   APP_NAME          app/executable name (default: NCLR)
-#   MAIN_SOURCE       Objective-C entry source (default: $ROOT/ios/main.m)
+#   MAIN_SOURCE       Objective-C entry source (default: $ROOT/ios/main_l1.m)
 #   BUNDLE_ID         CFBundleIdentifier (default: dev.zrxmaxlnx.nclr)
 #   DISPLAY_NAME      Home-screen name (default: NCLR)
 #   IPA_NAME          output IPA name (default: ${APP_NAME}-dev-unsigned.ipa)
 #   BUILD_DIR         app build directory (default: $ROOT/build)
 #   DIST_DIR          IPA output directory (default: $ROOT/dist)
 #   BUILD_NUMBER      CFBundleVersion (default: UTC timestamp)
+#   SDK_NAME          iphoneos (default) or iphonesimulator
+#   ARCH              arm64 (default), or x86_64 for the simulator
+#   IPHONEOS_DEPLOYMENT_TARGET  minimum OS version (default: 15.0)
 #   SHIP_BUNDLE       ship.hzr3 to place in the app for first-run assembly
 #                     (default: $ROOT/ship.hzr3 when present)
 #   WASM_STD          horizon-wasm-std.wasm placed beside the executable
@@ -24,7 +30,7 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$HORIZON_DIR/target}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(date -u +%Y%m%d%H%M)}"
 PROFILE="${PROFILE:-release}"
 APP_NAME="${APP_NAME:-NCLR}"
-MAIN_SOURCE="${MAIN_SOURCE:-$ROOT/ios/main.m}"
+MAIN_SOURCE="${MAIN_SOURCE:-$ROOT/ios/main_l1.m}"
 BUNDLE_ID="${BUNDLE_ID:-dev.zrxmaxlnx.nclr}"
 DISPLAY_NAME="${DISPLAY_NAME:-NCLR}"
 IPA_NAME="${IPA_NAME:-${APP_NAME}-dev-unsigned.ipa}"
@@ -32,24 +38,28 @@ SHIP_BUNDLE="${SHIP_BUNDLE-}"
 INFO_PLIST="${INFO_PLIST:-$ROOT/ios/Info.plist}"
 RESOURCE_DIR="${RESOURCE_DIR:-}"
 ICON_DIR="${ICON_DIR:-$ROOT/ios/icons}"
-SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 OUT="${BUILD_DIR:-$ROOT/build}"
 APP="$OUT/$APP_NAME.app"
 DIST="${DIST_DIR:-$ROOT/dist}"
 
+source "$ROOT/scripts/ios-swift-support.sh"
+nclr_configure_ios_toolchain
+test -f "$MAIN_SOURCE"
+if nclr_uses_swift_sidebar "$MAIN_SOURCE"; then
+    bash "$ROOT/scripts/check-launcher-source.sh" "$MAIN_SOURCE"
+fi
+
+STATIC_LIB="$TARGET_DIR/$RUST_TARGET/$PROFILE/libhorizon_ios.a"
+test -f "$STATIC_LIB"
+
 rm -rf "$OUT" "$DIST"
 mkdir -p "$APP" "$DIST"
 
-STATIC_LIB="$TARGET_DIR/aarch64-apple-ios/$PROFILE/libhorizon_ios.a"
-test -f "$STATIC_LIB"
+nclr_compile_ios_sources "$MAIN_SOURCE" "$OUT/Objects"
 
-xcrun --sdk iphoneos clang \
-    -arch arm64 \
-    -mios-version-min=15.0 \
-    -isysroot "$SDK" \
-    -fobjc-arc \
-    -O2 \
-    -Wl,-stack_size,0xA000000 \
+"${IOS_LINKER[@]}" \
+    -Xlinker -stack_size -Xlinker 0xA000000 \
+    -Xlinker -rpath -Xlinker @executable_path/Frameworks \
     -framework UIKit \
     -framework Foundation \
     -framework CoreFoundation \
@@ -67,7 +77,7 @@ xcrun --sdk iphoneos clang \
     -framework SceneKit \
     -framework CoreMotion \
     -framework GameController \
-    "$MAIN_SOURCE" \
+    "${IOS_OBJECTS[@]}" \
     "$STATIC_LIB" \
     -o "$APP/$APP_NAME"
 
@@ -77,6 +87,8 @@ cp "$INFO_PLIST" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $APP_NAME" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $DISPLAY_NAME" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :MinimumOSVersion $IPHONEOS_DEPLOYMENT_TARGET" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleSupportedPlatforms:0 $BUNDLE_PLATFORM" "$APP/Info.plist"
 
 # The engine app looks for a prepared resource tree in its bundle. It stays
 # empty in the development package: Mojang assets are never bundled.
@@ -114,6 +126,9 @@ if [ -n "${WASM_STD:-}" ]; then
 fi
 
 # Ad-hoc signature only: the IPA stays re-signable by Sideloadly/AltStore.
+if nclr_uses_swift_sidebar "$MAIN_SOURCE"; then
+    nclr_embed_swift_runtime "$APP" "$APP_NAME"
+fi
 codesign --force --sign - --timestamp=none "$APP/$APP_NAME"
 codesign --force --sign - --timestamp=none "$APP"
 
@@ -122,6 +137,7 @@ cp -R "$APP" "$OUT/Payload/"
 (cd "$OUT" && zip -qry "$DIST/$IPA_NAME" Payload)
 
 echo "--- artifact ---"
+echo "entrypoint: $MAIN_SOURCE"
 ls -lh "$DIST/$IPA_NAME"
 shasum -a 256 "$DIST/$IPA_NAME"
 echo "--- app ---"

@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import "NCLRSidebar.h"
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMotion/CoreMotion.h>
 #import <CoreImage/CoreImage.h>
@@ -9,6 +10,7 @@
 #import <CommonCrypto/CommonDigest.h>
 #import <AuthenticationServices/AuthenticationServices.h>
 #import <SafariServices/SafariServices.h>
+#import <QuartzCore/QuartzCore.h>
 #import <stdlib.h>
 #import <os/lock.h>
 #include <fcntl.h>
@@ -237,6 +239,7 @@ static BOOL NCLRDarkMode = YES;
 static NCLRThemeMode NCLRThemeModeValue = NCLRThemeModeSystem;
 static NSString *const kNCLRThemeKey = @"NCLRThemeDark";
 static NSString *const kNCLRThemeModeKey = @"NCLRThemeMode";
+static NSString *const kNCLRResourceConcurrencyKey = @"NCLRResourceDownloadConcurrency";
 static NSString *const kNCLRPageTransitionBlurKey = @"NCLRPageTransitionBlurEnabled";
 static NSString *const NCLRPageTransitionBlurPreferenceChangedNotification =
     @"NCLRPageTransitionBlurPreferenceChanged";
@@ -245,6 +248,11 @@ static BOOL NCLRPageTransitionBlurEnabled(void) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     NSNumber *saved = [defaults objectForKey:kNCLRPageTransitionBlurKey];
     return saved == nil ? NO : saved.boolValue;
+}
+
+static NSInteger NCLRResourceDownloadConcurrency(void) {
+    NSInteger value = [[NSUserDefaults standardUserDefaults] integerForKey:kNCLRResourceConcurrencyKey];
+    return (value >= 1 && value <= 8) ? value : 4;
 }
 
 static void NCLRThemeResolveFromTraitCollection(UITraitCollection *traitCollection) {
@@ -2998,7 +3006,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     self.stackLeading.constant = pad;
     self.stackTrailing.constant = -pad;
     UIEdgeInsets inset = self.scroll.contentInset;
-    inset.bottom = MAX(16.0, self.view.safeAreaInsets.bottom + 12.0);
+    CGFloat originalBottomInset = MAX(16.0, self.view.safeAreaInsets.bottom + 12.0);
+    inset.bottom = originalBottomInset / 3.0;
     self.scroll.contentInset = inset;
     self.scroll.verticalScrollIndicatorInsets = inset;
 }
@@ -4651,13 +4660,14 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @end
 
 @interface NCLRSettingsController : NCLRPageController
+@property (nonatomic, strong) UILabel *downloadConcurrencyValue;
 @end
 
 @implementation NCLRSettingsController
 - (void)viewDidLoad {
     [super viewDidLoad];
     [self setupPage];
-    [self.stack addArrangedSubview:[self headerWithTitle:@"设置" subtitle:@"启动器、存储和关于"
+    [self.stack addArrangedSubview:[self headerWithTitle:@"设置" subtitle:@"外观、下载与关于"
                                              actionTitle:nil action:nil]];
 
     UIView *theme = [self card];
@@ -4681,6 +4691,45 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [themeStack.bottomAnchor constraintEqualToAnchor:theme.bottomAnchor constant:-14.0],
     ]];
     [self.stack addArrangedSubview:theme];
+
+    UIView *downloads = [self card];
+    UILabel *downloadsTitle = [self eyebrow:@"资源下载"];
+    NSInteger savedConcurrency = NCLRResourceDownloadConcurrency();
+    UILabel *concurrencyValue = [self label:[NSString stringWithFormat:@"%ld 路", (long)savedConcurrency]
+                                       size:12.0 weight:UIFontWeightSemibold
+                                      color:NCLRAccent()];
+    self.downloadConcurrencyValue = concurrencyValue;
+    concurrencyValue.textAlignment = NSTextAlignmentRight;
+    UIStackView *concurrencyHeader = [[UIStackView alloc] initWithArrangedSubviews:@[downloadsTitle, concurrencyValue]];
+    concurrencyHeader.axis = UILayoutConstraintAxisHorizontal;
+    concurrencyHeader.alignment = UIStackViewAlignmentCenter;
+    concurrencyHeader.translatesAutoresizingMaskIntoConstraints = NO;
+    UISlider *concurrencySlider = [[UISlider alloc] init];
+    concurrencySlider.minimumValue = 1.0;
+    concurrencySlider.maximumValue = 8.0;
+    concurrencySlider.value = (float)savedConcurrency;
+    concurrencySlider.minimumTrackTintColor = NCLRAccent();
+    concurrencySlider.translatesAutoresizingMaskIntoConstraints = NO;
+    concurrencySlider.accessibilityLabel = @"资源下载并发数";
+    concurrencySlider.accessibilityValue = [NSString stringWithFormat:@"%ld", (long)savedConcurrency];
+    [concurrencySlider addTarget:self action:@selector(downloadConcurrencyChanged:)
+                forControlEvents:UIControlEventValueChanged];
+    UILabel *concurrencyHint = [self label:@"同时下载 1–8 个资源文件，默认 4 路。修改后于下一次资源下载生效。"
+                                      size:11.0 weight:UIFontWeightRegular
+                                     color:NCLRColor(0.58, 0.58, 0.58, 1.0)];
+    UIStackView *downloadsStack = [[UIStackView alloc] initWithArrangedSubviews:
+        @[concurrencyHeader, concurrencySlider, concurrencyHint]];
+    downloadsStack.axis = UILayoutConstraintAxisVertical;
+    downloadsStack.spacing = 7.0;
+    downloadsStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [downloads addSubview:downloadsStack];
+    [NSLayoutConstraint activateConstraints:@[
+        [downloadsStack.leadingAnchor constraintEqualToAnchor:downloads.leadingAnchor constant:16.0],
+        [downloadsStack.trailingAnchor constraintEqualToAnchor:downloads.trailingAnchor constant:-16.0],
+        [downloadsStack.topAnchor constraintEqualToAnchor:downloads.topAnchor constant:14.0],
+        [downloadsStack.bottomAnchor constraintEqualToAnchor:downloads.bottomAnchor constant:-14.0],
+    ]];
+    [self.stack addArrangedSubview:downloads];
 
     UIView *motion = [self card];
     UILabel *motionTitle = [self eyebrow:@"界面动效"];
@@ -4722,46 +4771,6 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     ]];
     [self.stack addArrangedSubview:motion];
 
-    UIView *mode = [self card];
-    UILabel *modeTitle = [self eyebrow:@"启动器架构"];
-    UILabel *modeText = [self label:@"NCLR 只运行启动器本身：账号、版本、模组、设置都在这里管理。游戏端是独立应用，通过 nclr-game:// 接收版本；不需要退出启动器，也不再使用单生命周期切换。"
-                                  size:12.0 weight:UIFontWeightRegular
-                                 color:NCLRColor(0.70, 0.70, 0.70, 1.0)];
-    UIStackView *modeStack = [[UIStackView alloc] initWithArrangedSubviews:@[modeTitle, modeText]];
-    modeStack.axis = UILayoutConstraintAxisVertical;
-    modeStack.spacing = 6.0;
-    modeStack.translatesAutoresizingMaskIntoConstraints = NO;
-    [mode addSubview:modeStack];
-    [NSLayoutConstraint activateConstraints:@[
-        [modeStack.leadingAnchor constraintEqualToAnchor:mode.leadingAnchor constant:16.0],
-        [modeStack.trailingAnchor constraintEqualToAnchor:mode.trailingAnchor constant:-16.0],
-        [modeStack.topAnchor constraintEqualToAnchor:mode.topAnchor constant:14.0],
-        [modeStack.bottomAnchor constraintEqualToAnchor:mode.bottomAnchor constant:-14.0],
-    ]];
-    [self.stack addArrangedSubview:mode];
-
-    UIView *storage = [self card];
-    UILabel *storageTitle = [self eyebrow:@"存储"];
-    UILabel *storagePath = [self label:NCLRDocuments() size:10.0 weight:UIFontWeightRegular
-                                  color:NCLRColor(0.60, 0.60, 0.60, 1.0)];
-    storagePath.font = [UIFont monospacedSystemFontOfSize:10.0 weight:UIFontWeightRegular];
-    UILabel *storageDetail = [self label:@"版本、mods 和 launcher.json 都在 Documents；可在文件 App 中查看。"
-                                    size:11.0 weight:UIFontWeightRegular
-                                   color:NCLRColor(0.58, 0.58, 0.58, 1.0)];
-    UIStackView *storageStack = [[UIStackView alloc] initWithArrangedSubviews:
-        @[storageTitle, storagePath, storageDetail]];
-    storageStack.axis = UILayoutConstraintAxisVertical;
-    storageStack.spacing = 5.0;
-    storageStack.translatesAutoresizingMaskIntoConstraints = NO;
-    [storage addSubview:storageStack];
-    [NSLayoutConstraint activateConstraints:@[
-        [storageStack.leadingAnchor constraintEqualToAnchor:storage.leadingAnchor constant:16.0],
-        [storageStack.trailingAnchor constraintEqualToAnchor:storage.trailingAnchor constant:-16.0],
-        [storageStack.topAnchor constraintEqualToAnchor:storage.topAnchor constant:14.0],
-        [storageStack.bottomAnchor constraintEqualToAnchor:storage.bottomAnchor constant:-14.0],
-    ]];
-    [self.stack addArrangedSubview:storage];
-
     UIView *about = [self card];
     UILabel *aboutTitle = [self eyebrow:@"关于"];
     UILabel *aboutText = [self label:@"NCLR Launcher · 正式版\n作者 ZRXMAXLNX、可心\nMinecraft 是 Mojang / Microsoft 的产品；本项目不是官方产品。"
@@ -4796,6 +4805,14 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [[NSNotificationCenter defaultCenter]
         postNotificationName:NCLRPageTransitionBlurPreferenceChangedNotification
                       object:nil];
+}
+
+- (void)downloadConcurrencyChanged:(UISlider *)sender {
+    NSInteger value = (NSInteger)lroundf(sender.value);
+    sender.value = (float)value;
+    [[NSUserDefaults standardUserDefaults] setInteger:value forKey:kNCLRResourceConcurrencyKey];
+    sender.accessibilityValue = [NSString stringWithFormat:@"%ld", (long)value];
+    self.downloadConcurrencyValue.text = [NSString stringWithFormat:@"%ld 路", (long)value];
 }
 
 - (void)themeChanged:(UISegmentedControl *)control {
@@ -6690,7 +6707,7 @@ didCompleteWithError:(NSError *)error {
         }
 
         NSOperationQueue *assetQueue = [[NSOperationQueue alloc] init];
-        assetQueue.maxConcurrentOperationCount = 4;
+        assetQueue.maxConcurrentOperationCount = NCLRResourceDownloadConcurrency();
         NSMutableArray<NSString *> *pending = [NSMutableArray array];
         unsigned long long totalBytes = 0;
         unsigned long long cachedBytes = 0;
@@ -6971,7 +6988,7 @@ static CIContext *NCLRTransitionCIContext(void) {
         [self cancel];
         return;
     }
-    CGFloat progress = (CGFloat)((CACurrentMediaTime() - self.startedAt) / 0.270);
+    CGFloat progress = (CGFloat)((CACurrentMediaTime() - self.startedAt) / 0.216);
     progress = MAX(0.0, MIN(1.0, progress));
     CGFloat radius = 0.0;
     if (progress <= 0.45) {
@@ -7041,28 +7058,12 @@ static CIContext *NCLRTransitionCIContext(void) {
 }
 @end
 
-@interface NCLRRootController : UIViewController <UITableViewDataSource, UITableViewDelegate>
+@interface NCLRRootController : UIViewController
 @property (nonatomic, strong) UIView *sidebar;
+@property (nonatomic, strong) NCLRSidebarController *sidebarController;
 @property (nonatomic, strong) UIView *content;
-@property (nonatomic, strong) UIView *compactBar;
-@property (nonatomic, strong) NSArray<UIButton *> *navButtons;
-@property (nonatomic, strong) NSArray<UIButton *> *compactButtons;
-@property (nonatomic, strong) NSArray *regularConstraints;
-@property (nonatomic, strong) NSArray *compactConstraints;
-@property (nonatomic, strong) UILabel *accountLabel;
-@property (nonatomic, strong) UILabel *accountAvatarLabel;
-@property (nonatomic, strong) UIImageView *accountAvatarImage;
 @property (nonatomic, assign) NSInteger page;
 @property (nonatomic, assign) NSInteger initialPage;
-@property (nonatomic, assign) BOOL compactLayout;
-@property (nonatomic, strong) UIScrollView *navScroll;
-@property (nonatomic, strong) UIStackView *navStack;
-@property (nonatomic, strong) NSLayoutConstraint *sidebarWidth;
-@property (nonatomic, strong) UITableView *navTable;
-@property (nonatomic, copy) NSArray<NSString *> *navNames;
-@property (nonatomic, copy) NSArray<NSString *> *navSymbols;
-@property (nonatomic, strong) UIView *selectionIndicator;
-@property (nonatomic, strong) NSArray<NSLayoutConstraint *> *selectionIndicatorConstraints;
 @property (nonatomic, strong) NCLRPageTransitionCoordinator *pageTransitionCoordinator;
 @property (nonatomic, strong) UIViewController *currentPageController;
 @property (nonatomic, strong) UIViewController *outgoingPageController;
@@ -7085,264 +7086,38 @@ static CIContext *NCLRTransitionCIContext(void) {
     self.content = [[UIView alloc] init];
     self.content.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.content];
-
-    // Compact widths (iPhone, iPad split view and resizable windows) get a
-    // horizontal navigation bar instead of the 228 pt sidebar.
-    self.compactBar = [[UIView alloc] init];
-    self.compactBar.translatesAutoresizingMaskIntoConstraints = NO;
-    self.compactBar.backgroundColor = NCLRSurface();
-    NCLRAddBlur(self.compactBar, NCLRDarkMode);
-    [self.view addSubview:self.compactBar];
-    UIStackView *compactNav = [[UIStackView alloc] init];
-    compactNav.axis = UILayoutConstraintAxisHorizontal;
-    compactNav.distribution = UIStackViewDistributionFillEqually;
-    compactNav.spacing = 2.0;
-    compactNav.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.compactBar addSubview:compactNav];
-    NSMutableArray *compact = [NSMutableArray array];
-    NSArray *compactNames = @[@"主页", @"版本", @"模组", @"光影", @"资源包", @"设置"];
-    for (NSInteger i = 0; i < compactNames.count; i++) {
-        UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
-        button.tag = i;
-        button.translatesAutoresizingMaskIntoConstraints = NO;
-        button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.035];
-        button.layer.cornerRadius = 10.0;
-        button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-        button.contentEdgeInsets = UIEdgeInsetsMake(0, 10, 0, 6);
-        button.titleLabel.font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightSemibold];
-        button.titleLabel.lineBreakMode = NSLineBreakByClipping;
-        NSArray *compactSymbols = @[@"house.fill", @"square.stack.3d.up.fill", @"puzzlepiece.extension.fill",
-                                    @"sun.max.fill", @"square.grid.2x2.fill",
-                                    @"person.crop.circle.fill", @"gearshape.fill"];
-        [button setImage:[UIImage systemImageNamed:compactSymbols[i]] forState:UIControlStateNormal];
-        button.imageView.contentMode = UIViewContentModeScaleAspectFit;
-        button.imageEdgeInsets = UIEdgeInsetsMake(0, 0, 0, 5);
-        button.titleEdgeInsets = UIEdgeInsetsMake(0, 5, 0, 0);
-        [button setTitle:compactNames[i] forState:UIControlStateNormal];
-        [button setTitleColor:NCLRColor(0.92, 0.92, 0.92, 1.0) forState:UIControlStateNormal];
-        [button addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
-        [compactNav addArrangedSubview:button];
-        [compact addObject:button];
-    }
-    self.compactButtons = compact;
     [NSLayoutConstraint activateConstraints:@[
-        [compactNav.leadingAnchor constraintEqualToAnchor:self.compactBar.leadingAnchor constant:6.0],
-        [compactNav.trailingAnchor constraintEqualToAnchor:self.compactBar.trailingAnchor constant:-6.0],
-        [compactNav.topAnchor constraintEqualToAnchor:self.compactBar.topAnchor constant:5.0],
-        [compactNav.bottomAnchor constraintEqualToAnchor:self.compactBar.bottomAnchor constant:-5.0],
-    ]];
-
-    self.sidebarWidth = [self.sidebar.widthAnchor constraintEqualToConstant:228.0];
-    self.regularConstraints = @[
         [self.sidebar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.sidebar.topAnchor constraintEqualToAnchor:self.view.topAnchor],
         [self.sidebar.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-        self.sidebarWidth,
+        [self.sidebar.widthAnchor constraintEqualToConstant:228.0],
         [self.content.leadingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor],
         [self.content.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.content.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
-        [self.content.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor],
-    ];
-    self.compactConstraints = @[
-        [self.compactBar.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
-        [self.compactBar.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
-        [self.compactBar.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
-        [self.compactBar.heightAnchor constraintEqualToConstant:52.0],
-        [self.content.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
-        [self.content.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
-        [self.content.topAnchor constraintEqualToAnchor:self.compactBar.bottomAnchor],
-        [self.content.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor],
-    ];
-    [NSLayoutConstraint activateConstraints:self.regularConstraints];
-    self.compactBar.hidden = YES;
-
-    UIView *brand = [[UIView alloc] init];
-    brand.translatesAutoresizingMaskIntoConstraints = NO;
-    UIImage *brandImage = [UIImage imageNamed:@"BrandIcon"];
-    UIView *mark = nil;
-    if (brandImage != nil) {
-        UIImageView *logo = [[UIImageView alloc] initWithImage:brandImage];
-        logo.contentMode = UIViewContentModeScaleAspectFit;
-        logo.backgroundColor = UIColor.clearColor;
-        mark = logo;
-    } else {
-        UILabel *fallback = [self label:@"N" size:24.0 weight:UIFontWeightHeavy
-                                   color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
-        fallback.textAlignment = NSTextAlignmentCenter;
-        fallback.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.055];
-        fallback.layer.cornerRadius = 12.0;
-        fallback.layer.masksToBounds = YES;
-        mark = fallback;
-    }
-    mark.layer.cornerRadius = 10.0;
-    mark.layer.masksToBounds = YES;
-    mark.translatesAutoresizingMaskIntoConstraints = NO;
-    UILabel *title = [self label:@"NCLR" size:22.0 weight:UIFontWeightBold
-                           color:NCLRColor(1.0, 1.0, 1.0, 1.0)];
-    UILabel *subtitle = [self label:@"LAUNCHER" size:8.0 weight:UIFontWeightBold
-                             color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
-    subtitle.attributedText = [[NSAttributedString alloc] initWithString:@"LAUNCHER" attributes:@{
-        NSKernAttributeName : @2.0
-    }];
-    [brand addSubview:mark];
-    [brand addSubview:title];
-    [brand addSubview:subtitle];
-    [NSLayoutConstraint activateConstraints:@[
-        [mark.leadingAnchor constraintEqualToAnchor:brand.leadingAnchor],
-        [mark.topAnchor constraintEqualToAnchor:brand.topAnchor],
-        [mark.widthAnchor constraintEqualToConstant:34.0],
-        [mark.heightAnchor constraintEqualToConstant:34.0],
-        [title.leadingAnchor constraintEqualToAnchor:mark.trailingAnchor constant:10.0],
-        [title.topAnchor constraintEqualToAnchor:mark.topAnchor constant:1.0],
-        [subtitle.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
-        [subtitle.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:2.0],
-        [brand.bottomAnchor constraintGreaterThanOrEqualToAnchor:mark.bottomAnchor],
-        [brand.bottomAnchor constraintGreaterThanOrEqualToAnchor:subtitle.bottomAnchor],
+        [self.content.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
     ]];
-    [self.sidebar addSubview:brand];
 
-    UIScrollView *navScroll = [[UIScrollView alloc] init];
-    self.navScroll = navScroll;
-    navScroll.translatesAutoresizingMaskIntoConstraints = NO;
-    navScroll.backgroundColor = UIColor.clearColor;
-    navScroll.showsVerticalScrollIndicator = YES;
-    navScroll.alwaysBounceVertical = NO;
-    navScroll.clipsToBounds = NO;
-    navScroll.layer.masksToBounds = NO;
-    navScroll.contentInset = UIEdgeInsetsMake(0, 0, 8, 0);
-    [self.sidebar addSubview:navScroll];
-
-    self.selectionIndicator = [[UIView alloc] init];
-    self.selectionIndicator.translatesAutoresizingMaskIntoConstraints = NO;
-    self.selectionIndicator.userInteractionEnabled = NO;
-    self.selectionIndicator.backgroundColor = NCLRSidebarSelectionColor();
-    self.selectionIndicator.layer.cornerRadius = 11.0;
-    self.selectionIndicator.layer.masksToBounds = YES;
-
-    UIStackView *nav = [[UIStackView alloc] init];
-    self.navStack = nav;
-    nav.axis = UILayoutConstraintAxisVertical;
-    nav.distribution = UIStackViewDistributionFill;
-    nav.spacing = 2.0;
-    nav.translatesAutoresizingMaskIntoConstraints = NO;
-    [nav addSubview:self.selectionIndicator];
-    NSArray *names = @[@"主页", @"版本", @"模组", @"光影", @"资源包", @"设置"];
-    NSArray *symbols = @[@"house.fill", @"square.stack.3d.up.fill", @"puzzlepiece.extension.fill", @"sun.max.fill", @"square.grid.2x2.fill", @"gearshape.fill"];
-    NSMutableArray *buttons = [NSMutableArray array];
-    for (NSInteger i = 0; i < names.count; i++) {
-        UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
-        button.tag = i;
-        button.translatesAutoresizingMaskIntoConstraints = NO;
-        button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-        button.contentEdgeInsets = UIEdgeInsetsMake(0, 14, 0, 8);
-        button.titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
-        button.titleLabel.lineBreakMode = NSLineBreakByClipping;
-        button.layer.cornerRadius = 11.0;
-        [button.heightAnchor constraintEqualToConstant:52.0].active = YES;
-        [button setImage:[UIImage systemImageNamed:symbols[i]] forState:UIControlStateNormal];
-        button.imageView.contentMode = UIViewContentModeScaleAspectFit;
-        button.imageEdgeInsets = UIEdgeInsetsMake(0, 0, 0, 8);
-        button.titleEdgeInsets = UIEdgeInsetsMake(0, 8, 0, 0);
-        [button setTitle:names[i] forState:UIControlStateNormal];
-        [button setTitleColor:NCLRColor(0.92, 0.92, 0.92, 1.0) forState:UIControlStateNormal];
-        [button addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
-        [nav addArrangedSubview:button];
-        [buttons addObject:button];
-    }
-    self.navButtons = buttons;
-    [navScroll addSubview:nav];
-    UIButton *initialButton = self.navButtons.firstObject;
-    self.selectionIndicatorConstraints = @[
-        [self.selectionIndicator.leadingAnchor constraintEqualToAnchor:initialButton.leadingAnchor],
-        [self.selectionIndicator.trailingAnchor constraintEqualToAnchor:initialButton.trailingAnchor],
-        [self.selectionIndicator.topAnchor constraintEqualToAnchor:initialButton.topAnchor],
-        [self.selectionIndicator.bottomAnchor constraintEqualToAnchor:initialButton.bottomAnchor],
-    ];
-    [NSLayoutConstraint activateConstraints:self.selectionIndicatorConstraints];
-    navScroll.hidden = NO;
-
-    self.navNames = names;
-    self.navSymbols = symbols;
-    self.navTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
-    self.navTable.translatesAutoresizingMaskIntoConstraints = NO;
-    self.navTable.backgroundColor = UIColor.clearColor;
-    self.navTable.separatorStyle = UITableViewCellSeparatorStyleNone;
-    self.navTable.showsVerticalScrollIndicator = YES;
-    self.navTable.rowHeight = 40.0;
-    self.navTable.contentInset = UIEdgeInsetsMake(0, 0, 8, 0);
-    self.navTable.dataSource = self;
-    self.navTable.delegate = self;
-    self.navTable.clipsToBounds = YES;
-    self.navTable.hidden = YES;
-    [self.sidebar addSubview:self.navTable];
-
-    UIView *account = [[UIView alloc] init];
-    account.translatesAutoresizingMaskIntoConstraints = NO;
-    account.backgroundColor = NCLRCanvas();
-    account.layer.cornerRadius = 12.0;
-    UILabel *avatar = [self label:@"N" size:15.0 weight:UIFontWeightBold
-                            color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
-    self.accountAvatarLabel = avatar;
-    avatar.textAlignment = NSTextAlignmentCenter;
-    avatar.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06];
-    avatar.layer.cornerRadius = 0.0;
-    avatar.layer.masksToBounds = NO;
-    avatar.translatesAutoresizingMaskIntoConstraints = NO;
-    self.accountLabel = [self label:@"未登录" size:11.0 weight:UIFontWeightSemibold
-                              color:NCLRColor(0.94, 0.94, 0.94, 1.0)];
-    UILabel *accountDetail = [self label:@"Microsoft 账号" size:9.0 weight:UIFontWeightRegular
-                                    color:NCLRColor(0.50, 0.50, 0.50, 1.0)];
-    UIImageView *avatarImage = [[UIImageView alloc] init];
-    avatarImage.translatesAutoresizingMaskIntoConstraints = NO;
-    avatarImage.contentMode = UIViewContentModeScaleAspectFit;
-    avatarImage.layer.cornerRadius = 0.0;
-    avatarImage.layer.masksToBounds = NO;
-    avatarImage.hidden = NO;
-    self.accountAvatarImage = avatarImage;
-    [account addSubview:avatar];
-    [account addSubview:avatarImage];
-    [account addSubview:self.accountLabel];
-    [account addSubview:accountDetail];
+    __weak typeof(self) weakSelf = self;
+    self.sidebarController = [[NCLRSidebarController alloc]
+        initWithCanvasColor:NCLRCanvas()
+        selectionColor:NCLRSidebarSelectionColor()
+        selectedForegroundColor:NCLRSidebarSelectedForeground()
+        foregroundColor:NCLRSidebarUnselectedForeground()
+        accentColor:NCLRAccent()
+        selectionHandler:^(NSInteger page) {
+            [weakSelf showPage:page];
+        }];
+    [self addChildViewController:self.sidebarController];
+    UIView *sidebarView = self.sidebarController.view;
+    sidebarView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.sidebar addSubview:sidebarView];
     [NSLayoutConstraint activateConstraints:@[
-        [avatar.leadingAnchor constraintEqualToAnchor:account.leadingAnchor constant:10.0],
-        [avatar.topAnchor constraintEqualToAnchor:account.topAnchor constant:10.0],
-        [avatar.widthAnchor constraintEqualToConstant:32.0],
-        [avatar.heightAnchor constraintEqualToConstant:32.0],
-        [avatarImage.leadingAnchor constraintEqualToAnchor:avatar.leadingAnchor],
-        [avatarImage.topAnchor constraintEqualToAnchor:avatar.topAnchor],
-        [avatarImage.widthAnchor constraintEqualToAnchor:avatar.widthAnchor],
-        [avatarImage.heightAnchor constraintEqualToAnchor:avatar.heightAnchor],
-        [self.accountLabel.leadingAnchor constraintEqualToAnchor:avatar.trailingAnchor constant:8.0],
-        [self.accountLabel.topAnchor constraintEqualToAnchor:account.topAnchor constant:9.0],
-        [self.accountLabel.trailingAnchor constraintEqualToAnchor:account.trailingAnchor constant:-8.0],
-        [accountDetail.leadingAnchor constraintEqualToAnchor:self.accountLabel.leadingAnchor],
-        [accountDetail.topAnchor constraintEqualToAnchor:self.accountLabel.bottomAnchor constant:2.0],
-        [accountDetail.bottomAnchor constraintEqualToAnchor:account.bottomAnchor constant:-9.0],
+        [sidebarView.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor],
+        [sidebarView.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor],
+        [sidebarView.topAnchor constraintEqualToAnchor:self.sidebar.topAnchor],
+        [sidebarView.bottomAnchor constraintEqualToAnchor:self.sidebar.bottomAnchor],
     ]];
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(accountTapped)];
-    [account addGestureRecognizer:tap];
-    [self.sidebar addSubview:account];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [brand.leadingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.leadingAnchor constant:18.0],
-        [brand.trailingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.trailingAnchor constant:-18.0],
-        [brand.topAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.topAnchor constant:14.0],
-        [brand.heightAnchor constraintEqualToConstant:52.0],
-        [navScroll.leadingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.leadingAnchor constant:10.0],
-        [navScroll.trailingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.trailingAnchor constant:-10.0],
-        [navScroll.topAnchor constraintEqualToAnchor:brand.bottomAnchor constant:16.0],
-        [navScroll.bottomAnchor constraintEqualToAnchor:account.topAnchor constant:-8.0],
-        [navScroll.heightAnchor constraintGreaterThanOrEqualToConstant:120.0],
-        [nav.leadingAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.leadingAnchor],
-        [nav.trailingAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.trailingAnchor],
-        [nav.topAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.topAnchor],
-        [nav.bottomAnchor constraintEqualToAnchor:navScroll.contentLayoutGuide.bottomAnchor],
-        [nav.widthAnchor constraintEqualToAnchor:navScroll.frameLayoutGuide.widthAnchor],
-        [account.leadingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.leadingAnchor constant:12.0],
-        [account.trailingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.trailingAnchor constant:-12.0],
-        [account.bottomAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.bottomAnchor constant:-14.0],
-        [account.heightAnchor constraintGreaterThanOrEqualToConstant:56.0],
-    ]];
+    [self.sidebarController didMoveToParentViewController:self];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(refreshAccount)
@@ -7370,47 +7145,15 @@ static CIContext *NCLRTransitionCIContext(void) {
     [self.pageTransitionCoordinator cancel];
 }
 
-- (UILabel *)label:(NSString *)text size:(CGFloat)size weight:(UIFontWeight)weight color:(UIColor *)color {
-    UILabel *label = [[UILabel alloc] init];
-    label.text = text;
-    label.textColor = color;
-    label.font = [UIFont systemFontOfSize:size weight:weight];
-    label.numberOfLines = 0;
-    label.translatesAutoresizingMaskIntoConstraints = NO;
-    return label;
-}
-
-- (void)updateAdaptiveLayout {
-    CGFloat width = self.view.bounds.size.width;
-    BOOL compact = width > 0.0 && width < 720.0;
-    NSLayoutConstraint *probe = compact
-        ? (NSLayoutConstraint *)self.compactConstraints.firstObject
-        : (NSLayoutConstraint *)self.regularConstraints.firstObject;
-    if (compact == self.compactLayout && probe.active) {
-        return;
-    }
-    self.compactLayout = compact;
-    // Keep the left navigation on every width: the compact top bar made the
-    // pages disappear on narrow phones. The sidebar just gets narrower, and
-    // its own scroll view holds the page buttons.
-    [NSLayoutConstraint deactivateConstraints:self.compactConstraints];
-    [NSLayoutConstraint activateConstraints:self.regularConstraints];
-    self.sidebarWidth.constant = compact ? 156.0 : 228.0;
-    self.sidebar.hidden = NO;
-    self.compactBar.hidden = YES;
-}
-
 - (void)viewSafeAreaInsetsDidChange {
     [super viewSafeAreaInsetsDidChange];
     if (self.transitionInFlight) {
         [self cancelPageTransition];
     }
-    [self updateAdaptiveLayout];
 }
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
-    [self updateAdaptiveLayout];
     [self.pageTransitionCoordinator updateSnapshotFrame];
 }
 
@@ -7440,43 +7183,6 @@ static CIContext *NCLRTransitionCIContext(void) {
     }
 }
 
-- (void)navTapped:(UIButton *)sender {
-    [self showPage:sender.tag];
-}
-
-- (void)accountTapped {
-    [self showPage:6];
-}
-
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return self.navNames.count;
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    static NSString *identifier = @"NCLRNavCell";
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
-    if (cell == nil) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:identifier];
-        cell.backgroundColor = UIColor.clearColor;
-        cell.textLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
-        cell.textLabel.textColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
-        cell.tintColor = NCLRColor(0.95, 0.95, 0.95, 1.0);
-        UIView *selected = [[UIView alloc] init];
-        selected.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.075];
-        selected.layer.cornerRadius = 10.0;
-        cell.selectedBackgroundView = selected;
-        cell.indentationLevel = 1;
-        cell.indentationWidth = 10.0;
-    }
-    cell.textLabel.text = self.navNames[indexPath.row];
-    cell.imageView.image = [UIImage systemImageNamed:self.navSymbols[indexPath.row]];
-    return cell;
-}
-
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [self showPage:indexPath.row];
-}
-
 - (void)showPage:(NSInteger)page {
     if (self.hasDisplayedPage && page == self.page) {
         return;
@@ -7489,55 +7195,7 @@ static CIContext *NCLRTransitionCIContext(void) {
 }
 
 - (void)updateNavigationSelectionForPage:(NSInteger)page animated:(BOOL)animated {
-    if (page >= 0 && page < (NSInteger)self.navNames.count) {
-        [self.navTable selectRowAtIndexPath:[NSIndexPath indexPathForRow:page inSection:0]
-                                  animated:NO scrollPosition:UITableViewScrollPositionNone];
-    }
-    for (NSInteger i = 0; i < self.navButtons.count; i++) {
-        UIButton *button = self.navButtons[i];
-        BOOL selected = i == page;
-        button.backgroundColor = selected ? UIColor.clearColor
-                                          : [UIColor colorWithWhite:1.0 alpha:0.035];
-        [button setTitleColor:(selected ? NCLRSidebarSelectedForeground()
-                                        : NCLRSidebarUnselectedForeground())
-                     forState:UIControlStateNormal];
-        button.tintColor = selected ? NCLRSidebarSelectedForeground()
-                                    : NCLRSidebarUnselectedForeground();
-        button.alpha = selected ? 1.0 : 0.82;
-    }
-    if (page >= 0 && page < (NSInteger)self.navButtons.count) {
-        [NSLayoutConstraint deactivateConstraints:self.selectionIndicatorConstraints];
-        UIButton *target = self.navButtons[page];
-        self.selectionIndicatorConstraints = @[
-            [self.selectionIndicator.leadingAnchor constraintEqualToAnchor:target.leadingAnchor],
-            [self.selectionIndicator.trailingAnchor constraintEqualToAnchor:target.trailingAnchor],
-            [self.selectionIndicator.topAnchor constraintEqualToAnchor:target.topAnchor],
-            [self.selectionIndicator.bottomAnchor constraintEqualToAnchor:target.bottomAnchor],
-        ];
-        [NSLayoutConstraint activateConstraints:self.selectionIndicatorConstraints];
-        void (^layout)(void) = ^{ [self.view layoutIfNeeded]; };
-        if (animated) {
-            [UIView animateWithDuration:0.460
-                                  delay:0.0
-                 usingSpringWithDamping:0.62
-                  initialSpringVelocity:0.5
-                                options:UIViewAnimationOptionBeginFromCurrentState |
-                                        UIViewAnimationOptionAllowUserInteraction |
-                                        UIViewAnimationOptionCurveEaseInOut
-                            animations:layout
-                            completion:nil];
-        } else {
-            [UIView performWithoutAnimation:layout];
-        }
-    }
-    for (NSInteger i = 0; i < self.compactButtons.count; i++) {
-        UIButton *button = self.compactButtons[i];
-        BOOL selected = i == page;
-        button.backgroundColor = selected ? NCLRSidebarSelectionColor() : UIColor.clearColor;
-        button.tintColor = selected ? NCLRSidebarSelectedForeground()
-                                    : NCLRSidebarUnselectedForeground();
-        button.alpha = selected ? 1.0 : 0.72;
-    }
+    [self.sidebarController setSelectedPage:page animated:animated];
 }
 
 - (void)detachController:(UIViewController *)controller {
@@ -7660,7 +7318,7 @@ static CIContext *NCLRTransitionCIContext(void) {
     }
 
     CGFloat enterOffset = reducedMotion ? 12.0 : 46.0;
-    CGFloat enterDuration = reducedMotion ? 0.240 : 0.420;
+    CGFloat enterDuration = reducedMotion ? 0.192 : 0.336;
     controller.view.alpha = 0.0;
     controller.view.transform = CGAffineTransformMakeTranslation(0.0,
                                                                   enterOffset * direction);
@@ -7673,7 +7331,7 @@ static CIContext *NCLRTransitionCIContext(void) {
         CGFloat exitOffset = reducedMotion ? 8.0 : 16.0;
         oldController.view.alpha = 1.0;
         oldController.view.transform = CGAffineTransformIdentity;
-        [UIView animateWithDuration:(reducedMotion ? 0.080 : 0.120)
+        [UIView animateWithDuration:(reducedMotion ? 0.064 : 0.096)
                               delay:0.0
                             options:UIViewAnimationOptionBeginFromCurrentState |
                                     UIViewAnimationOptionAllowUserInteraction |
@@ -7693,7 +7351,7 @@ static CIContext *NCLRTransitionCIContext(void) {
 
     self.transitionInFlight = YES;
     [UIView animateWithDuration:enterDuration
-                          delay:useBlur || reducedMotion ? 0.0 : 0.090
+                          delay:useBlur || reducedMotion ? 0.0 : 0.072
          usingSpringWithDamping:reducedMotion ? 1.0 : 0.82
           initialSpringVelocity:reducedMotion ? 0.0 : 0.5
                         options:UIViewAnimationOptionBeginFromCurrentState |
@@ -7717,8 +7375,10 @@ static CIContext *NCLRTransitionCIContext(void) {
 - (void)refreshAccount {
     NCLRAuth *auth = NCLRAuth.shared;
     BOOL premium = auth.token.length > 0;
-    self.accountLabel.text = premium ? (auth.name ?: @"正版用户") : @"未登录";
-    NCLRLoadRemoteAvatar(auth.avatarURL, self.accountAvatarImage, self.accountAvatarLabel);
+    NSString *name = premium ? (auth.name.length ? auth.name : @"正版用户") : @"未登录";
+    [self.sidebarController updateAccountWithName:name
+                                          detail:@"Microsoft 账号"
+                                       avatarURL:auth.avatarURL];
 }
 @end
 

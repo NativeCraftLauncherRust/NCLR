@@ -1683,6 +1683,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, strong) UIView *content;
 @property (nonatomic, strong) NSArray<UIButton *> *navButtons;
 @property (nonatomic, strong) UILabel *accountLabel;
+@property (nonatomic, strong) CAGradientLayer *accountGradientLayer;
 @property (nonatomic, assign) NSInteger page;
 @end
 
@@ -1786,8 +1787,19 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 
     UIView *account = [[UIView alloc] init];
     account.translatesAutoresizingMaskIntoConstraints = NO;
-    account.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.045];
+    account.backgroundColor = UIColor.clearColor;
     account.layer.cornerRadius = 12.0;
+    account.layer.masksToBounds = YES;
+    CAGradientLayer *accountGradient = [CAGradientLayer layer];
+    accountGradient.colors = @[
+        (__bridge id)[UIColor colorWithWhite:1.0 alpha:0.12].CGColor,
+        (__bridge id)[UIColor colorWithWhite:1.0 alpha:0.0].CGColor,
+    ];
+    accountGradient.locations = @[@0.0, @1.0];
+    accountGradient.startPoint = CGPointMake(0.5, 1.0);
+    accountGradient.endPoint = CGPointMake(0.5, 0.0);
+    [account.layer addSublayer:accountGradient];
+    self.accountGradientLayer = accountGradient;
     UILabel *avatar = [self label:@"N" size:15.0 weight:UIFontWeightBold
                             color:NCLRColor(0.55, 1.0, 0.78, 1.0)];
     avatar.textAlignment = NSTextAlignmentCenter;
@@ -1851,6 +1863,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
             layer.frame = self.view.bounds;
         }
     }
+    self.accountGradientLayer.frame = self.accountGradientLayer.superlayer.bounds;
 }
 
 - (void)navTapped:(UIButton *)sender {
