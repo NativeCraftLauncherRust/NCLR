@@ -2379,6 +2379,21 @@ index c748964..39bcc47 100644
          }
      }
  
+diff --git a/crates/horizon-client/src/game/modding/native_mapping_presses.rs b/crates/horizon-client/src/game/modding/native_mapping_presses.rs
+index fd96e76..abd3ae4 100644
+--- a/crates/horizon-client/src/game/modding/native_mapping_presses.rs
++++ b/crates/horizon-client/src/game/modding/native_mapping_presses.rs
+@@ -46,6 +46,10 @@ impl Game<'_> {
+             MouseButton::Right => (3, self.settings.toggle_use),
+             _ => return,
+         };
++        // iOS has no toggle attack or use: a tap must not latch the mapping and
++        // keep breaking blocks after the finger or button is up, whatever an
++        // options.txt from an older install says.
++        let option = option && !cfg!(target_os = "ios");
+         self.toggles.0[slot].set_down(down, option);
+         self.left = self.toggles.is_down(2);
+         self.right = self.toggles.is_down(3);
 diff --git a/crates/horizon-client/src/game/runtime/frame_autotune.rs b/crates/horizon-client/src/game/runtime/frame_autotune.rs
 index 37af012..4f33a46 100644
 --- a/crates/horizon-client/src/game/runtime/frame_autotune.rs

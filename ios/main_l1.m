@@ -33,16 +33,16 @@ extern void horizon_ios_hardware_mouse_scroll(double dx, double dy);
 extern void horizon_ios_text_commit(const char *text);
 extern void horizon_ios_set_text_input_hooks(void (*begin)(void), void (*end)(void));
 
-// The game locks the iPadOS pointer while it is playing so a mouse dragged to
-// the screen edge cannot open the dock, Control Centre or the app switcher.
-// The lock follows the engine's pointer-hidden flag, so menus release it and
-// get their cursor back. This category reaches winit's own view controller,
-// which the shell cannot subclass.
+// The game used to lock the iPadOS pointer while playing so a mouse dragged to
+// the screen edge could not open the dock. The lock also froze the pointer for
+// menus on some iPads (the position UIKit reports goes stale once locked), and a
+// frozen cursor is worse than the dock gesture: iOS never locks now, the system
+// pointer stays live everywhere, and the game follows it.
 @interface UIViewController (NCLRPointerLock)
 @end
 @implementation UIViewController (NCLRPointerLock)
 - (BOOL)prefersPointerLocked {
-    return horizon_ios_pointer_hidden() != 0;
+    return NO;
 }
 @end
 
@@ -1114,7 +1114,9 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
 }
 
 - (void)refreshPointerLock {
-    BOOL desired = horizon_ios_pointer_hidden() != 0;
+    // No pointer lock on iOS: the system pointer stays visible and moving, and
+    // both the camera and the menus follow its absolute position.
+    BOOL desired = NO;
     if (desired != self.lockDesired) {
         self.lockDesired = desired;
         NCLRLog(@"pointer: lock desired=%d", desired);
@@ -1441,14 +1443,15 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
         horizon_ios_hardware_mouse_motion(dx, -dy, position.x, position.y);
         return;
     }
-    // Menus: follow the real system pointer while its reports are fresh. When
-    // UIKit stops reporting (the pointer interaction was not asked for a
-    // region) fall back to the accumulated GCMouse position, so dragging still
-    // moves the game's cursor instead of freezing it where reports stopped.
+    // Menus: follow the real system pointer while its reports are fresh; those
+    // reports already carry the movement to the camera. Only when UIKit has
+    // stopped reporting does GCMouse's own delta drive the cursor.
     NSTimeInterval now = CFAbsoluteTimeGetCurrent();
     BOOL fresh = self.hasAbsolutePixel && now - self.lastAbsoluteTime < 0.3;
-    CGPoint position = fresh ? self.lastAbsolutePixel : CGPointMake(x * scale, y * scale);
-    horizon_ios_hardware_mouse_motion(dx, -dy, position.x, position.y);
+    if (fresh) {
+        return;
+    }
+    horizon_ios_hardware_mouse_motion(dx, -dy, x * scale, y * scale);
 }
 
 - (void)notePointerAtPixel:(CGPoint)pixel {
@@ -1459,9 +1462,14 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     self.lastAbsoluteTime = CFAbsoluteTimeGetCurrent();
     NCLRPointerPixel = pixel;
     if (!self.lockDesired) {
-        // Menus (or a stopped world): the game moves its cursor with the
-        // absolute position the system pointer reports.
-        horizon_ios_hardware_mouse_motion(0.0, 0.0, pixel.x, pixel.y);
+        // No pointer lock: the absolute position moves menus, and the movement
+        // itself turns the camera while playing. Without this a menu cursor
+        // sits still and the camera only moves from GCMouse's locked deltas.
+        CGFloat dx = pixel.x - previous.x;
+        CGFloat dy = pixel.y - previous.y;
+        BOOL moved = hadPrevious && (dx != 0.0 || dy != 0.0);
+        horizon_ios_hardware_mouse_motion(moved ? dx : 0.0, moved ? -dy : 0.0,
+                                          pixel.x, pixel.y);
         return;
     }
     if (self.lockHeld || !hadPrevious) {
