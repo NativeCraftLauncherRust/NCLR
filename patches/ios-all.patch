@@ -2022,7 +2022,7 @@ index 026382e..9289a31 100644
                  if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
              {
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..a69822c 100644
+index 16664ff..6e5ecd6 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
 @@ -7,6 +7,36 @@ fn studio_suppresses_focus_pause(replay_active: bool, freecam_active: bool) -> b
@@ -2277,6 +2277,45 @@ index 16664ff..a69822c 100644
      /// `Minecraft.pause`: a single-player game with a pausing screen open.
      pub(super) fn pauses_game(&self) -> bool {
          self.has_singleplayer_server()
+@@ -180,6 +418,16 @@ impl Game<'_> {
+             // InputQuirks.RESTORE_KEY_STATE_AFTER_MOUSE_GRAB is off (macOS).
+             self.restore_held_keys();
+         }
++        #[cfg(target_os = "ios")]
++        {
++            // iOS has no winit cursor grab: the UIKit shell holds the pointer
++            // and the pointer-hidden flag it reads. Treat the grab as the
++            // shell's, so a request cannot fail and leave captured false -
++            // which made every frame re-capture and drop a motion sample.
++            self.captured = capture;
++            self.capture_mode = None;
++            return;
++        }
+         let Some(window) = &self.window else { return };
+         let size = self.renderer.as_ref().map_or_else(
+             || window.inner_size().into(),
+@@ -326,11 +574,16 @@ impl Game<'_> {
+             );
+         }
+         // Outside a run, a window whose grab is the system's holds it exactly while the game
+-        // has it grabbed; only a run leaves the two apart.
+-        if !self.internal_grab() && self.captured != self.capture_mode.is_some() {
+-            let grab = self.captured;
+-            self.captured = self.capture_mode.is_some();
+-            self.capture(grab);
++        // has it grabbed; only a run leaves the two apart. iOS has no system grab to
++        // reconcile (winit refuses one there and capture keeps the state itself), so
++        // running this per frame would reset captured right before the frame reads it.
++        #[cfg(not(target_os = "ios"))]
++        {
++            if !self.internal_grab() && self.captured != self.capture_mode.is_some() {
++                let grab = self.captured;
++                self.captured = self.capture_mode.is_some();
++                self.capture(grab);
++            }
+         }
+     }
+     /// A Linux window manager can release the native pointer grab while the
 diff --git a/crates/horizon-client/src/game/runtime/loading_screen.rs b/crates/horizon-client/src/game/runtime/loading_screen.rs
 index 2511aa2..f276011 100644
 --- a/crates/horizon-client/src/game/runtime/loading_screen.rs

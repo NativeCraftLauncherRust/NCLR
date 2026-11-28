@@ -708,9 +708,19 @@ static void NCLRRestoreVisibleKeyWindow(void) {
 // visible pointer instead of a virtual cursor drifting from it.
 static CGPoint NCLRPointerPixel = {-1.0, -1.0};
 
+// Whether UIKit currently hides the system pointer. This is true only while
+// iPadOS really holds the pointer lock (UIPointerLockState.isLocked). Hiding
+// the pointer for a lock the system never granted leaves the game with neither
+// deltas (GCMouse reports none unless the pointer is locked) nor an absolute
+// pointer to fall back on, which is how camera look died until a click.
+static BOOL NCLRSystemPointerHidden = NO;
+
+static void NCLRNotePointerAtPixel(CGPoint pixel);
+
 // The game draws its own crosshair, and a captured pointer means the player is
-// turning the camera. Hide the system arrow then, and restore it whenever the
-// game releases the pointer so menus keep a usable cursor.
+// turning the camera. Hide the system arrow only while the lock is really held,
+// and restore it whenever the game releases the pointer or iPadOS drops the
+// lock, so menus and the unlocked fallback keep a usable cursor.
 @interface NCLRHiddenPointerDelegate : NSObject <UIPointerInteractionDelegate>
 @end
 
@@ -721,10 +731,7 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     UIView *view = interaction.view;
     CGFloat scale = view.window.screen.scale > 0.0 ? view.window.screen.scale : 1.0;
     CGPoint point = request.location;
-    NCLRPointerPixel = CGPointMake(point.x * scale, point.y * scale);
-    // Re-send the absolute position so the game's GUI cursor sits exactly
-    // where the system pointer is drawn.
-    horizon_ios_hardware_mouse_motion(0.0, 0.0, NCLRPointerPixel.x, NCLRPointerPixel.y);
+    NCLRNotePointerAtPixel(CGPointMake(point.x * scale, point.y * scale));
     return defaultRegion;
 }
 
@@ -732,10 +739,7 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
                          styleForRegion:(UIPointerRegion *)region {
     (void)interaction;
     (void)region;
-    if (horizon_ios_pointer_hidden() != 0) {
-        return [UIPointerStyle hiddenPointerStyle];
-    }
-    return nil;
+    return NCLRSystemPointerHidden ? [UIPointerStyle hiddenPointerStyle] : nil;
 }
 @end
 
@@ -754,12 +758,25 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
 @property (nonatomic, strong) UIPointerInteraction *pointerHiding;
 @property (nonatomic, weak) UIView *pointerHidingView;
 @property (nonatomic, assign) BOOL pointerHidden;
+@property (nonatomic, assign) BOOL lockDesired;
+@property (nonatomic, assign) BOOL lockHeld;
+@property (nonatomic, assign) BOOL leftDown;
+@property (nonatomic, assign) BOOL rightDown;
+@property (nonatomic, assign) BOOL middleDown;
+@property (nonatomic, assign) CGPoint lastAbsolutePixel;
+@property (nonatomic, assign) BOOL hasAbsolutePixel;
+@property (nonatomic, strong) NSTimer *buttonWatch;
 + (instancetype)shared;
 - (void)start;
 - (void)stop;
 - (void)applyMotionDX:(float)deltaX dy:(float)deltaY;
+- (void)notePointerAtPixel:(CGPoint)pixel;
+- (void)setButton:(int)button down:(BOOL)down;
+- (void)reconcileButtons;
+- (void)refreshPointerLock;
+- (void)requestPointerLock;
+- (void)updateLockState;
 - (void)syncSystemPointerHidden;
-- (void)updatePointerLockForWindow:(UIWindow *)window;
 @end
 
 @implementation NCLRHardwareInput
@@ -772,7 +789,10 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
 
 - (instancetype)init {
     self = [super init];
-    if (self) _keysDown = [NSMutableSet set];
+    if (self) {
+        _keysDown = [NSMutableSet set];
+        _lastAbsolutePixel = CGPointMake(-1.0, -1.0);
+    }
     return self;
 }
 
@@ -794,6 +814,13 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
                    name:UIApplicationWillResignActiveNotification object:nil];
     [center addObserver:self selector:@selector(devicesChanged:)
                    name:UIApplicationDidEnterBackgroundNotification object:nil];
+    // iPadOS grants and drops the pointer lock on its own (a system gesture, a
+    // scene that stops qualifying, Escape): watch the real state instead of
+    // assuming the lock follows our preference.
+    [center addObserver:self selector:@selector(pointerLockStateChanged:)
+                   name:UIPointerLockStateDidChangeNotification object:nil];
+    [center addObserver:self selector:@selector(windowBecameKey:)
+                   name:UIWindowDidBecomeKeyNotification object:nil];
     // UIKit can drop a device's handlers while the app is in the background or
     // while the system keyboard takes over. A slow tick reinstalls them even
     // when no connect notification arrives.
@@ -803,6 +830,16 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
                                           userInfo:nil
                                            repeats:YES];
     [NSRunLoop.mainRunLoop addTimer:self.watchdog forMode:NSRunLoopCommonModes];
+    // A click can change the pointer path mid-press (granting or dropping the
+    // lock), and the system swallows the release with it; GameController gives
+    // us no second edge. Poll the buttons so a lost release cannot leave the
+    // game attacking forever; real edges still arrive first and are deduped.
+    self.buttonWatch = [NSTimer timerWithTimeInterval:0.1
+                                               target:self
+                                             selector:@selector(buttonWatchTick:)
+                                             userInfo:nil
+                                              repeats:YES];
+    [NSRunLoop.mainRunLoop addTimer:self.buttonWatch forMode:NSRunLoopCommonModes];
     [self refreshDevices];
 }
 
@@ -811,7 +848,10 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     self.running = NO;
     [self.watchdog invalidate];
     self.watchdog = nil;
+    [self.buttonWatch invalidate];
+    self.buttonWatch = nil;
     [NSNotificationCenter.defaultCenter removeObserver:self];
+    NCLRSystemPointerHidden = NO;
     [self detachKeyboard:YES];
     [self detachMouse];
     if (self.pointerHiding) {
@@ -863,28 +903,125 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     BOOL hasKeyboard = self.keyboard != nil;
     BOOL hasMouse = self.mouse != nil;
     horizon_ios_set_hardware_input((hasKeyboard || hasMouse) ? 1 : 0, hasMouse ? 1 : 0);
+    [self refreshPointerLock];
     [self syncSystemPointerHidden];
+    [self reconcileButtons];
 }
 
-- (void)syncSystemPointerHidden {
-    BOOL hide = horizon_ios_pointer_hidden() != 0;
-    UIWindow *window = nil;
+- (UIWindow *)keyWindowForPointer {
+    UIWindow *fallback = nil;
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
             if (candidate.hidden || candidate.alpha < 0.01) continue;
-            if (candidate.isKeyWindow) { window = candidate; break; }
-            if (!window) window = candidate;
+            if (candidate.isKeyWindow) return candidate;
+            if (!fallback) fallback = candidate;
         }
-        if (window != nil && window.isKeyWindow) break;
     }
-    if (!window) return;
+    return fallback;
+}
+
+- (void)pointerLockStateChanged:(NSNotification *)note {
+    (void)note;
+    // The system drops the lock by itself (its own release gesture, a scene
+    // that stops qualifying). Re-derive what we hide and heal any button the
+    // path change swallowed; the next click asks for the lock again.
+    [self updateLockState];
+}
+
+- (void)windowBecameKey:(NSNotification *)note {
+    (void)note;
+    if (self.lockDesired) {
+        [self requestPointerLock];
+    }
+    [self updateLockState];
+}
+
+- (void)buttonWatchTick:(NSTimer *)timer {
+    (void)timer;
+    [self reconcileButtons];
+}
+
+- (void)updateLockState {
+    BOOL locked = NO;
+    if (@available(iOS 14.1, *)) {
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            if (((UIWindowScene *)scene).pointerLockState.isLocked) {
+                locked = YES;
+                break;
+            }
+        }
+    }
+    if (locked == self.lockHeld) return;
+    self.lockHeld = locked;
+    [self syncSystemPointerHidden];
+    [self reconcileButtons];
+}
+
+- (void)refreshPointerLock {
+    BOOL desired = horizon_ios_pointer_hidden() != 0;
+    if (desired != self.lockDesired) {
+        self.lockDesired = desired;
+        // A menu opens with the lock still held: hide state has to follow the
+        // new intent before UIKit answers, or the arrow stays hidden.
+        [self syncSystemPointerHidden];
+        [self requestPointerLock];
+    }
+    [self updateLockState];
+}
+
+- (void)requestPointerLock {
+    UIWindow *window = [self keyWindowForPointer];
+    // Ask the window's own root controller, not a presented alert: the
+    // preference that matters is the one the game's window reads.
+    UIViewController *controller = window.rootViewController;
+    if ([controller respondsToSelector:@selector(setNeedsUpdateOfPrefersPointerLocked)]) {
+        [controller setNeedsUpdateOfPrefersPointerLocked];
+    }
+}
+
+- (void)reconcileButtons {
+    GCMouse *mouse = self.mouse;
+    if (!mouse) {
+        [self setButton:0 down:NO];
+        [self setButton:1 down:NO];
+        [self setButton:2 down:NO];
+        return;
+    }
+    [self setButton:0 down:mouse.mouseInput.leftButton.isPressed];
+    [self setButton:1 down:mouse.mouseInput.rightButton.isPressed];
+    [self setButton:2 down:mouse.mouseInput.middleButton.isPressed];
+}
+
+- (void)setButton:(int)button down:(BOOL)down {
+    BOOL *slot = NULL;
+    switch (button) {
+        case 0: slot = &_leftDown; break;
+        case 1: slot = &_rightDown; break;
+        case 2: slot = &_middleDown; break;
+        default: return;
+    }
+    if (*slot == down) return;
+    *slot = down;
+    horizon_ios_hardware_mouse_button(button, down ? 1 : 0);
+    if (!down && self.lockDesired && !self.lockHeld) {
+        // A click is the user gesture iPadOS wants before it grants back a lock
+        // it dropped, and the field rule is to ask on the release: asking on
+        // the press flips the pointer path in the middle of the click and
+        // strands its release on the other one.
+        [self requestPointerLock];
+    }
+}
+
+- (void)syncSystemPointerHidden {
+    UIWindow *window = [self keyWindowForPointer];
+    NCLRSystemPointerHidden = self.lockDesired && self.lockHeld;
     if (self.pointerHiding && self.pointerHidingView == window) {
-        if (hide != self.pointerHidden) {
-            self.pointerHidden = hide;
+        if (NCLRSystemPointerHidden != self.pointerHidden) {
+            self.pointerHidden = NCLRSystemPointerHidden;
             [self.pointerHiding invalidate];
         }
-        [self updatePointerLockForWindow:window];
         return;
     }
     if (self.pointerHiding) {
@@ -892,23 +1029,13 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
         self.pointerHiding = nil;
         self.pointerHidingView = nil;
     }
+    if (!window) return;
     static NCLRHiddenPointerDelegate *hiddenPointer;
     if (!hiddenPointer) hiddenPointer = [NCLRHiddenPointerDelegate new];
     self.pointerHiding = [[UIPointerInteraction alloc] initWithDelegate:hiddenPointer];
     self.pointerHidingView = window;
-    self.pointerHidden = hide;
+    self.pointerHidden = NCLRSystemPointerHidden;
     [window addInteraction:self.pointerHiding];
-    [self updatePointerLockForWindow:window];
-}
-
-- (void)updatePointerLockForWindow:(UIWindow *)window {
-    UIViewController *controller = window.rootViewController;
-    while (controller.presentedViewController != nil) {
-        controller = controller.presentedViewController;
-    }
-    if ([controller respondsToSelector:@selector(setNeedsUpdateOfPrefersPointerLocked)]) {
-        [controller setNeedsUpdateOfPrefersPointerLocked];
-    }
 }
 
 - (uint8_t)modifiersForInput:(GCKeyboardInput *)input {
@@ -982,17 +1109,17 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     mouse.mouseInput.leftButton.pressedChangedHandler =
         ^(GCControllerButtonInput *button, float value, BOOL pressed) {
         (void)button; (void)value;
-        NCLRRunOnMain(^{ horizon_ios_hardware_mouse_button(0, pressed ? 1 : 0); });
+        NCLRRunOnMain(^{ [NCLRHardwareInput.shared setButton:0 down:pressed]; });
     };
     mouse.mouseInput.rightButton.pressedChangedHandler =
         ^(GCControllerButtonInput *button, float value, BOOL pressed) {
         (void)button; (void)value;
-        NCLRRunOnMain(^{ horizon_ios_hardware_mouse_button(1, pressed ? 1 : 0); });
+        NCLRRunOnMain(^{ [NCLRHardwareInput.shared setButton:1 down:pressed]; });
     };
     mouse.mouseInput.middleButton.pressedChangedHandler =
         ^(GCControllerButtonInput *button, float value, BOOL pressed) {
         (void)button; (void)value;
-        NCLRRunOnMain(^{ horizon_ios_hardware_mouse_button(2, pressed ? 1 : 0); });
+        NCLRRunOnMain(^{ [NCLRHardwareInput.shared setButton:2 down:pressed]; });
     };
     // The scroll wheel arrives as raw axes: vertical motion rides the first
     // axis with the sign flipped, horizontal motion the second. The game reads
@@ -1006,6 +1133,9 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
         NCLRRunOnMain(^{ horizon_ios_hardware_mouse_scroll(horizontal, vertical); });
     };
     self.cursorReady = NO;
+    self.hasAbsolutePixel = NO;
+    self.lastAbsolutePixel = CGPointMake(-1.0, -1.0);
+    [self reconcileButtons];
     [self applyMotionDX:0.0f dy:0.0f];
 }
 
@@ -1025,9 +1155,11 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     os_unfair_lock_unlock(&NCLRMotionLock);
     self.mouse = nil;
     for (int button = 0; button < 3; button++) {
-        horizon_ios_hardware_mouse_button(button, 0);
+        [self setButton:button down:NO];
     }
     self.cursorReady = NO;
+    self.hasAbsolutePixel = NO;
+    self.lastAbsolutePixel = CGPointMake(-1.0, -1.0);
 }
 
 - (void)applyMotionDX:(float)deltaX dy:(float)deltaY {
@@ -1057,7 +1189,12 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     UIScreen *screen = window.screen ?: UIScreen.mainScreen;
     CGSize size = window ? window.bounds.size : screen.bounds.size;
     if (size.width < 1.0 || size.height < 1.0) return;
-    [self updatePointerLockForWindow:window];
+    // The engine's hidden flag flips when a screen opens or a world starts.
+    // Ask UIKit for the new lock the moment it changes; asking once per motion
+    // sample made the lock re-evaluate at the mouse's report rate.
+    if ((horizon_ios_pointer_hidden() != 0) != self.lockDesired) {
+        [self refreshPointerLock];
+    }
     if (!self.cursorReady || !CGSizeEqualToSize(self.cursorBounds, size)) {
         self.cursor = CGPointMake(size.width * 0.5, size.height * 0.5);
         self.cursorBounds = size;
@@ -1073,12 +1210,20 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     if (NCLRMouseInvertY) dy = -dy;
     dx *= NCLRMouseSensitivity;
     dy *= NCLRMouseSensitivity;
-    // In game the pointer is hidden and only the delta matters, so the window
-    // lookup can be skipped for the high-rate reports that arrive while
-    // turning.
-    if (horizon_ios_pointer_hidden() != 0) {
-        horizon_ios_hardware_mouse_motion(
-            dx, -dy, fmax(0.0, NCLRPointerPixel.x), fmax(0.0, NCLRPointerPixel.y));
+    // In game only the delta matters; keep the last absolute position for the
+    // clicks that land on a menu later, because GCMouse has no position of its
+    // own and an unknown pointer must not pin the game cursor to (0, 0).
+    if (self.lockDesired) {
+        if (!self.lockHeld) {
+            // The system is not locked: UIKit reports the pointer absolutely
+            // and notePointerAtPixel turns that into look. GCMouse has no
+            // relative motion here; forwarding any would double the turn.
+            return;
+        }
+        CGPoint position = self.hasAbsolutePixel
+            ? self.lastAbsolutePixel
+            : CGPointMake(x * scale, y * scale);
+        horizon_ios_hardware_mouse_motion(dx, -dy, position.x, position.y);
         return;
     }
     // GameController reports pointer deltas in screen points, where y grows
@@ -1092,7 +1237,39 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
         : CGPointMake(x * scale, y * scale);
     horizon_ios_hardware_mouse_motion(dx, -dy, cursorPixels.x, cursorPixels.y);
 }
+
+- (void)notePointerAtPixel:(CGPoint)pixel {
+    CGPoint previous = self.lastAbsolutePixel;
+    BOOL hadPrevious = self.hasAbsolutePixel;
+    self.lastAbsolutePixel = pixel;
+    self.hasAbsolutePixel = YES;
+    NCLRPointerPixel = pixel;
+    if (!self.lockDesired) {
+        // Menus (or a stopped world): the game moves its cursor with the
+        // absolute position the system pointer reports.
+        horizon_ios_hardware_mouse_motion(0.0, 0.0, pixel.x, pixel.y);
+        return;
+    }
+    if (self.lockHeld || !hadPrevious) {
+        // Locked: GCMouse is the motion source. Keep the position current so a
+        // click that opens a menu lands under the pointer.
+        horizon_ios_hardware_mouse_motion(0.0, 0.0, pixel.x, pixel.y);
+        return;
+    }
+    // Playing without the lock (iPadOS refuses it in Stage Manager or Split
+    // View, and drops it on its own gesture): GCMouse reports no deltas, so
+    // turn the view from the pointer's own movement instead of leaving the
+    // camera dead until a click wins the lock back.
+    CGFloat dx = pixel.x - previous.x;
+    CGFloat dy = pixel.y - previous.y;
+    if (dx == 0.0 && dy == 0.0) return;
+    horizon_ios_hardware_mouse_motion(dx, -dy, pixel.x, pixel.y);
+}
 @end
+
+static void NCLRNotePointerAtPixel(CGPoint pixel) {
+    [NCLRHardwareInput.shared notePointerAtPixel:pixel];
+}
 
 static NSString *NCLRModSwitchesPath(void) {
     return [NCLRDocuments() stringByAppendingPathComponent:@"horizon-mods.txt"];
