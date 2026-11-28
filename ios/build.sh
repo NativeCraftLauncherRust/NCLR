@@ -21,7 +21,8 @@
 #   SHIP_BUNDLE       ship.hzr3 to place in the app for first-run assembly
 #                     (default: $ROOT/ship.hzr3 when present)
 #   WASM_STD          horizon-wasm-std.wasm placed beside the executable
-#                     (optional; wasm mods refuse to load without it)
+#                     (optional legacy member, in addition to WASM_STD_DIR)
+#   WASM_STD_DIR      manifested members (default: $ROOT/ios/wasm-std)
 set -euxo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -41,6 +42,13 @@ ICON_DIR="${ICON_DIR:-$ROOT/ios/icons}"
 OUT="${BUILD_DIR:-$ROOT/build}"
 APP="$OUT/$APP_NAME.app"
 DIST="${DIST_DIR:-$ROOT/dist}"
+WASM_STD_DIR="${WASM_STD_DIR-$ROOT/ios/wasm-std}"
+STD_ARGS=()
+if [ -n "${WASM_STD:-}" ]; then
+    STD_ARGS+=(--legacy "$WASM_STD")
+fi
+# Reject missing or corrupt inputs before compilation or deleting old outputs.
+python3 "$ROOT/scripts/wasm-std.py" "$WASM_STD_DIR" ${STD_ARGS[@]+"${STD_ARGS[@]}"}
 
 source "$ROOT/scripts/ios-swift-support.sh"
 nclr_configure_ios_toolchain
@@ -51,6 +59,8 @@ fi
 
 STATIC_LIB="$TARGET_DIR/$RUST_TARGET/$PROFILE/libhorizon_ios.a"
 test -f "$STATIC_LIB"
+HORIZON_DIR="$HORIZON_DIR" CARGO_TARGET_DIR="$TARGET_DIR" \
+    bash "$ROOT/scripts/verify-wasm-std.sh" "$WASM_STD_DIR" ${STD_ARGS[@]+"${STD_ARGS[@]}"}
 
 rm -rf "$OUT" "$DIST"
 mkdir -p "$APP" "$DIST"
@@ -112,18 +122,9 @@ if [ -n "${SHIP_BUNDLE:-}" ]; then
     ls -lh "$APP/ship.hzr3"
 fi
 
-# The wasm loader finds one or more std members beside the executable.
-if [ -n "${WASM_STD_DIR:-}" ]; then
-    test -d "$WASM_STD_DIR"
-    mkdir -p "$APP/horizon-wasm-std"
-    cp "$WASM_STD_DIR/"*.wasm "$APP/horizon-wasm-std/"
-    ls -lh "$APP/horizon-wasm-std/"
-fi
-if [ -n "${WASM_STD:-}" ]; then
-    test -f "$WASM_STD"
-    cp "$WASM_STD" "$APP/horizon-wasm-std.wasm"
-    ls -lh "$APP/horizon-wasm-std.wasm"
-fi
+# Stage the verified inventory before signing the app resources.
+python3 "$ROOT/scripts/wasm-std.py" "$WASM_STD_DIR" ${STD_ARGS[@]+"${STD_ARGS[@]}"} \
+    --stage "$APP" --engine "$STATIC_LIB" --root "$ROOT"
 
 # Ad-hoc signature only: the IPA stays re-signable by Sideloadly/AltStore.
 if nclr_uses_swift_sidebar "$MAIN_SOURCE"; then
@@ -134,7 +135,28 @@ codesign --force --sign - --timestamp=none "$APP"
 
 mkdir -p "$OUT/Payload"
 cp -R "$APP" "$OUT/Payload/"
-(cd "$OUT" && zip -qry "$DIST/$IPA_NAME" Payload)
+IPA_CANDIDATE="$DIST/.${IPA_NAME%.ipa}.unverified.ipa"
+trap 'rm -f "$IPA_CANDIDATE" "${IPA_CANDIDATE%.ipa}.manifest.json"' EXIT
+(cd "$OUT" && zip -qry "$IPA_CANDIDATE" Payload)
+
+# Publish the requested filename only after the final archive passes.
+if nclr_uses_swift_sidebar "$MAIN_SOURCE"; then
+    WASM_STD_DIR="$WASM_STD_DIR" HORIZON_DIR="$HORIZON_DIR" CARGO_TARGET_DIR="$TARGET_DIR" \
+        bash "$ROOT/scripts/verify-launcher-ipa.sh" "$IPA_CANDIDATE" "$MAIN_SOURCE"
+else
+    WASM_STD_DIR="$WASM_STD_DIR" HORIZON_DIR="$HORIZON_DIR" CARGO_TARGET_DIR="$TARGET_DIR" \
+        python3 "$ROOT/scripts/verify-wasm-ipa.py" "$IPA_CANDIDATE"
+fi
+mv "$IPA_CANDIDATE" "$DIST/$IPA_NAME"
+python3 - "$DIST/${IPA_NAME%.ipa}.manifest.json" "${IPA_CANDIDATE%.ipa}.manifest.json" "$IPA_NAME" <<'PY_MANIFEST'
+import json, sys
+from pathlib import Path
+output, candidate, name = sys.argv[1:]
+manifest = json.loads(Path(candidate).read_text())
+manifest["ipa"] = name
+Path(output).write_text(json.dumps(manifest, indent=2) + "\n")
+Path(candidate).unlink()
+PY_MANIFEST
 
 echo "--- artifact ---"
 echo "entrypoint: $MAIN_SOURCE"
@@ -142,5 +164,5 @@ ls -lh "$DIST/$IPA_NAME"
 shasum -a 256 "$DIST/$IPA_NAME"
 echo "--- app ---"
 file "$APP/$APP_NAME"
-plutil -p "$APP/Info.plist" | head -40
-unzip -l "$DIST/$IPA_NAME" | head -30
+plutil -p "$APP/Info.plist" | sed -n '1,40p'
+unzip -l "$DIST/$IPA_NAME" | sed -n '1,30p'

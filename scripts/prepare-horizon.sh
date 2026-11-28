@@ -17,6 +17,13 @@ if [ ! -d "$HORIZON_DIR/crates/horizon-core" ]; then
     cat "$ARCHIVE_PARTS".?? | tar -xzf - -C "$HORIZON_DIR"
 fi
 
+# Stop Git discovery at the parent so vendor trees inside this checkout are
+# patched relative to Horizon even when they do not have their own .git.
+HORIZON_DIR="$(cd "$HORIZON_DIR" && pwd -P)"
+apply_horizon_patch() {
+    (cd "$HORIZON_DIR" && GIT_CEILING_DIRECTORIES="$(dirname "$HORIZON_DIR")" git apply "$@")
+}
+
 # The port crate plus the four crates it depends on.
 rm -rf "$HORIZON_DIR/crates/horizon-ios"
 cp -R "$ROOT/port/horizon-ios" "$HORIZON_DIR/crates/horizon-ios"
@@ -72,9 +79,25 @@ elif 'winit = { path = "third_party/winit" }' not in text:
 workspace.write_text(text)
 PY
 
-if (cd "$HORIZON_DIR" && git apply --check "$ROOT/patches/ios-all.patch"); then
-    (cd "$HORIZON_DIR" && git apply "$ROOT/patches/ios-all.patch")
-elif (cd "$HORIZON_DIR" && git apply --reverse --check "$ROOT/patches/ios-all.patch"); then
+# Restore the overlay even when a locally modified tree cannot pass the base check.
+TOUCH_REMOVED=false
+restore_touch_overlay() {
+    if "$TOUCH_REMOVED"; then
+        apply_horizon_patch "$ROOT/patches/mod-api-touch-input.patch"
+    fi
+}
+trap restore_touch_overlay EXIT
+
+# The touch overlay changes lines introduced by ios-all.patch. Remove that
+# known overlay before checking the base patch, then reapply it below.
+if apply_horizon_patch --reverse --check "$ROOT/patches/mod-api-touch-input.patch" 2>/dev/null; then
+    apply_horizon_patch --reverse "$ROOT/patches/mod-api-touch-input.patch"
+    TOUCH_REMOVED=true
+fi
+
+if apply_horizon_patch --check "$ROOT/patches/ios-all.patch"; then
+    apply_horizon_patch "$ROOT/patches/ios-all.patch"
+elif apply_horizon_patch --reverse --check "$ROOT/patches/ios-all.patch"; then
     echo "iOS patch already applied"
 else
     echo "iOS patch does not apply to $PIN" >&2
@@ -85,14 +108,15 @@ fi
 # hook declaration, its entry point and the call in the touch path. Applied on
 # top of the iOS patch, so it has to come second.
 for patch in mod-api-touch-input; do
-    if (cd "$HORIZON_DIR" && git apply --check "$ROOT/patches/$patch.patch"); then
-        (cd "$HORIZON_DIR" && git apply "$ROOT/patches/$patch.patch")
-    elif (cd "$HORIZON_DIR" && git apply --reverse --check "$ROOT/patches/$patch.patch"); then
+    if apply_horizon_patch --check "$ROOT/patches/$patch.patch"; then
+        apply_horizon_patch "$ROOT/patches/$patch.patch"
+    elif apply_horizon_patch --reverse --check "$ROOT/patches/$patch.patch"; then
         echo "$patch already applied"
     else
         echo "patch $patch does not apply to $PIN" >&2
         exit 1
     fi
 done
+TOUCH_REMOVED=false
 
 echo "prepared $HORIZON_DIR at $PIN"

@@ -2861,10 +2861,17 @@ index 4c35972..1d82e98 100644
      #[test]
      fn the_frame_average_is_sent_as_unknown() {
 diff --git a/crates/horizon-mod-wasm/src/lib.rs b/crates/horizon-mod-wasm/src/lib.rs
-index 2ec0718..ae33266 100644
 --- a/crates/horizon-mod-wasm/src/lib.rs
 +++ b/crates/horizon-mod-wasm/src/lib.rs
-@@ -569,11 +569,9 @@ pub fn load_installed(
+@@ -21,6 +21,7 @@
+ mod prepared;
+ mod registration_capabilities;
+ mod runtime;
++pub mod standard_library;
+ // Why this thread's last guest call answered nothing, for the generated proxies' errors.
+ use runtime::take_refusal as wasm_call_refusal;
+ #[allow(
+@@ -569,16 +570,21 @@
              ..Loaded::default()
          },
          Ok(_) => {
@@ -2873,88 +2880,61 @@ index 2ec0718..ae33266 100644
 -                .and_then(|exe| std::fs::read(exe.with_file_name("horizon-wasm-std.wasm")).ok());
 -            load_available_std(
 -                std.as_deref(),
-+            let stds = installed_stds();
-+            load_available_stds(
-+                &stds,
++            let mut stds = standard_library::Inventory::installed();
++            let loaded = stds.load(
                  packages,
                  Some(&cache),
                  memory_cap_mib,
-@@ -672,6 +670,57 @@ fn initialize_modules(modules: &[WasmMod], inventory: &[mod_api::PackageInfo]) -
+                 launch.installation_side(),
+-            )
++            );
++            let diagnostics = stds.diagnostics.join("\n");
++            eprintln!("{diagnostics}");
++            if let Err(error) =
++                std::fs::write(game_dir.join("nclr-wasm-std-diagnostics.txt"), &diagnostics)
++            {
++                eprintln!("write wasm standard-library diagnostics: {error}");
++            }
++            loaded
+         }
+     };
+     refused.append(&mut loaded.refused);
+@@ -672,6 +678,7 @@
      succeeded
  }
  
-+/// Every std member shipped with this build. A mod's core crate hash depends
-+/// on the rustc that built it, so one std cannot link every version; the
-+/// loader tries each candidate for a group.
-+fn installed_stds() -> Vec<Vec<u8>> {
-+    let Some(exe) = std::env::current_exe().ok() else {
-+        return Vec::new();
-+    };
-+    let dir = exe.with_file_name("horizon-wasm-std");
-+    let mut paths: Vec<_> = std::fs::read_dir(&dir)
-+        .ok()
-+        .into_iter()
-+        .flatten()
-+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-+        .filter(|path| path.extension().is_some_and(|ext| ext == std::ffi::OsStr::new("wasm")))
-+        .collect();
-+    paths.sort();
-+    let mut stds: Vec<Vec<u8>> = paths
-+        .into_iter()
-+        .filter_map(|path| std::fs::read(path).ok())
-+        .collect();
-+    // Older packages carry one std beside the executable.
-+    if stds.is_empty()
-+        && let Ok(bytes) = std::fs::read(exe.with_file_name("horizon-wasm-std.wasm"))
-+    {
-+        stds.push(bytes);
-+    }
-+    stds
-+}
-+
-+/// Loads with every shipped std; a group whose mods need another rustc's
-+/// core crate links against the first candidate that works.
-+fn load_available_stds(
-+    stds: &[Vec<u8>],
-+    packages: Vec<WasmPackage>,
-+    cache: Option<&module_cache::ModuleCache>,
-+    memory_cap_mib: u32,
-+    side: horizon_mod_package::manifest::Side,
-+) -> Loaded {
-+    if stds.is_empty() {
-+        return Loaded {
-+            refused: packages
-+                .into_iter()
-+                .map(|p| (p.manifest.id, Refusal::NoStd))
-+                .collect(),
-+            ..Loaded::default()
-+        };
-+    }
-+    let members: Vec<&[u8]> = stds.iter().map(Vec::as_slice).collect();
-+    load_with_cache_multi(&members, packages, cache, memory_cap_mib, side)
-+}
-+
++#[cfg(test)]
  fn load_available_std(
      std: Option<&[u8]>,
      packages: Vec<WasmPackage>,
-@@ -730,6 +779,16 @@ fn load_with_cache(
-     cache: Option<&module_cache::ModuleCache>,
+@@ -731,6 +738,26 @@
      memory_cap_mib: u32,
      side: horizon_mod_package::manifest::Side,
-+) -> Loaded {
-+    load_with_cache_multi(&[std_member], packages, cache, memory_cap_mib, side)
+ ) -> Loaded {
++    load_with_cache_multi(
++        &[std_member],
++        &["provided std".into()],
++        packages,
++        cache,
++        memory_cap_mib,
++        side,
++        &mut Vec::new(),
++    )
 +}
 +
 +fn load_with_cache_multi(
 +    std_members: &[&[u8]],
++    std_names: &[String],
 +    packages: Vec<WasmPackage>,
 +    cache: Option<&module_cache::ModuleCache>,
 +    memory_cap_mib: u32,
 +    side: horizon_mod_package::manifest::Side,
- ) -> Loaded {
++    diagnostics: &mut Vec<String>,
++) -> Loaded {
      let (groups, refused) = groups(&packages, side);
      let mut loaded = Loaded {
-@@ -748,86 +807,53 @@ fn load_with_cache(
+         refused,
+@@ -748,86 +775,58 @@
          }
      };
      for indices in groups {
@@ -2980,7 +2960,39 @@ index 2ec0718..ae33266 100644
 -            .and_then(|mods| {
 -                if mods.len() != indices.len() {
 -                    return Err(Refusal::Runtime("missing mod boundary exports".into()));
--                }
++        let mod_members: Vec<_> = indices
++            .iter()
++            .zip(&names)
++            .map(|(&i, name)| link::Member {
++                name,
++                module: &packages[i].module,
++            })
++            .collect();
++        let mut errors = Vec::new();
++        let mut last_error = None;
++        let mut chosen = None;
++        // The same mod group may have been built by different rustc releases;
++        // its core crate hash is part of the symbol name. Try every shipped
++        // std and keep the first that links and subscribes cleanly.
++        for (std_member, std_name) in std_members.iter().zip(std_names) {
++            let mut members = Vec::with_capacity(mod_members.len() + 1);
++            members.push(link::Member {
++                name: "libstd.so",
++                module: std_member,
++            });
++            members.extend(mod_members.iter().map(|member| link::Member {
++                name: member.name,
++                module: member.module,
++            }));
++            let attempt = group_memory(&manifests, memory_cap_mib)
++                .and_then(|memory_mib| WasmMod::instantiate(&engine, memory_mib, &members, cache))
++                .and_then(|mods| check_subscriptions(mods, indices.len()));
++            match attempt {
++                Ok(mods) => {
++                    diagnostics.push(format!("group {} linked with {std_name}", names.join("+")));
++                    chosen = Some(mods);
++                    break;
+                 }
 -                let _timer = load_times::timer(load_times::Phase::Subscribe);
 -                let mut checked = Vec::new();
 -                for mut module in mods {
@@ -3033,44 +3045,16 @@ index 2ec0718..ae33266 100644
 -                    }
 -                    module.subscribed = boundary::subscriptions_of("wasm mod", names);
 -                    checked.push(module);
--                }
++                Err(why) => {
++                    let message = format!("{std_name}: {why:?}: {why}");
++                    diagnostics.push(message.clone());
++                    errors.push(message);
++                    last_error = Some(why);
+                 }
 -                Ok(checked)
-+        let mod_members: Vec<_> = indices
-+            .iter()
-+            .zip(&names)
-+            .map(|(&i, name)| link::Member {
-+                name,
-+                module: &packages[i].module,
-+            })
-+            .collect();
-+        let mut last_error = None;
-+        let mut chosen = None;
-+        // The same mod group may have been built by different rustc releases;
-+        // its core crate hash is part of the symbol name. Try every shipped
-+        // std and keep the first that links and subscribes cleanly.
-+        for std_member in std_members {
-+            let mut members = Vec::with_capacity(mod_members.len() + 1);
-+            members.push(link::Member {
-+                name: "libstd.so",
-+                module: std_member,
-             });
+-            });
 -        match result {
 -            Ok(mods) => {
-+            members.extend(mod_members.iter().map(|member| link::Member {
-+                name: member.name,
-+                module: member.module,
-+            }));
-+            let attempt = group_memory(&manifests, memory_cap_mib)
-+                .and_then(|memory_mib| {
-+                    WasmMod::instantiate(&engine, memory_mib, &members, cache)
-+                })
-+                .and_then(|mods| check_subscriptions(mods, indices.len()));
-+            match attempt {
-+                Ok(mods) => {
-+                    chosen = Some(mods);
-+                    break;
-+                }
-+                Err(why) => last_error = Some(why),
 +            }
 +        }
 +        match chosen {
@@ -3078,7 +3062,7 @@ index 2ec0718..ae33266 100644
                  for (module, i) in mods.into_iter().zip(indices) {
                      let manifest = packages[i].manifest.clone();
                      let id = Box::leak(manifest.id.clone().into_boxed_str());
-@@ -838,16 +864,84 @@ fn load_with_cache(
+@@ -838,14 +837,89 @@
                      loaded.manifests.push(manifest);
                  }
              }
@@ -3088,9 +3072,16 @@ index 2ec0718..ae33266 100644
 -                    .map(|i| (packages[i].manifest.id.clone(), why.clone())),
 -            ),
 +            None => {
-+                let why = last_error.unwrap_or_else(|| {
-+                    Refusal::Runtime("no shipped wasm std member linked".into())
-+                });
++                let why = if std_members.len() == 1 {
++                    last_error.unwrap_or_else(|| {
++                        Refusal::Runtime("no shipped wasm std member linked".into())
++                    })
++                } else {
++                    Refusal::Runtime(format!(
++                        "all wasm standard-library candidates failed | {}",
++                        errors.join(" | ")
++                    ))
++                };
 +                loaded.refused.extend(
 +                    indices
 +                        .into_iter()
@@ -3100,8 +3091,8 @@ index 2ec0718..ae33266 100644
          }
      }
      loaded
- }
- 
++}
++
 +fn check_subscriptions(
 +    mods: Vec<WasmMod>,
 +    expected: usize,
@@ -3163,11 +3154,9 @@ index 2ec0718..ae33266 100644
 +        checked.push(module);
 +    }
 +    Ok(checked)
-+}
-+
+ }
+
  #[cfg(test)]
- mod tests {
-     use super::*;
 diff --git a/crates/horizon-mod-wasm/src/module_cache.rs b/crates/horizon-mod-wasm/src/module_cache.rs
 index 4d01b0d..41b93cf 100644
 --- a/crates/horizon-mod-wasm/src/module_cache.rs
@@ -3470,6 +3459,370 @@ index 5328a4f..a070f69 100644
      // SAFETY: frees only pages no allocation uses (this thread's heap, shared arenas).
      unsafe {
          libmimalloc_sys::mi_collect(true);
+diff --git a/crates/horizon-mod-wasm/Cargo.toml b/crates/horizon-mod-wasm/Cargo.toml
+--- a/crates/horizon-mod-wasm/Cargo.toml
++++ b/crates/horizon-mod-wasm/Cargo.toml
+@@ -46,6 +46,8 @@
+ # Synthetic points are opt-in for the listener matrix only. Dev-dependencies
+ # would unify them into every integration test's game layout.
+ [features]
++# Build the host release verifier with the same interpreter target as iOS.
++release-verifier = []
+ # Test instrumentation only; does not alter Wire layout.
+ test-copy-probe = []
+ runtime-fixture = []
+diff --git a/crates/horizon-mod-wasm/src/standard_library.rs b/crates/horizon-mod-wasm/src/standard_library.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/horizon-mod-wasm/src/standard_library.rs
+@@ -0,0 +1,230 @@
++//! Standard-library discovery shared by the installed loader and release verifier.
++use crate::{Loaded, Refusal, WasmPackage, module_cache};
++use sha2::{Digest, Sha256};
++use std::collections::BTreeSet;
++use std::path::{Path, PathBuf};
++
++pub struct Member {
++    pub path: PathBuf,
++    pub bytes: Vec<u8>,
++    pub sha256: String,
++}
++
++#[derive(Default)]
++pub struct Inventory {
++    pub members: Vec<Member>,
++    pub diagnostics: Vec<String>,
++}
++
++impl Inventory {
++    /// Always inspect both the directory and the legacy sibling file.
++    pub fn read(directory: &Path, legacy: &Path) -> Self {
++        let mut inventory = Self::default();
++        let mut paths = Vec::new();
++        inventory.diagnostics.push(format!(
++            "search {} and {}",
++            directory.display(),
++            legacy.display()
++        ));
++        match std::fs::read_dir(directory) {
++            Ok(entries) => {
++                for entry in entries {
++                    match entry {
++                        Ok(entry) if entry.path().extension().is_some_and(|ext| ext == "wasm") => {
++                            paths.push(entry.path())
++                        }
++                        Ok(_) => {}
++                        Err(error) => inventory
++                            .diagnostics
++                            .push(format!("read directory {}: {error}", directory.display())),
++                    }
++                }
++            }
++            Err(error) => inventory
++                .diagnostics
++                .push(format!("read directory {}: {error}", directory.display())),
++        }
++        paths.sort();
++        paths.push(legacy.to_owned());
++        let manifest_path = directory.join("manifest.json");
++        let manifest = match std::fs::read(&manifest_path) {
++            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
++                Ok(value) => Some(value),
++                Err(error) => {
++                    inventory.diagnostics.push(format!(
++                        "invalid manifest {}: {error}",
++                        manifest_path.display()
++                    ));
++                    None
++                }
++            },
++            Err(error) => {
++                inventory.diagnostics.push(format!(
++                    "read manifest {}: {error}",
++                    manifest_path.display()
++                ));
++                None
++            }
++        };
++        let mut hashes = BTreeSet::new();
++        for path in paths {
++            let bytes = match std::fs::read(&path) {
++                Ok(bytes) => bytes,
++                Err(error) => {
++                    inventory
++                        .diagnostics
++                        .push(format!("read {}: {error}", path.display()));
++                    continue;
++                }
++            };
++            let sha256 = format!("{:x}", Sha256::digest(&bytes));
++            if path != legacy {
++                let expected = manifest
++                    .as_ref()
++                    .and_then(|value| value["members"].as_array())
++                    .and_then(|members| {
++                        members.iter().find(|member| {
++                            path.file_name().and_then(|name| name.to_str())
++                                == member["file"].as_str()
++                        })
++                    })
++                    .and_then(|member| member["sha256"].as_str());
++                if let Some(expected) = expected
++                    && expected != sha256
++                {
++                    inventory.diagnostics.push(format!(
++                        "SHA-256 mismatch {}: expected {expected}, got {sha256}",
++                        path.display()
++                    ));
++                    continue;
++                }
++            }
++            if let Err(error) = wasmparser::Validator::new().validate_all(&bytes) {
++                inventory
++                    .diagnostics
++                    .push(format!("invalid wasm {}: {error}", path.display()));
++                continue;
++            }
++            if !hashes.insert(sha256.clone()) {
++                inventory
++                    .diagnostics
++                    .push(format!("duplicate {} sha256={sha256}", path.display()));
++                continue;
++            }
++            inventory
++                .diagnostics
++                .push(format!("candidate {} sha256={sha256}", path.display()));
++            inventory.members.push(Member {
++                path,
++                bytes,
++                sha256,
++            });
++        }
++        inventory
++    }
++
++    pub(crate) fn installed() -> Self {
++        match std::env::current_exe() {
++            Ok(exe) => Self::read(
++                &exe.with_file_name("horizon-wasm-std"),
++                &exe.with_file_name("horizon-wasm-std.wasm"),
++            ),
++            Err(error) => Self {
++                diagnostics: vec![format!("current executable path: {error}")],
++                ..Self::default()
++            },
++        }
++    }
++
++    pub(crate) fn load(
++        &mut self,
++        packages: Vec<WasmPackage>,
++        cache: Option<&module_cache::ModuleCache>,
++        memory_cap_mib: u32,
++        side: horizon_mod_package::manifest::Side,
++    ) -> Loaded {
++        if self.members.is_empty() {
++            let why = Refusal::Runtime(format!(
++                "wasm standard library unavailable | {}",
++                self.diagnostics.join(" | ")
++            ));
++            return Loaded {
++                refused: packages
++                    .into_iter()
++                    .map(|package| (package.manifest.id, why.clone()))
++                    .collect(),
++                ..Loaded::default()
++            };
++        }
++        let members: Vec<_> = self
++            .members
++            .iter()
++            .map(|member| member.bytes.as_slice())
++            .collect();
++        let names: Vec<_> = self
++            .members
++            .iter()
++            .map(|member| format!("{} sha256={}", member.path.display(), member.sha256))
++            .collect();
++        crate::load_with_cache_multi(
++            &members,
++            &names,
++            packages,
++            cache,
++            memory_cap_mib,
++            side,
++            &mut self.diagnostics,
++        )
++    }
++
++    /// Uses the production dependency grouping, linker and API subscription checks.
++    pub fn load_packages(&mut self, packages: Vec<WasmPackage>) -> Loaded {
++        self.load(
++            packages,
++            None,
++            horizon_mod_package::manifest::MAX_WASM_MEMORY_MIB,
++            horizon_mod_package::manifest::Side::Both,
++        )
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn reads_legacy_after_directory_and_deduplicates_bytes() {
++        let root = tempfile::tempdir().unwrap();
++        let directory = root.path().join("horizon-wasm-std");
++        let legacy = root.path().join("horizon-wasm-std.wasm");
++        std::fs::create_dir(&directory).unwrap();
++        std::fs::write(directory.join("a.wasm"), b"corrupt").unwrap();
++        std::fs::write(directory.join("b.wasm"), b"\0asm\x01\0\0\0").unwrap();
++        std::fs::write(&legacy, b"\0asm\x01\0\0\0").unwrap();
++        let inventory = Inventory::read(&directory, &legacy);
++        assert_eq!(inventory.members.len(), 1);
++        assert!(
++            inventory
++                .diagnostics
++                .iter()
++                .any(|line| line.contains("invalid wasm"))
++        );
++        assert!(
++            inventory
++                .diagnostics
++                .iter()
++                .any(|line| line.contains("duplicate"))
++        );
++        std::fs::remove_dir_all(&directory).unwrap();
++        assert_eq!(Inventory::read(&directory, &legacy).members.len(), 1);
++        std::fs::remove_file(&legacy).unwrap();
++        let inventory = Inventory::read(&directory, &legacy);
++        assert!(inventory.members.is_empty());
++        assert!(
++            inventory
++                .diagnostics
++                .iter()
++                .any(|line| line.contains("read directory"))
++        );
++    }
++}
+diff --git a/crates/horizon-mod-wasm/src/bin/nclr-wasm-verify.rs b/crates/horizon-mod-wasm/src/bin/nclr-wasm-verify.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/horizon-mod-wasm/src/bin/nclr-wasm-verify.rs
+@@ -0,0 +1,112 @@
++//! Release checks through the production loader, with Pulley as on iOS.
++use horizon_mod_package::manifest::Package;
++use horizon_mod_wasm::{WasmPackage, link, standard_library::Inventory};
++use std::path::Path;
++
++fn verify(args: &[String]) -> Result<(), String> {
++    let directory = args
++        .first()
++        .ok_or("usage: nclr-wasm-verify std-directory [--legacy file] [package.hmod ...]")?;
++    let mut load_only = false;
++    let mut packages = Vec::new();
++    let mut infos = Vec::new();
++    let mut legacy = Path::new(directory).with_file_name("horizon-wasm-std.wasm");
++    let mut paths = args[1..].iter();
++    while let Some(path) = paths.next() {
++        if path == "--load-only" {
++            load_only = true;
++            continue;
++        }
++        if path == "--legacy" {
++            legacy = paths.next().ok_or("--legacy needs a file")?.into();
++            continue;
++        }
++        let path = Path::new(path);
++        let package =
++            Package::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
++        let module = package
++            .wasm(path)
++            .map_err(|error| format!("{}: {error}", path.display()))?;
++        let manifest = package.manifest;
++        infos.push(mod_api::PackageInfo::new(
++            manifest.id.clone(),
++            manifest.version.clone(),
++            mod_api::PackageKind::Code,
++            mod_api::Side::Both,
++            vec![manifest.id.clone()],
++            Vec::new(),
++        ));
++        packages.push(WasmPackage { manifest, module });
++    }
++    let mut inventory = Inventory::read(Path::new(directory), &legacy);
++    for line in &inventory.diagnostics {
++        println!("{line}");
++    }
++    if inventory.members.is_empty() {
++        return Err("no valid standard-library candidates".into());
++    }
++    let mut config = wasmtime::Config::new();
++    config
++        .target("pulley64")
++        .map_err(|error| error.to_string())?;
++    config.wasm_threads(false).shared_memory(false);
++    let engine = wasmtime::Engine::new(&config).map_err(|error| error.to_string())?;
++    if !load_only {
++        let mut expected = std::fs::read_dir(directory)
++            .map_err(|error| error.to_string())?
++            .filter_map(Result::ok)
++            .map(|entry| entry.path())
++            .filter(|path| path.extension().is_some_and(|ext| ext == "wasm"))
++            .collect::<Vec<_>>();
++        if legacy.is_file() {
++            expected.push(legacy.clone());
++        }
++        for path in expected {
++            let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
++            wasmparser::Validator::new()
++                .validate_all(&bytes)
++                .map_err(|error| format!("invalid wasm {}: {error}", path.display()))?;
++            link::Group::link(
++                &engine,
++                &[link::Member {
++                    name: "libstd.so",
++                    module: &bytes,
++                }],
++            )
++            .map_err(|error| format!("{}: {error}", path.display()))?;
++            println!("shared-library link passed {}", path.display());
++        }
++    }
++    if !packages.is_empty() {
++        let loaded = inventory.load_packages(packages);
++        for line in &inventory.diagnostics {
++            println!("{line}");
++        }
++        if !loaded.refused.is_empty() {
++            return Err(format!("package load refused: {:?}", loaded.refused));
++        }
++        loaded
++            .initialize(&infos)
++            .map_err(|errors| format!("package initialization refused: {errors:?}"))?;
++        println!(
++            "package linking, API and initialization passed for {} packages",
++            loaded.mods.len()
++        );
++    }
++    Ok(())
++}
++
++fn main() {
++    let args: Vec<_> = std::env::args().skip(1).collect();
++    let result = std::thread::scope(|scope| {
++        horizon_guest_stack::builder()
++            .spawn_scoped(scope, || verify(&args))
++            .expect("verifier guest stack")
++            .join()
++            .expect("verifier thread")
++    });
++    if let Err(error) = result {
++        eprintln!("WASM verification failed: {error}");
++        std::process::exit(1);
++    }
++}
 diff --git a/crates/horizon-world/src/fluid_definitions.rs b/crates/horizon-world/src/fluid_definitions.rs
 index b1ef89e..c2dbf14 100644
 --- a/crates/horizon-world/src/fluid_definitions.rs

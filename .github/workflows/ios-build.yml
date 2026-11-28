@@ -44,10 +44,8 @@ jobs:
           cd "$HORIZON_DIR"
           IPHONEOS_DEPLOYMENT_TARGET=15.0 \
             cargo build -p horizon-ios --target aarch64-apple-ios --profile fast
-      # The std member must be built by the same toolchain as the mods. The
-      # checked-in copy matches the 1.100.0-generated core symbols; rebuilding
-      # it here with another rustc produces a different core hash and wasm mods
-      # fail to link with "which no earlier member has".
+      # Package the manifested compatibility set and verify the final archive
+      # with the production Pulley linker, API checks and TouchController.
       - name: Package NCLR
         env:
           HORIZON_DIR: ${{ runner.temp }}/horizon
@@ -69,5 +67,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NCLR-unsigned
-          path: dist-nclr/*.ipa
+          path: |
+            dist-nclr/*.ipa
+            dist-nclr/*.manifest.json
           if-no-files-found: error
