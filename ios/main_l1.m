@@ -25,6 +25,20 @@ extern void horizon_ios_hardware_key(uint16_t usage, int pressed, int repeat, ui
 extern void horizon_ios_hardware_mouse_motion(double dx, double dy, double x, double y);
 extern void horizon_ios_hardware_mouse_button(int button, int pressed);
 extern void horizon_ios_hardware_mouse_scroll(double dx, double dy);
+
+// The game locks the iPadOS pointer while it is playing so a mouse dragged to
+// the screen edge cannot open the dock, Control Centre or the app switcher.
+// The lock follows the engine's pointer-hidden flag, so menus release it and
+// get their cursor back. This category reaches winit's own view controller,
+// which the shell cannot subclass.
+@interface UIViewController (NCLRPointerLock)
+@end
+@implementation UIViewController (NCLRPointerLock)
+- (BOOL)prefersPointerLocked {
+    return horizon_ios_pointer_hidden() != 0;
+}
+@end
+
 @class NCLRResourcePreparer;
 static NSString *const NCLRPrepareProgressNotification = @"NCLRPrepareProgress";
 static NSString *const NCLRPrepareFinishedNotification = @"NCLRPrepareFinished";
@@ -745,6 +759,7 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
 - (void)stop;
 - (void)applyMotionDX:(float)deltaX dy:(float)deltaY;
 - (void)syncSystemPointerHidden;
+- (void)updatePointerLockForWindow:(UIWindow *)window;
 @end
 
 @implementation NCLRHardwareInput
@@ -869,6 +884,7 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
             self.pointerHidden = hide;
             [self.pointerHiding invalidate];
         }
+        [self updatePointerLockForWindow:window];
         return;
     }
     if (self.pointerHiding) {
@@ -882,6 +898,17 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     self.pointerHidingView = window;
     self.pointerHidden = hide;
     [window addInteraction:self.pointerHiding];
+    [self updatePointerLockForWindow:window];
+}
+
+- (void)updatePointerLockForWindow:(UIWindow *)window {
+    UIViewController *controller = window.rootViewController;
+    while (controller.presentedViewController != nil) {
+        controller = controller.presentedViewController;
+    }
+    if ([controller respondsToSelector:@selector(setNeedsUpdateOfPrefersPointerLocked)]) {
+        [controller setNeedsUpdateOfPrefersPointerLocked];
+    }
 }
 
 - (uint8_t)modifiersForInput:(GCKeyboardInput *)input {
@@ -1030,6 +1057,7 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     UIScreen *screen = window.screen ?: UIScreen.mainScreen;
     CGSize size = window ? window.bounds.size : screen.bounds.size;
     if (size.width < 1.0 || size.height < 1.0) return;
+    [self updatePointerLockForWindow:window];
     if (!self.cursorReady || !CGSizeEqualToSize(self.cursorBounds, size)) {
         self.cursor = CGPointMake(size.width * 0.5, size.height * 0.5);
         self.cursorBounds = size;

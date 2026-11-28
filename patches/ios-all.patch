@@ -2684,10 +2684,10 @@ index ee73abf..3704fed 100644
      pub(super) fn facts(&self) -> &BlockFacts {
          &self.core.facts
 diff --git a/crates/horizon-client/src/game/runtime/window_handler.rs b/crates/horizon-client/src/game/runtime/window_handler.rs
-index 6a86a75..8388ee5 100644
+index 6a86a75..57db634 100644
 --- a/crates/horizon-client/src/game/runtime/window_handler.rs
 +++ b/crates/horizon-client/src/game/runtime/window_handler.rs
-@@ -312,9 +312,34 @@ impl Game<'_> {
+@@ -312,9 +312,33 @@ impl Game<'_> {
          }
          horizon_client::spans::time("server_packs", || self.tick_server_packs());
          horizon_client::spans::time("control", || self.poll_control(event_loop));
@@ -2697,12 +2697,9 @@ index 6a86a75..8388ee5 100644
              return;
          }
 +        let mut touch_attack = false;
-+        if self.screen == Screen::Playing && self.focused {
++        if self.screen == Screen::Playing && self.focused && !self.gui_takes_touch() {
 +            #[cfg(target_os = "ios")]
-+            if self.title.is_none()
-+                && (gyro_x != 0.0 || gyro_y != 0.0)
-+                && !self.touch.look_dragging()
-+            {
++            if self.title.is_none() && (gyro_x != 0.0 || gyro_y != 0.0) {
 +                self.look_turn(gyro_x, gyro_y);
 +            }
 +            let mut touch = self.touch.poll_state();
@@ -2711,9 +2708,11 @@ index 6a86a75..8388ee5 100644
 +            self.pad.inject_state(touch);
 +            self.apply_touch_requests();
 +        } else {
-+            // A finger can open a menu while it is still down. Clear the
-+            // touch pad before the menu's mouse/keyboard input, or the last
-+            // button stays held and the next screen looks like pad mode.
++            // A screen or overlay (inventory, sign editor, a dialog) owns the
++            // touches. A finger that opened it is still down, and its release
++            // goes to the overlay as a click instead of lifting the touch
++            // control, so clear the pad here or the last button stays held and
++            // keeps mining.
 +            self.touch.clear();
 +            self.pad.inject_state(Default::default());
 +        }
@@ -2722,7 +2721,7 @@ index 6a86a75..8388ee5 100644
          horizon_client::spans::time("pads", || self.poll_pads(event_loop));
          self.settle_after_run(event_loop);
          self.pause_if_inactive();
-@@ -326,9 +351,13 @@ impl Game<'_> {
+@@ -326,9 +350,13 @@ impl Game<'_> {
              return;
          }
          if let Some(w) = &self.window {
@@ -2737,7 +2736,7 @@ index 6a86a75..8388ee5 100644
                  let id = w.id();
                  self.handle_window_event(
                      event_loop,
-@@ -351,11 +380,21 @@ impl Game<'_> {
+@@ -351,11 +379,21 @@ impl Game<'_> {
          }
          // Consume the last frame's result: a hidden compositor may stop sending
          // redraws altogether, leaving a successful result stale indefinitely.
@@ -2761,7 +2760,7 @@ index 6a86a75..8388ee5 100644
      }
  }
  
-@@ -417,6 +456,8 @@ impl ApplicationHandler for Game<'_> {
+@@ -417,6 +455,8 @@ impl ApplicationHandler for Game<'_> {
          self.resize_state = Some(self.resize_state_of(window.inner_size()));
          self.window = Some(window);
          self.ime_allowed = false;
@@ -2770,7 +2769,7 @@ index 6a86a75..8388ee5 100644
          self.ime_area = None;
          self.apply_settings();
          self.previous = Instant::now();
-@@ -437,14 +478,13 @@ impl ApplicationHandler for Game<'_> {
+@@ -437,14 +477,13 @@ impl ApplicationHandler for Game<'_> {
          };
          self.handle_window_event(event_loop, id, event, input_trace::InputOrigin::User);
          if let Some((event, modifiers)) = key {
