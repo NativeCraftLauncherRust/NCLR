@@ -5685,8 +5685,13 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.grid.frame = self.preview.bounds;
     for (NSString *key in self.previewButtons) {
         UIButton *button = self.previewButtons[key];
+        // A menu key added here lives in `menuKeys`, not `bindings`; requiring a
+        // binding hid it from the editor while the game still drew it on the
+        // pause/inventory screen.
+        BOOL exists = NCLRKeymap.shared.bindings[key] != nil ||
+            [NCLRKeymap.shared isMenuCanvasKey:key];
         button.hidden = ![self showsKeyOnCanvas:key] ||
-            [NCLRKeymap.shared.deletedKeys containsObject:key] || !NCLRKeymap.shared.bindings[key];
+            [NCLRKeymap.shared.deletedKeys containsObject:key] || !exists;
         if (button.hidden) continue;
         NSDictionary *position = key.length ? NCLRKeymap.shared.positions[key] : nil;
         if (position == nil) position = @{ @"x" : @0.5, @"y" : @0.5, @"size" : @0.08, @"width" : @0.08 };
