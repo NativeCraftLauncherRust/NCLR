@@ -2022,16 +2022,32 @@ index 026382e..9289a31 100644
                  if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
              {
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..5e4ab1a 100644
+index 16664ff..a69822c 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
-@@ -7,6 +7,20 @@ fn studio_suppresses_focus_pause(replay_active: bool, freecam_active: bool) -> b
+@@ -7,6 +7,36 @@ fn studio_suppresses_focus_pause(replay_active: bool, freecam_active: bool) -> b
  }
  
  impl Game<'_> {
 +    /// Whether the iOS shell reports a hardware keyboard or mouse.
 +    pub(super) fn hardware_input_attached(&self) -> bool {
 +        self.ios_hardware_input
++    }
++
++    /// Whether a GUI owns touches: a screen, the title, a dialog, the sign
++    /// editor or a server prompt. Only a bare world uses the on-screen
++    /// controls; everywhere else a finger has to click like a mouse, or the
++    /// overlay's buttons cannot be pressed.
++    pub(super) fn gui_takes_touch(&self) -> bool {
++        self.screen != Screen::Playing
++            || self.title.is_some()
++            || self.sign_edit.is_some()
++            || self.remote_loading()
++            || self.dialog_open()
++            || self.command_prompt.is_some()
++            || self.link_prompt.is_some()
++            || self.code_of_conduct.is_some()
++            || self.book.is_some()
 +    }
 +
 +    /// The persistent on-screen keyboard button, in the frame's GUI pixels.
@@ -2046,7 +2062,7 @@ index 16664ff..5e4ab1a 100644
      /// The options `MouseHandler.turnPlayer` reads.
      pub(super) fn look_options(&self) -> LookOptions {
          LookOptions {
-@@ -55,6 +69,214 @@ impl Game<'_> {
+@@ -55,6 +85,214 @@ impl Game<'_> {
          let zoom = self.zoom_turn_scale();
          self.turn_player(x * zoom, y * zoom);
      }
@@ -2262,7 +2278,7 @@ index 16664ff..5e4ab1a 100644
      pub(super) fn pauses_game(&self) -> bool {
          self.has_singleplayer_server()
 diff --git a/crates/horizon-client/src/game/runtime/loading_screen.rs b/crates/horizon-client/src/game/runtime/loading_screen.rs
-index 2511aa2..afd94da 100644
+index 2511aa2..f276011 100644
 --- a/crates/horizon-client/src/game/runtime/loading_screen.rs
 +++ b/crates/horizon-client/src/game/runtime/loading_screen.rs
 @@ -3,6 +3,11 @@
@@ -2421,7 +2437,7 @@ index 2511aa2..afd94da 100644
 +                        return;
 +                    }
 +                }
-+                if game.host.screen == Screen::Playing && game.host.title.is_none() {
++                if !game.host.gui_takes_touch() {
 +                    game.host.touch_event(touch);
 +                    return;
 +                }
@@ -2460,7 +2476,7 @@ index 2511aa2..afd94da 100644
 +        };
 +        if let App::Ready(game) = self {
 +            if let WindowEvent::Touch(touch) = &event
-+                && (game.host.screen != Screen::Playing || game.host.title.is_some())
++                && game.host.gui_takes_touch()
 +                && touch.phase == winit::event::TouchPhase::Started
 +            {
 +                let size = game
