@@ -16,6 +16,9 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <limits.h>
+#include <execinfo.h>
+#include <signal.h>
 
 extern int horizon_ios_run(const char *resources, const char *game_dir);
 extern void horizon_ios_add_motion(double dx, double dy);
@@ -378,6 +381,77 @@ static NSString *NCLRDocuments(void) {
     NSArray<NSString *> *paths =
         NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     return paths.firstObject ?: NSTemporaryDirectory();
+}
+
+#pragma mark - Startup diagnostics
+
+/// A plain-text breadcrumb trail in Documents (reachable through the Files app
+/// because UIFileSharingEnabled is on). A device that crashes or shows a black
+/// screen before a debugger can attach leaves its last stage and signal here,
+/// which is what the iOS 17/18 reports need in order to be fixed by evidence.
+static NSString *NCLRStartupLogPath(void) {
+    return [NCLRDocuments() stringByAppendingPathComponent:@"nclr-startup.log"];
+}
+
+static void NCLRLog(NSString *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:arguments];
+    va_end(arguments);
+    NSString *line = [NSString stringWithFormat:@"%.3f %@\n",
+                      NSDate.date.timeIntervalSince1970, message];
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    NSString *path = NCLRStartupLogPath();
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        [data writeToFile:path atomically:YES];
+        return;
+    }
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (!handle) return;
+    @try {
+        [handle seekToEndOfFile];
+        [handle writeData:data];
+    } @catch (__unused NSException *exception) {
+    } @finally {
+        [handle closeFile];
+    }
+}
+
+static char NCLRCrashLogPath[PATH_MAX];
+
+/// Async-signal-safe enough for a last word: the path was copied at install
+/// time, and only open/write/backtrace are used before re-raising.
+static void NCLRWriteCrashAndReraise(int signalNumber) {
+    int descriptor = open(NCLRCrashLogPath, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    if (descriptor >= 0) {
+        char header[128];
+        int length = snprintf(header, sizeof(header), "\nFATAL signal %d\n", signalNumber);
+        if (length > 0) {
+            ssize_t ignored = write(descriptor, header, (size_t)length);
+            (void)ignored;
+        }
+        void *frames[64];
+        int count = backtrace(frames, 64);
+        backtrace_symbols_fd(frames, count, descriptor);
+        close(descriptor);
+    }
+    signal(signalNumber, SIG_DFL);
+    raise(signalNumber);
+}
+
+static void NCLRUncaughtException(NSException *exception) {
+    NCLRLog(@"uncaught %@: %@\n%@", exception.name, exception.reason,
+            [exception.callStackSymbols componentsJoinedByString:@"\n"]);
+}
+
+static void NCLRInstallCrashHandlers(void) {
+    NSString *path = NCLRStartupLogPath();
+    strlcpy(NCLRCrashLogPath, path.fileSystemRepresentation, sizeof(NCLRCrashLogPath));
+    NSSetUncaughtExceptionHandler(&NCLRUncaughtException);
+    const int signals[] = {SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE};
+    for (size_t index = 0; index < sizeof(signals) / sizeof(signals[0]); index++) {
+        signal(signals[index], NCLRWriteCrashAndReraise);
+    }
 }
 
 static NSString *NCLRWasmRefusalText(void) {
@@ -3520,7 +3594,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         fflush(stderr);
     }
     [[NCLRHardwareInput shared] start];
+    NCLRLog(@"engine start: resources=%@", resources.lastPathComponent);
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
+    NCLRLog(@"engine returned %d", result);
     [[NCLRHardwareInput shared] stop];
     [NCLRGyro.shared stop];
     [display invalidate];
@@ -7652,6 +7728,7 @@ static void NCLRWarmUpNetwork(void) {
     if (![scene isKindOfClass:[UIWindowScene class]]) {
         return;
     }
+    NCLRLog(@"scene connected");
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     NCLRThemeLoad();
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
@@ -7801,6 +7878,9 @@ static void NCLRTextInputEndHook(void) {
     // Reconnect the background download session a previous launch left, so its
     // delegate hears about the files it finished while the app was away.
     (void)[NCLRBackgroundDownloads shared];
+    NCLRInstallCrashHandlers();
+    NCLRLog(@"launch iOS %@ model %@", UIDevice.currentDevice.systemVersion,
+            UIDevice.currentDevice.model);
     horizon_ios_set_text_input_hooks(NCLRTextInputBeginHook, NCLRTextInputEndHook);
     return YES;
 }
