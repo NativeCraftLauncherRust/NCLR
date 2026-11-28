@@ -6127,6 +6127,178 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     return hex;
 }
 
+// First-run downloads run on a background URLSession. The system keeps moving
+// the bytes while the app is suspended or the screen is locked, and relaunches
+// the app for the last events, so a locked iPad keeps downloading instead of
+// stopping at the first suspension. Each task carries its destination and
+// SHA-1 in its task description: that survives a relaunch, and the delegate
+// can finish a file without the waiting code that asked for it.
+static NSString *const NCLRBackgroundSessionIdentifier = @"dev.zrxmaxlnx.nclr.resources";
+
+@interface NCLRBackgroundDownloads : NSObject <NSURLSessionDownloadDelegate>
+@property (atomic, assign) BOOL cancelled;
+@property (nonatomic, strong) NSURLSession *session;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, void (^)(NSData *, NSString *)> *waiters;
+@property (nonatomic, copy) void (^backgroundCompletion)(void);
++ (instancetype)shared;
+- (NSData *)downloadURL:(NSURL *)url
+                 toPath:(NSString *)path
+               expected:(NSString *)sha1
+               received:(void (^)(unsigned long long bytes))received
+                  error:(NSString **)error;
+- (void)cancel;
+- (void)handleEventsForBackgroundURLSession:(void (^)(void))completionHandler;
+@end
+
+@implementation NCLRBackgroundDownloads
++ (instancetype)shared {
+    static NCLRBackgroundDownloads *downloads = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ downloads = [[NCLRBackgroundDownloads alloc] init]; });
+    return downloads;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _waiters = [NSMutableDictionary dictionary];
+        NSURLSessionConfiguration *configuration =
+            [NSURLSessionConfiguration backgroundSessionConfigurationWithIdentifier:
+                NCLRBackgroundSessionIdentifier];
+        configuration.sessionSendsLaunchEvents = YES;
+        configuration.discretionary = NO;
+        configuration.timeoutIntervalForRequest = 30.0;
+        configuration.timeoutIntervalForResource = 900.0;
+        _session = [NSURLSession sessionWithConfiguration:configuration
+                                                 delegate:self
+                                            delegateQueue:nil];
+    }
+    return self;
+}
+
+- (NSData *)downloadURL:(NSURL *)url
+                 toPath:(NSString *)path
+               expected:(NSString *)sha1
+               received:(void (^)(unsigned long long))received
+                  error:(NSString **)error {
+    if (self.cancelled) {
+        if (error) *error = @"下载已取消";
+        return nil;
+    }
+    if (![url.scheme.lowercaseString isEqualToString:@"https"] || url.host.length == 0) {
+        if (error) *error = @"下载地址无效";
+        return nil;
+    }
+    NSDictionary *info = @{ @"path": path ?: @"", @"sha1": sha1 ?: @"" };
+    NSData *infoData = [NSJSONSerialization dataWithJSONObject:info options:0 error:nil];
+    NSString *description = infoData ? [[NSString alloc] initWithData:infoData
+                                                             encoding:NSUTF8StringEncoding] : nil;
+    NSString *failure = @"无响应";
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (self.cancelled) break;
+        __block NSData *result = nil;
+        __block NSString *attemptError = nil;
+        dispatch_semaphore_t finished = dispatch_semaphore_create(0);
+        NSURLSessionDownloadTask *task = [self.session downloadTaskWithURL:url];
+        task.taskDescription = description;
+        @synchronized (self.waiters) {
+            self.waiters[description ?: @""] = ^(NSData *data, NSString *problem) {
+                result = data;
+                attemptError = problem;
+                dispatch_semaphore_signal(finished);
+            };
+        }
+        [task resume];
+        while (dispatch_semaphore_wait(finished,
+                dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_MSEC))) {
+            if (received) received((unsigned long long)MAX(0, task.countOfBytesReceived));
+            if (self.cancelled) {
+                [task cancel];
+                break;
+            }
+        }
+        @synchronized (self.waiters) {
+            [self.waiters removeObjectForKey:description ?: @""];
+        }
+        if (result != nil) return result;
+        if (attemptError.length) failure = attemptError;
+        if (self.cancelled) break;
+    }
+    if (error) *error = self.cancelled ? @"下载已取消"
+        : [NSString stringWithFormat:@"下载失败：%@（%@）", url.lastPathComponent, failure];
+    return nil;
+}
+
+- (void)cancel {
+    self.cancelled = YES;
+    [self.session getTasksWithCompletionHandler:
+        ^(NSArray<NSURLSessionDataTask *> *dataTasks,
+          NSArray<NSURLSessionUploadTask *> *uploadTasks,
+          NSArray<NSURLSessionDownloadTask *> *downloadTasks) {
+        for (NSURLSessionTask *task in downloadTasks) [task cancel];
+    }];
+}
+
+- (void)handleEventsForBackgroundURLSession:(void (^)(void))completionHandler {
+    self.backgroundCompletion = completionHandler;
+}
+
+- (void)URLSession:(NSURLSession *)session
+      downloadTask:(NSURLSessionDownloadTask *)downloadTask
+      didFinishDownloadingToURL:(NSURL *)location {
+    NSDictionary *info = nil;
+    NSString *description = downloadTask.taskDescription;
+    if (description.length) {
+        id json = [NSJSONSerialization JSONObjectWithData:
+            [description dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+        if ([json isKindOfClass:NSDictionary.class]) info = json;
+    }
+    NSString *destination = NCLRString(info[@"path"]);
+    NSString *expected = NCLRString(info[@"sha1"]);
+    NSData *data = [NSData dataWithContentsOfURL:location
+                                         options:NSDataReadingMappedIfSafe
+                                           error:nil];
+    NSString *problem = nil;
+    if (data == nil) {
+        problem = @"下载文件不可读";
+    } else if (expected.length && ![NCLRSHA1Hex(data) isEqualToString:expected]) {
+        problem = @"下载文件 SHA-1 校验失败";
+    } else if (destination.length) {
+        NCLRCreateDirectory([destination stringByDeletingLastPathComponent]);
+        if (![data writeToFile:destination atomically:YES]) {
+            problem = @"无法写入下载文件";
+        }
+    }
+    @synchronized (self.waiters) {
+        void (^waiter)(NSData *, NSString *) = self.waiters[description ?: @""];
+        if (waiter) {
+            [self.waiters removeObjectForKey:description ?: @""];
+            waiter(problem ? nil : data, problem);
+        }
+    }
+}
+
+- (void)URLSession:(NSURLSession *)session
+              task:(NSURLSessionTask *)task
+didCompleteWithError:(NSError *)error {
+    if (error == nil) return;
+    NSString *description = task.taskDescription ?: @"";
+    @synchronized (self.waiters) {
+        void (^waiter)(NSData *, NSString *) = self.waiters[description];
+        if (waiter) {
+            [self.waiters removeObjectForKey:description];
+            waiter(nil, error.localizedDescription ?: @"下载中断");
+        }
+    }
+}
+
+- (void)URLSessionDidFinishEventsForBackgroundURLSession:(NSURLSession *)session {
+    void (^handler)(void) = self.backgroundCompletion;
+    self.backgroundCompletion = nil;
+    if (handler) dispatch_async(dispatch_get_main_queue(), handler);
+}
+@end
+
 /// First-run resource preparation: official jar and assets in, hzr-device out.
 /// Runs on a background queue; progress strings go back to the main queue.
 @implementation NCLRResourcePreparer {
@@ -6147,6 +6319,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     if (!self.preparing || !self.cancellable || self.cancelRequested) return;
     @synchronized (self) {
         self.cancelRequested = YES;
+        [[NCLRBackgroundDownloads shared] cancel];
         [self.downloadSession invalidateAndCancel];
     }
 }
@@ -6198,17 +6371,19 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];
     NSString *hash = metadata[@"sha1"];
     if (data != nil && [NCLRSHA1Hex(data) isEqualToString:hash]) return data;
-    data = [self download:metadata[@"url"] error:error];
-    if (data == nil) return nil;
-    if (![NCLRSHA1Hex(data) isEqualToString:hash]) {
-        *error = [NSString stringWithFormat:@"%@ SHA-1 校验失败", path.lastPathComponent];
+    NSString *urlString = NCLRString(metadata[@"url"]);
+    NSURL *url = urlString.length ? [NSURL URLWithString:urlString] : nil;
+    if (url == nil) {
+        if (error) *error = @"下载地址无效";
         return nil;
     }
-    NSError *writeError = nil;
-    if (![data writeToFile:path options:NSDataWritingAtomic error:&writeError]) {
-        *error = writeError.localizedDescription;
-        return nil;
-    }
+    // The background downloader verifies the SHA-1 and writes the file itself,
+    // so the transfer keeps going while the app is suspended.
+    data = [[NCLRBackgroundDownloads shared] downloadURL:url
+                                                  toPath:path
+                                                expected:hash
+                                                received:nil
+                                                   error:error];
     return data;
 }
 
@@ -6221,6 +6396,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     self.cancellable = YES;
     self.cancelRequested = NO;
+    [NCLRBackgroundDownloads shared].cancelled = NO;
     self.progressValue = 0;
     self.lastLine = @"准备游戏资源";
     NSURLSessionConfiguration *configuration = NSURLSessionConfiguration.ephemeralSessionConfiguration;
@@ -6377,8 +6553,11 @@ static NSString *NCLRSHA1Hex(NSData *data) {
                     NSString *file = [folder stringByAppendingPathComponent:hash];
                     NSString *url = [NSString stringWithFormat:@"https://resources.download.minecraft.net/%@/%@", prefix, hash];
                     NSString *oneError = nil;
-                    NSError *writeError = nil;
-                    NSData *data = [self download:url error:&oneError received:^(unsigned long long bytes) {
+                    NSData *data = [[NCLRBackgroundDownloads shared]
+                        downloadURL:[NSURL URLWithString:url]
+                             toPath:file
+                           expected:hash
+                           received:^(unsigned long long bytes) {
                         [state lock];
                         inFlight[hash] = @(MIN(bytes, sizes[hash].unsignedLongLongValue));
                         NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
@@ -6387,13 +6566,10 @@ static NSString *NCLRSHA1Hex(NSData *data) {
                             reportAssets(now);
                         }
                         [state unlock];
-                    }];
+                    } error:&oneError];
                     if (self.cancelRequested) return;
-                    if (data == nil || data.length != sizes[hash].unsignedLongLongValue ||
-                        ![NCLRSHA1Hex(data) isEqualToString:hash]) {
-                        oneError = oneError ?: [NSString stringWithFormat:@"资源校验失败：%@", hash];
-                    } else if (![data writeToFile:file options:NSDataWritingAtomic error:&writeError]) {
-                        oneError = writeError.localizedDescription;
+                    if (data == nil) {
+                        oneError = oneError ?: [NSString stringWithFormat:@"资源下载失败：%@", hash];
                     }
 
                     [state lock];
@@ -7447,7 +7623,20 @@ static void NCLRWarmUpNetwork(void) {
 @implementation NCLRAppDelegate
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    // Reconnect the background download session a previous launch left, so its
+    // delegate hears about the files it finished while the app was away.
+    (void)[NCLRBackgroundDownloads shared];
     return YES;
+}
+
+- (void)application:(UIApplication *)application
+    handleEventsForBackgroundURLSession:(NSString *)identifier
+    completionHandler:(void (^)(void))completionHandler {
+    if ([identifier isEqualToString:NCLRBackgroundSessionIdentifier]) {
+        [[NCLRBackgroundDownloads shared] handleEventsForBackgroundURLSession:completionHandler];
+    } else {
+        completionHandler();
+    }
 }
 @end
 
