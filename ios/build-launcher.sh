@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the standalone NCLR launcher IPA. It links no game engine and no
+# Build the standalone legacy NCLR L1 launcher IPA. It links no game engine and no
 # Mojang-derived data: versions and mods are managed locally, and the future
 # game app receives the selected version through nclr-game://.
 set -euxo pipefail
@@ -52,6 +52,7 @@ cp -R "$APP" "$OUT/Payload/"
 (cd "$OUT" && zip -qry "$DIST/$IPA_NAME" Payload)
 
 echo "--- artifact ---"
+echo "entrypoint: $MAIN_SOURCE"
 ls -lh "$DIST/$IPA_NAME"
 shasum -a 256 "$DIST/$IPA_NAME"
 echo "--- app ---"

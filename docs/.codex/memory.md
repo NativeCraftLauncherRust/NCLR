@@ -8,3 +8,5 @@ Last reviewed 2026-11-27
 - `transitionGeneration` 和控制器引用负责处理快速点击、反向切换、旋转、后台和动效设置变化。
 - 主题使用 `NCLRThemeMode` 保存跟随系统、深色或浅色模式，旧版 `NCLRThemeDark` 值会兼容迁移。
 - `ios/build.sh` 必须链接 Core Image。完整链接检查可使用 `.local/horizon/target/aarch64-apple-ios/fast/libhorizon_ios.a`。
+- `ios/main.m` 的并发下载实现不会进入 `ios/main_l1.m` 的产物；功能需要同时检查入口源码和最终 IPA 符号。
+- `scripts/build-launcher.sh` 会在 `dist/` 生成同名 manifest，记录提交、工作区状态、入口和 SHA-256。

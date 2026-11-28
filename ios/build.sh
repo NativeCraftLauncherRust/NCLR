@@ -1,11 +1,15 @@
 #!/bin/bash
-# Build an unsigned development IPA for the Horizon iOS shell or engine app.
+# Build the full Horizon iOS shell or engine app.
+#
+# The standalone L1 launcher UI is built by ios/build-launcher.sh. Keep this
+# script for the engine-linked entrypoint so the two UI variants cannot be
+# confused by the output filename alone.
 #
 # Inputs:
 #   HORIZON_DIR       checkout of horizon-rust/horizon with horizon-ios added
 #   CARGO_TARGET_DIR  cargo target directory (default: $HORIZON_DIR/target)
 #   APP_NAME          app/executable name (default: NCLR)
-#   MAIN_SOURCE       Objective-C entry source (default: $ROOT/ios/main.m)
+#   MAIN_SOURCE       Objective-C entry source (default: $ROOT/ios/main_l1.m)
 #   BUNDLE_ID         CFBundleIdentifier (default: dev.zrxmaxlnx.nclr)
 #   DISPLAY_NAME      Home-screen name (default: NCLR)
 #   IPA_NAME          output IPA name (default: ${APP_NAME}-dev-unsigned.ipa)
@@ -24,7 +28,7 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$HORIZON_DIR/target}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(date -u +%Y%m%d%H%M)}"
 PROFILE="${PROFILE:-release}"
 APP_NAME="${APP_NAME:-NCLR}"
-MAIN_SOURCE="${MAIN_SOURCE:-$ROOT/ios/main.m}"
+MAIN_SOURCE="${MAIN_SOURCE:-$ROOT/ios/main_l1.m}"
 BUNDLE_ID="${BUNDLE_ID:-dev.zrxmaxlnx.nclr}"
 DISPLAY_NAME="${DISPLAY_NAME:-NCLR}"
 IPA_NAME="${IPA_NAME:-${APP_NAME}-dev-unsigned.ipa}"
@@ -123,6 +127,7 @@ cp -R "$APP" "$OUT/Payload/"
 (cd "$OUT" && zip -qry "$DIST/$IPA_NAME" Payload)
 
 echo "--- artifact ---"
+echo "entrypoint: $MAIN_SOURCE"
 ls -lh "$DIST/$IPA_NAME"
 shasum -a 256 "$DIST/$IPA_NAME"
 echo "--- app ---"

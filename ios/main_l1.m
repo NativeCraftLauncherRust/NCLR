@@ -9,6 +9,7 @@
 #import <CommonCrypto/CommonDigest.h>
 #import <AuthenticationServices/AuthenticationServices.h>
 #import <SafariServices/SafariServices.h>
+#import <QuartzCore/QuartzCore.h>
 #import <stdlib.h>
 #import <os/lock.h>
 #include <fcntl.h>
@@ -218,6 +219,7 @@ static BOOL NCLRDarkMode = YES;
 static NCLRThemeMode NCLRThemeModeValue = NCLRThemeModeSystem;
 static NSString *const kNCLRThemeKey = @"NCLRThemeDark";
 static NSString *const kNCLRThemeModeKey = @"NCLRThemeMode";
+static NSString *const kNCLRResourceConcurrencyKey = @"NCLRResourceDownloadConcurrency";
 static NSString *const kNCLRPageTransitionBlurKey = @"NCLRPageTransitionBlurEnabled";
 static NSString *const NCLRPageTransitionBlurPreferenceChangedNotification =
     @"NCLRPageTransitionBlurPreferenceChanged";
@@ -226,6 +228,11 @@ static BOOL NCLRPageTransitionBlurEnabled(void) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     NSNumber *saved = [defaults objectForKey:kNCLRPageTransitionBlurKey];
     return saved == nil ? NO : saved.boolValue;
+}
+
+static NSInteger NCLRResourceDownloadConcurrency(void) {
+    NSInteger value = [[NSUserDefaults standardUserDefaults] integerForKey:kNCLRResourceConcurrencyKey];
+    return (value >= 1 && value <= 8) ? value : 4;
 }
 
 static void NCLRThemeResolveFromTraitCollection(UITraitCollection *traitCollection) {
@@ -2373,7 +2380,8 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     self.stackLeading.constant = pad;
     self.stackTrailing.constant = -pad;
     UIEdgeInsets inset = self.scroll.contentInset;
-    inset.bottom = MAX(16.0, self.view.safeAreaInsets.bottom + 12.0);
+    CGFloat originalBottomInset = MAX(16.0, self.view.safeAreaInsets.bottom + 12.0);
+    inset.bottom = originalBottomInset / 3.0;
     self.scroll.contentInset = inset;
     self.scroll.verticalScrollIndicatorInsets = inset;
 }
@@ -3728,6 +3736,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @end
 
 @interface NCLRSettingsController : NCLRPageController
+@property (nonatomic, strong) UILabel *downloadConcurrencyValue;
 @end
 
 @implementation NCLRSettingsController
@@ -3758,6 +3767,45 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [themeStack.bottomAnchor constraintEqualToAnchor:theme.bottomAnchor constant:-14.0],
     ]];
     [self.stack addArrangedSubview:theme];
+
+    UIView *downloads = [self card];
+    UILabel *downloadsTitle = [self eyebrow:@"资源下载"];
+    NSInteger savedConcurrency = NCLRResourceDownloadConcurrency();
+    UILabel *concurrencyValue = [self label:[NSString stringWithFormat:@"%ld 路", (long)savedConcurrency]
+                                       size:12.0 weight:UIFontWeightSemibold
+                                      color:NCLRAccent()];
+    self.downloadConcurrencyValue = concurrencyValue;
+    concurrencyValue.textAlignment = NSTextAlignmentRight;
+    UIStackView *concurrencyHeader = [[UIStackView alloc] initWithArrangedSubviews:@[downloadsTitle, concurrencyValue]];
+    concurrencyHeader.axis = UILayoutConstraintAxisHorizontal;
+    concurrencyHeader.alignment = UIStackViewAlignmentCenter;
+    concurrencyHeader.translatesAutoresizingMaskIntoConstraints = NO;
+    UISlider *concurrencySlider = [[UISlider alloc] init];
+    concurrencySlider.minimumValue = 1.0;
+    concurrencySlider.maximumValue = 8.0;
+    concurrencySlider.value = (float)savedConcurrency;
+    concurrencySlider.minimumTrackTintColor = NCLRAccent();
+    concurrencySlider.translatesAutoresizingMaskIntoConstraints = NO;
+    concurrencySlider.accessibilityLabel = @"资源下载并发数";
+    concurrencySlider.accessibilityValue = [NSString stringWithFormat:@"%ld", (long)savedConcurrency];
+    [concurrencySlider addTarget:self action:@selector(downloadConcurrencyChanged:)
+                forControlEvents:UIControlEventValueChanged];
+    UILabel *concurrencyHint = [self label:@"同时下载 1–8 个资源文件，默认 4 路。修改后于下一次资源下载生效。"
+                                      size:11.0 weight:UIFontWeightRegular
+                                     color:NCLRColor(0.58, 0.58, 0.58, 1.0)];
+    UIStackView *downloadsStack = [[UIStackView alloc] initWithArrangedSubviews:
+        @[concurrencyHeader, concurrencySlider, concurrencyHint]];
+    downloadsStack.axis = UILayoutConstraintAxisVertical;
+    downloadsStack.spacing = 7.0;
+    downloadsStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [downloads addSubview:downloadsStack];
+    [NSLayoutConstraint activateConstraints:@[
+        [downloadsStack.leadingAnchor constraintEqualToAnchor:downloads.leadingAnchor constant:16.0],
+        [downloadsStack.trailingAnchor constraintEqualToAnchor:downloads.trailingAnchor constant:-16.0],
+        [downloadsStack.topAnchor constraintEqualToAnchor:downloads.topAnchor constant:14.0],
+        [downloadsStack.bottomAnchor constraintEqualToAnchor:downloads.bottomAnchor constant:-14.0],
+    ]];
+    [self.stack addArrangedSubview:downloads];
 
     UIView *motion = [self card];
     UILabel *motionTitle = [self eyebrow:@"界面动效"];
@@ -3873,6 +3921,14 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [[NSNotificationCenter defaultCenter]
         postNotificationName:NCLRPageTransitionBlurPreferenceChangedNotification
                       object:nil];
+}
+
+- (void)downloadConcurrencyChanged:(UISlider *)sender {
+    NSInteger value = (NSInteger)lroundf(sender.value);
+    sender.value = (float)value;
+    [[NSUserDefaults standardUserDefaults] setInteger:value forKey:kNCLRResourceConcurrencyKey];
+    sender.accessibilityValue = [NSString stringWithFormat:@"%ld", (long)value];
+    self.downloadConcurrencyValue.text = [NSString stringWithFormat:@"%ld 路", (long)value];
 }
 
 - (void)themeChanged:(UISegmentedControl *)control {
@@ -5557,7 +5613,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
         }
 
         NSOperationQueue *assetQueue = [[NSOperationQueue alloc] init];
-        assetQueue.maxConcurrentOperationCount = 4;
+        assetQueue.maxConcurrentOperationCount = NCLRResourceDownloadConcurrency();
         NSMutableArray<NSString *> *pending = [NSMutableArray array];
         unsigned long long totalBytes = 0;
         unsigned long long cachedBytes = 0;
@@ -5919,6 +5975,8 @@ static CIContext *NCLRTransitionCIContext(void) {
 @property (nonatomic, strong) UILabel *accountLabel;
 @property (nonatomic, strong) UILabel *accountAvatarLabel;
 @property (nonatomic, strong) UIImageView *accountAvatarImage;
+@property (nonatomic, strong) CAGradientLayer *sidebarGradientLayer;
+@property (nonatomic, strong) CAGradientLayer *brandGradientLayer;
 @property (nonatomic, assign) NSInteger page;
 @property (nonatomic, assign) NSInteger initialPage;
 @property (nonatomic, assign) BOOL compactLayout;
@@ -5947,6 +6005,18 @@ static CIContext *NCLRTransitionCIContext(void) {
     self.sidebar.translatesAutoresizingMaskIntoConstraints = NO;
     self.sidebar.backgroundColor = NCLRCanvas();
     self.sidebar.clipsToBounds = YES;
+    CAGradientLayer *sidebarGradient = [CAGradientLayer layer];
+    UIColor *sidebarShadowColor = NCLRSunkenSurface();
+    sidebarGradient.colors = @[
+        (__bridge id)NCLRCanvas().CGColor,
+        (__bridge id)[sidebarShadowColor colorWithAlphaComponent:0.0].CGColor,
+        (__bridge id)[sidebarShadowColor colorWithAlphaComponent:0.85].CGColor,
+    ];
+    sidebarGradient.locations = @[@0.0, @0.78, @1.0];
+    sidebarGradient.startPoint = CGPointMake(0.5, 0.0);
+    sidebarGradient.endPoint = CGPointMake(0.5, 1.0);
+    [self.sidebar.layer insertSublayer:sidebarGradient atIndex:0];
+    self.sidebarGradientLayer = sidebarGradient;
     [self.view addSubview:self.sidebar];
 
     self.content = [[UIView alloc] init];
@@ -6008,7 +6078,7 @@ static CIContext *NCLRTransitionCIContext(void) {
         [self.content.leadingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor],
         [self.content.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.content.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
-        [self.content.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor],
+        [self.content.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
     ];
     self.compactConstraints = @[
         [self.compactBar.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
@@ -6018,7 +6088,7 @@ static CIContext *NCLRTransitionCIContext(void) {
         [self.content.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
         [self.content.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
         [self.content.topAnchor constraintEqualToAnchor:self.compactBar.bottomAnchor],
-        [self.content.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor],
+        [self.content.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
     ];
     [NSLayoutConstraint activateConstraints:self.regularConstraints];
     self.compactBar.hidden = YES;
@@ -6044,6 +6114,17 @@ static CIContext *NCLRTransitionCIContext(void) {
     mark.layer.cornerRadius = 10.0;
     mark.layer.masksToBounds = YES;
     mark.translatesAutoresizingMaskIntoConstraints = NO;
+    CAGradientLayer *brandGradient = [CAGradientLayer layer];
+    UIColor *brandShadowColor = NCLRSunkenSurface();
+    brandGradient.colors = @[
+        (__bridge id)[brandShadowColor colorWithAlphaComponent:0.0].CGColor,
+        (__bridge id)[brandShadowColor colorWithAlphaComponent:0.72].CGColor,
+    ];
+    brandGradient.locations = @[@0.55, @1.0];
+    brandGradient.startPoint = CGPointMake(0.5, 0.0);
+    brandGradient.endPoint = CGPointMake(0.5, 1.0);
+    [brand.layer insertSublayer:brandGradient atIndex:0];
+    self.brandGradientLayer = brandGradient;
     UILabel *title = [self label:@"NCLR" size:22.0 weight:UIFontWeightBold
                            color:NCLRColor(1.0, 1.0, 1.0, 1.0)];
     UILabel *subtitle = [self label:@"LAUNCHER" size:8.0 weight:UIFontWeightBold
@@ -6054,6 +6135,7 @@ static CIContext *NCLRTransitionCIContext(void) {
     [brand addSubview:mark];
     [brand addSubview:title];
     [brand addSubview:subtitle];
+    brand.userInteractionEnabled = NO;
     [NSLayoutConstraint activateConstraints:@[
         [mark.leadingAnchor constraintEqualToAnchor:brand.leadingAnchor],
         [mark.topAnchor constraintEqualToAnchor:brand.topAnchor],
@@ -6072,10 +6154,13 @@ static CIContext *NCLRTransitionCIContext(void) {
     self.navScroll = navScroll;
     navScroll.translatesAutoresizingMaskIntoConstraints = NO;
     navScroll.backgroundColor = UIColor.clearColor;
-    navScroll.showsVerticalScrollIndicator = YES;
+    navScroll.showsVerticalScrollIndicator = NO;
     navScroll.alwaysBounceVertical = NO;
-    navScroll.clipsToBounds = NO;
-    navScroll.layer.masksToBounds = NO;
+    navScroll.clipsToBounds = YES;
+    navScroll.layer.masksToBounds = YES;
+    if (@available(iOS 11.0, *)) {
+        navScroll.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+    }
     navScroll.contentInset = UIEdgeInsetsMake(0, 0, 8, 0);
     [self.sidebar addSubview:navScroll];
 
@@ -6145,8 +6230,7 @@ static CIContext *NCLRTransitionCIContext(void) {
 
     UIView *account = [[UIView alloc] init];
     account.translatesAutoresizingMaskIntoConstraints = NO;
-    account.backgroundColor = NCLRCanvas();
-    account.layer.cornerRadius = 12.0;
+    account.backgroundColor = UIColor.clearColor;
     UILabel *avatar = [self label:@"N" size:15.0 weight:UIFontWeightBold
                             color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
     self.accountAvatarLabel = avatar;
@@ -6207,9 +6291,10 @@ static CIContext *NCLRTransitionCIContext(void) {
         [nav.widthAnchor constraintEqualToAnchor:navScroll.frameLayoutGuide.widthAnchor],
         [account.leadingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.leadingAnchor constant:12.0],
         [account.trailingAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.trailingAnchor constant:-12.0],
-        [account.bottomAnchor constraintEqualToAnchor:self.sidebar.safeAreaLayoutGuide.bottomAnchor constant:-14.0],
+        [account.bottomAnchor constraintEqualToAnchor:self.sidebar.bottomAnchor],
         [account.heightAnchor constraintGreaterThanOrEqualToConstant:56.0],
     ]];
+    [self.sidebar bringSubviewToFront:brand];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(refreshAccount)
@@ -6257,12 +6342,11 @@ static CIContext *NCLRTransitionCIContext(void) {
         return;
     }
     self.compactLayout = compact;
-    // Keep the left navigation on every width: the compact top bar made the
-    // pages disappear on narrow phones. The sidebar just gets narrower, and
-    // its own scroll view holds the page buttons.
+    // Keep the left navigation on every width so the brand and page titles
+    // remain readable. The sidebar scroll view holds the page buttons.
     [NSLayoutConstraint deactivateConstraints:self.compactConstraints];
     [NSLayoutConstraint activateConstraints:self.regularConstraints];
-    self.sidebarWidth.constant = compact ? 156.0 : 228.0;
+    self.sidebarWidth.constant = 228.0;
     self.sidebar.hidden = NO;
     self.compactBar.hidden = YES;
 }
@@ -6278,6 +6362,11 @@ static CIContext *NCLRTransitionCIContext(void) {
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     [self updateAdaptiveLayout];
+    self.brandGradientLayer.frame = CGRectMake(0.0,
+                                                0.0,
+                                                34.0,
+                                                CGRectGetHeight(self.brandGradientLayer.superlayer.bounds));
+    self.sidebarGradientLayer.frame = self.sidebar.bounds;
     [self.pageTransitionCoordinator updateSnapshotFrame];
 }
 
