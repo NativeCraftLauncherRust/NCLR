@@ -202,6 +202,25 @@ index b08731f..c214ad1 100644
      }
  }
  
+diff --git a/crates/horizon-client-input/src/keymapping.rs b/crates/horizon-client-input/src/keymapping.rs
+index fd10c0a..99f1634 100644
+--- a/crates/horizon-client-input/src/keymapping.rs
++++ b/crates/horizon-client-input/src/keymapping.rs
+@@ -81,6 +81,14 @@ impl KeyState {
+             self.is_down = down;
+         }
+     }
++
++    /// Forces the mapping up and drops a pad toggle. A touch attack tapped in
++    /// toggle mode otherwise leaves the mapping down after the finger lifts,
++    /// and set_down(false) cannot clear it.
++    pub fn force_up(&mut self) {
++        self.is_down = false;
++        self.pad_toggled = false;
++    }
+     /// `KeyboardHandler.keyPress` for this mapping's key: a release sets it up
+     /// (`KeyMapping.set(key, false)`); a press or a repeat with no screen open
+     /// sets it down and clicks it (`KeyMapping.set(key, true)`, `KeyMapping.click`).
 diff --git a/crates/horizon-client-lib/Cargo.toml b/crates/horizon-client-lib/Cargo.toml
 index ed7d483..3136fdb 100644
 --- a/crates/horizon-client-lib/Cargo.toml
@@ -2003,7 +2022,7 @@ index 026382e..9289a31 100644
                  if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
              {
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..c009838 100644
+index 16664ff..5e4ab1a 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
 @@ -7,6 +7,20 @@ fn studio_suppresses_focus_pause(replay_active: bool, freecam_active: bool) -> b
@@ -2027,7 +2046,7 @@ index 16664ff..c009838 100644
      /// The options `MouseHandler.turnPlayer` reads.
      pub(super) fn look_options(&self) -> LookOptions {
          LookOptions {
-@@ -55,6 +69,210 @@ impl Game<'_> {
+@@ -55,6 +69,214 @@ impl Game<'_> {
          let zoom = self.zoom_turn_scale();
          self.turn_player(x * zoom, y * zoom);
      }
@@ -2173,12 +2192,16 @@ index 16664ff..c009838 100644
 +        // The touch release clears its own latch even while a keyboard or
 +        // mouse is attached. Only a physical button that still holds the same
 +        // action keeps it down.
-+        if held || !self.mouse_mapping_held_elsewhere(button, Source::Pad) {
++        if held {
++            self.toggles.0[2].set_down(true, false);
++            self.left = self.toggles.is_down(2);
++        } else if !self.mouse_mapping_held_elsewhere(button, Source::Pad) {
 +            // Releasing is idempotent and must run even when the previous
 +            // frame already saw no attack. Otherwise a release that arrives
-+            // after a screen transition can leave `left` stuck down and mine
-+            // again as soon as the world resumes.
-+            self.toggles.0[2].set_down(held, false);
++            // after a screen transition can leave left stuck down and mine
++            // again as soon as the world resumes. force_up also drops a pad
++            // toggle that set_down(false) cannot clear.
++            self.toggles.0[2].force_up();
 +            self.left = self.toggles.is_down(2);
 +        }
 +        if (!was_held && held) || clicked {

@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>10.6</string>
+	<string>10.9</string>
 	<key>CFBundleSupportedPlatforms</key>
 	<array>
 		<string>iPhoneOS</string>
@@ -61,6 +61,10 @@
 	<string>启用陀螺仪后，使用设备旋转控制游戏视角。</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>用于发现同一网络上的 Minecraft 游戏和向局域网开放你的世界。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_minecraft._tcp</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
@@ -124,7 +128,7 @@
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
 	<key>NCLRVersionName</key>
-	<string>L10.6</string>
+	<string>L10.9</string>
 </dict>
 </plist>
 
