@@ -1461,6 +1461,24 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     self.hasAbsolutePixel = YES;
     self.lastAbsoluteTime = CFAbsoluteTimeGetCurrent();
     NCLRPointerPixel = pixel;
+    // UIKit reports Y from the top, while the game's window on iOS takes the
+    // pointer position with Y from the bottom: passing the raw value mirrored
+    // the menu cursor vertically and the further the mouse moved the further
+    // the two drifted apart. Send Y in the game's own space and keep the raw Y
+    // for the movement that turns the camera.
+    UIView *target = [self pointerTargetView];
+    CGFloat targetScale = target.contentScaleFactor > 0.0 ? target.contentScaleFactor : 1.0;
+    CGPoint absolute = pixel;
+    if (target.bounds.size.height > 0.0) {
+        absolute.y = target.bounds.size.height * targetScale - pixel.y;
+    }
+    static int logged;
+    if (logged < 3) {
+        logged++;
+        NCLRLog(@"pointer: raw=(%.0f,%.0f) sent=(%.0f,%.0f) h=%.0f",
+                pixel.x, pixel.y, absolute.x, absolute.y,
+                target.bounds.size.height * targetScale);
+    }
     if (!self.lockDesired) {
         // No pointer lock: the absolute position moves menus, and the movement
         // itself turns the camera while playing. Without this a menu cursor
@@ -1469,13 +1487,13 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
         CGFloat dy = pixel.y - previous.y;
         BOOL moved = hadPrevious && (dx != 0.0 || dy != 0.0);
         horizon_ios_hardware_mouse_motion(moved ? dx : 0.0, moved ? -dy : 0.0,
-                                          pixel.x, pixel.y);
+                                          absolute.x, absolute.y);
         return;
     }
     if (self.lockHeld || !hadPrevious) {
         // Locked: GCMouse is the motion source. Keep the position current so a
         // click that opens a menu lands under the pointer.
-        horizon_ios_hardware_mouse_motion(0.0, 0.0, pixel.x, pixel.y);
+        horizon_ios_hardware_mouse_motion(0.0, 0.0, absolute.x, absolute.y);
         return;
     }
     // Playing without the lock (iPadOS refuses it in Stage Manager or Split
@@ -1485,7 +1503,7 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     CGFloat dx = pixel.x - previous.x;
     CGFloat dy = pixel.y - previous.y;
     if (dx == 0.0 && dy == 0.0) return;
-    horizon_ios_hardware_mouse_motion(dx, -dy, pixel.x, pixel.y);
+    horizon_ios_hardware_mouse_motion(dx, -dy, absolute.x, absolute.y);
 }
 @end
 
