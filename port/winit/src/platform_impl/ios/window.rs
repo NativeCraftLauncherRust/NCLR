@@ -433,6 +433,12 @@ impl Inner {
     /// [objc2_ui_kit::UIKeyInput], the keyboard will be shown.
     /// <https://developer.apple.com/documentation/uikit/uiresponder/1621113-becomefirstresponder>
     pub fn set_ime_allowed(&self, allowed: bool) {
+        // A shell hook owns the text-input view (it has the real UITextInput
+        // composition a Chinese keyboard needs); only without one does winit
+        // make its own plain view first responder.
+        if super::run_ime_hook(allowed) {
+            return;
+        }
         if allowed {
             unsafe {
                 self.view.becomeFirstResponder();

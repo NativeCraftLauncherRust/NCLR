@@ -15,7 +15,7 @@ use objc2_ui_kit::{
 use super::app_state::{self, EventWrapper};
 use super::window::WinitUIWindow;
 use crate::dpi::PhysicalPosition;
-use crate::event::{ElementState, Event, Force, KeyEvent, Touch, TouchPhase, WindowEvent};
+use crate::event::{ElementState, Event, Force, Ime, KeyEvent, Touch, TouchPhase, WindowEvent};
 use crate::keyboard::{Key, KeyCode, KeyLocation, NamedKey, NativeKeyCode, PhysicalKey};
 use crate::platform_impl::platform::DEVICE_ID;
 use crate::platform_impl::KeyEventExtra;
@@ -544,42 +544,54 @@ impl WinitView {
         let window = self.window().unwrap();
         let window_id = RootWindowId(window.id());
         let mtm = MainThreadMarker::new().unwrap();
-        // send individual events for each character
-        app_state::handle_nonuser_events(
-            mtm,
-            text.to_string().replace("\r\n", "\n").chars().flat_map(|c| {
-                let (logical_key, physical_key, text) = if matches!(c, '\r' | '\n') {
-                    // UIKeyInput sends the software Return as a newline. Title screens
-                    // handle Enter by key code; a committed newline is ordinary text.
-                    (Key::Named(NamedKey::Enter), PhysicalKey::Code(KeyCode::Enter), None)
-                } else {
-                    let text = smol_str::SmolStr::from_iter([c]);
-                    (
-                        Key::Character(text.clone()),
-                        PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
-                        Some(text),
-                    )
-                };
-                [ElementState::Pressed, ElementState::Released].map(|state| {
-                    EventWrapper::StaticEvent(Event::WindowEvent {
+        // A committed string is an IME commit, not a run of key presses: the
+        // text boxes a screen draws (chat, the sign editor, a server dialog's
+        // password field) take committed text through `WindowEvent::Ime`, and
+        // a composed Chinese character arrives here already whole. Sending it
+        // as synthesized key events with an unidentified physical key was why
+        // a dialog field stayed empty and Chinese never landed.
+        let mut events = Vec::new();
+        let mut run = String::new();
+        for c in text.to_string().replace("\r\n", "\n").chars() {
+            if c == '\r' || c == '\n' {
+                if !run.is_empty() {
+                    events.push(EventWrapper::StaticEvent(Event::WindowEvent {
+                        window_id,
+                        event: WindowEvent::Ime(Ime::Commit(std::mem::take(&mut run))),
+                    }));
+                }
+                // UIKeyInput sends the software Return as a newline. The game's
+                // screens handle Enter by key code, and a committed newline is
+                // not text, so it stays a key event.
+                for state in [ElementState::Pressed, ElementState::Released] {
+                    events.push(EventWrapper::StaticEvent(Event::WindowEvent {
                         window_id,
                         event: WindowEvent::KeyboardInput {
                             event: KeyEvent {
-                                text: if state == ElementState::Pressed { text.clone() } else { None },
+                                text: None,
                                 state,
                                 location: KeyLocation::Standard,
                                 repeat: false,
-                                logical_key: logical_key.clone(),
-                                physical_key,
+                                logical_key: Key::Named(NamedKey::Enter),
+                                physical_key: PhysicalKey::Code(KeyCode::Enter),
                                 platform_specific: KeyEventExtra {},
                             },
                             is_synthetic: false,
                             device_id: DEVICE_ID,
                         },
-                    })
-                })
-            }),
-        );
+                    }));
+                }
+            } else {
+                run.push(c);
+            }
+        }
+        if !run.is_empty() {
+            events.push(EventWrapper::StaticEvent(Event::WindowEvent {
+                window_id,
+                event: WindowEvent::Ime(Ime::Commit(run)),
+            }));
+        }
+        app_state::handle_nonuser_events(mtm, events);
     }
 
     fn handle_delete_backward(&self) {

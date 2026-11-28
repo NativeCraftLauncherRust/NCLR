@@ -11,8 +11,8 @@ use super::app_state::{self, EventWrapper};
 use super::DEVICE_ID;
 use crate::dpi::PhysicalPosition;
 use crate::event::{
-    DeviceEvent, ElementState, Event, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase,
-    WindowEvent,
+    DeviceEvent, ElementState, Event, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta,
+    TouchPhase, WindowEvent,
 };
 use crate::keyboard::{
     Key, KeyCode, KeyLocation, ModifiersState, NamedKey, PhysicalKey,
@@ -269,6 +269,27 @@ pub(crate) fn send_mouse_scroll(dx: f64, dy: f64) {
                 delta: MouseScrollDelta::LineDelta(dx as f32, dy as f32),
                 phase: TouchPhase::Moved,
             },
+        }),
+    );
+}
+
+/// Committed text from the shell's IME view: the same `WindowEvent::Ime` a
+/// desktop input method sends, so the game routes it through `ime_commit`.
+pub(crate) fn send_ime_commit(text: &str) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(window_id) = app_state::key_window_id() else {
+        return;
+    };
+    if text.is_empty() {
+        return;
+    }
+    app_state::handle_nonuser_event(
+        mtm,
+        EventWrapper::StaticEvent(Event::WindowEvent {
+            window_id,
+            event: WindowEvent::Ime(Ime::Commit(text.to_owned())),
         }),
     );
 }

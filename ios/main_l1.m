@@ -18,6 +18,9 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <limits.h>
+#include <execinfo.h>
+#include <signal.h>
 
 extern int horizon_ios_run(const char *resources, const char *game_dir);
 extern void horizon_ios_add_motion(double dx, double dy);
@@ -27,17 +30,19 @@ extern void horizon_ios_hardware_key(uint16_t usage, int pressed, int repeat, ui
 extern void horizon_ios_hardware_mouse_motion(double dx, double dy, double x, double y);
 extern void horizon_ios_hardware_mouse_button(int button, int pressed);
 extern void horizon_ios_hardware_mouse_scroll(double dx, double dy);
+extern void horizon_ios_text_commit(const char *text);
+extern void horizon_ios_set_text_input_hooks(void (*begin)(void), void (*end)(void));
 
-// The game locks the iPadOS pointer while it is playing so a mouse dragged to
-// the screen edge cannot open the dock, Control Centre or the app switcher.
-// The lock follows the engine's pointer-hidden flag, so menus release it and
-// get their cursor back. This category reaches winit's own view controller,
-// which the shell cannot subclass.
+// The game used to lock the iPadOS pointer while playing so a mouse dragged to
+// the screen edge could not open the dock. The lock also froze the pointer for
+// menus on some iPads (the position UIKit reports goes stale once locked), and a
+// frozen cursor is worse than the dock gesture: iOS never locks now, the system
+// pointer stays live everywhere, and the game follows it.
 @interface UIViewController (NCLRPointerLock)
 @end
 @implementation UIViewController (NCLRPointerLock)
 - (BOOL)prefersPointerLocked {
-    return horizon_ios_pointer_hidden() != 0;
+    return NO;
 }
 @end
 
@@ -386,6 +391,88 @@ static NSString *NCLRDocuments(void) {
     return paths.firstObject ?: NSTemporaryDirectory();
 }
 
+#pragma mark - Startup diagnostics
+
+/// A plain-text breadcrumb trail in Documents (reachable through the Files app
+/// because UIFileSharingEnabled is on). A device that crashes or shows a black
+/// screen before a debugger can attach leaves its last stage and signal here,
+/// which is what the iOS 17/18 reports need in order to be fixed by evidence.
+static NSString *NCLRStartupLogPath(void) {
+    return [NCLRDocuments() stringByAppendingPathComponent:@"nclr-startup.log"];
+}
+
+static void NCLRLog(NSString *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:arguments];
+    va_end(arguments);
+    NSString *line = [NSString stringWithFormat:@"%.3f %@\n",
+                      NSDate.date.timeIntervalSince1970, message];
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    NSString *path = NCLRStartupLogPath();
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        [data writeToFile:path atomically:YES];
+        return;
+    }
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (!handle) return;
+    @try {
+        [handle seekToEndOfFile];
+        [handle writeData:data];
+    } @catch (__unused NSException *exception) {
+    } @finally {
+        [handle closeFile];
+    }
+}
+
+static char NCLRCrashLogPath[PATH_MAX];
+
+/// Async-signal-safe enough for a last word: the path was copied at install
+/// time, and only open/write/backtrace are used before re-raising.
+static void NCLRWriteCrashAndReraise(int signalNumber) {
+    int descriptor = open(NCLRCrashLogPath, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    if (descriptor >= 0) {
+        char header[128];
+        int length = snprintf(header, sizeof(header), "\nFATAL signal %d\n", signalNumber);
+        if (length > 0) {
+            ssize_t ignored = write(descriptor, header, (size_t)length);
+            (void)ignored;
+        }
+        void *frames[64];
+        int count = backtrace(frames, 64);
+        backtrace_symbols_fd(frames, count, descriptor);
+        close(descriptor);
+    }
+    signal(signalNumber, SIG_DFL);
+    raise(signalNumber);
+}
+
+static void NCLRUncaughtException(NSException *exception) {
+    NCLRLog(@"uncaught %@: %@\n%@", exception.name, exception.reason,
+            [exception.callStackSymbols componentsJoinedByString:@"\n"]);
+}
+
+static void NCLRInstallCrashHandlers(void) {
+    NSString *path = NCLRStartupLogPath();
+    strlcpy(NCLRCrashLogPath, path.fileSystemRepresentation, sizeof(NCLRCrashLogPath));
+    NSSetUncaughtExceptionHandler(&NCLRUncaughtException);
+    const int signals[] = {SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE};
+    for (size_t index = 0; index < sizeof(signals) / sizeof(signals[0]); index++) {
+        signal(signals[index], NCLRWriteCrashAndReraise);
+    }
+}
+
+/// Whether this display really shows extended range. The engine asks Metal for an
+/// HDR10 (PQ) swapchain, and some iPads answer yes even when the panel cannot show
+/// it: the picture then comes out black while the music keeps playing. Gate HDR on
+/// the screen's potential EDR headroom instead; an SDR screen gets SDR output.
+static BOOL NCLRDisplayOffersHDR(void) {
+    if (@available(iOS 16.0, *)) {
+        return UIScreen.mainScreen.potentialEDRHeadroom > 1.01;
+    }
+    return NO;
+}
+
 static NSString *NCLRWasmRefusalText(void) {
     NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"nclr-wasm-refusals.txt"];
     NSString *text = [NSString stringWithContentsOfFile:path
@@ -716,9 +803,19 @@ static void NCLRRestoreVisibleKeyWindow(void) {
 // visible pointer instead of a virtual cursor drifting from it.
 static CGPoint NCLRPointerPixel = {-1.0, -1.0};
 
+// Whether UIKit currently hides the system pointer. This is true only while
+// iPadOS really holds the pointer lock (UIPointerLockState.isLocked). Hiding
+// the pointer for a lock the system never granted leaves the game with neither
+// deltas (GCMouse reports none unless the pointer is locked) nor an absolute
+// pointer to fall back on, which is how camera look died until a click.
+static BOOL NCLRSystemPointerHidden = NO;
+
+static void NCLRNotePointerAtPixel(CGPoint pixel);
+
 // The game draws its own crosshair, and a captured pointer means the player is
-// turning the camera. Hide the system arrow then, and restore it whenever the
-// game releases the pointer so menus keep a usable cursor.
+// turning the camera. Hide the system arrow only while the lock is really held,
+// and restore it whenever the game releases the pointer or iPadOS drops the
+// lock, so menus and the unlocked fallback keep a usable cursor.
 @interface NCLRHiddenPointerDelegate : NSObject <UIPointerInteractionDelegate>
 @end
 
@@ -727,12 +824,17 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
                         regionForRequest:(UIPointerRegionRequest *)request
                            defaultRegion:(UIPointerRegion *)defaultRegion {
     UIView *view = interaction.view;
-    CGFloat scale = view.window.screen.scale > 0.0 ? view.window.screen.scale : 1.0;
+    // The interaction lives on the game's own view now, so the reported point
+    // is already in that view's coordinate space: only the view's scale stands
+    // between it and the drawable pixels the game counts in.
+    CGFloat scale = view.contentScaleFactor > 0.0 ? view.contentScaleFactor : 1.0;
     CGPoint point = request.location;
-    NCLRPointerPixel = CGPointMake(point.x * scale, point.y * scale);
-    // Re-send the absolute position so the game's GUI cursor sits exactly
-    // where the system pointer is drawn.
-    horizon_ios_hardware_mouse_motion(0.0, 0.0, NCLRPointerPixel.x, NCLRPointerPixel.y);
+    NCLRNotePointerAtPixel(CGPointMake(point.x * scale, point.y * scale));
+    static BOOL logged;
+    if (!logged) {
+        logged = YES;
+        NCLRLog(@"pointer: UIPointerInteraction reports positions");
+    }
     return defaultRegion;
 }
 
@@ -740,10 +842,24 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
                          styleForRegion:(UIPointerRegion *)region {
     (void)interaction;
     (void)region;
-    if (horizon_ios_pointer_hidden() != 0) {
-        return [UIPointerStyle hiddenPointerStyle];
+    return NCLRSystemPointerHidden ? [UIPointerStyle hiddenPointerStyle] : nil;
+}
+
+/// `UIPointerInteraction` only asks for a region when UIKit needs one, so motion
+/// inside a single region can go unreported and the menu cursor then sits still.
+/// The hover recognizer reports every move; that is what the game's cursor follows
+/// in menus.
+- (void)hovered:(UIHoverGestureRecognizer *)recognizer {
+    UIView *view = recognizer.view;
+    if (!view) return;
+    CGPoint point = [recognizer locationInView:view];
+    CGFloat scale = view.contentScaleFactor > 0.0 ? view.contentScaleFactor : 1.0;
+    NCLRNotePointerAtPixel(CGPointMake(point.x * scale, point.y * scale));
+    static BOOL logged;
+    if (!logged) {
+        logged = YES;
+        NCLRLog(@"pointer: UIHoverGestureRecognizer reports positions");
     }
-    return nil;
 }
 @end
 
@@ -761,13 +877,34 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
 @property (nonatomic, assign) NSInteger mouseMissTicks;
 @property (nonatomic, strong) UIPointerInteraction *pointerHiding;
 @property (nonatomic, weak) UIView *pointerHidingView;
+@property (nonatomic, strong) UIHoverGestureRecognizer *pointerHover;
 @property (nonatomic, assign) BOOL pointerHidden;
+@property (nonatomic, assign) BOOL lockDesired;
+@property (nonatomic, assign) BOOL lockHeld;
+@property (nonatomic, assign) BOOL leftDown;
+@property (nonatomic, assign) BOOL rightDown;
+@property (nonatomic, assign) BOOL middleDown;
+@property (nonatomic, assign) BOOL leftLockout;
+@property (nonatomic, assign) BOOL rightLockout;
+@property (nonatomic, assign) BOOL middleLockout;
+@property (nonatomic, assign) CGPoint lastAbsolutePixel;
+@property (nonatomic, assign) BOOL hasAbsolutePixel;
+@property (nonatomic, assign) NSTimeInterval lastAbsoluteTime;
+@property (nonatomic, strong) NSTimer *buttonWatch;
 + (instancetype)shared;
 - (void)start;
 - (void)stop;
 - (void)applyMotionDX:(float)deltaX dy:(float)deltaY;
+- (void)notePointerAtPixel:(CGPoint)pixel;
+- (void)setButton:(int)button down:(BOOL)down;
+- (void)reconcileButtons;
+- (void)reconcileButton:(int)button pressed:(BOOL)pressed lockout:(BOOL *)lockout;
+- (void)releaseAllButtons;
+- (void)refreshPointerLock;
+- (void)requestPointerLock;
+- (void)updateLockState;
 - (void)syncSystemPointerHidden;
-- (void)updatePointerLockForWindow:(UIWindow *)window;
+- (void)ensureHoverForView:(UIView *)view;
 @end
 
 @implementation NCLRHardwareInput
@@ -780,7 +917,10 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
 
 - (instancetype)init {
     self = [super init];
-    if (self) _keysDown = [NSMutableSet set];
+    if (self) {
+        _keysDown = [NSMutableSet set];
+        _lastAbsolutePixel = CGPointMake(-1.0, -1.0);
+    }
     return self;
 }
 
@@ -802,6 +942,13 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
                    name:UIApplicationWillResignActiveNotification object:nil];
     [center addObserver:self selector:@selector(devicesChanged:)
                    name:UIApplicationDidEnterBackgroundNotification object:nil];
+    // iPadOS grants and drops the pointer lock on its own (a system gesture, a
+    // scene that stops qualifying, Escape): watch the real state instead of
+    // assuming the lock follows our preference.
+    [center addObserver:self selector:@selector(pointerLockStateChanged:)
+                   name:UIPointerLockStateDidChangeNotification object:nil];
+    [center addObserver:self selector:@selector(windowBecameKey:)
+                   name:UIWindowDidBecomeKeyNotification object:nil];
     // UIKit can drop a device's handlers while the app is in the background or
     // while the system keyboard takes over. A slow tick reinstalls them even
     // when no connect notification arrives.
@@ -811,6 +958,16 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
                                           userInfo:nil
                                            repeats:YES];
     [NSRunLoop.mainRunLoop addTimer:self.watchdog forMode:NSRunLoopCommonModes];
+    // A click can change the pointer path mid-press (granting or dropping the
+    // lock), and the system swallows the release with it; GameController gives
+    // us no second edge. Poll the buttons so a lost release cannot leave the
+    // game attacking forever; real edges still arrive first and are deduped.
+    self.buttonWatch = [NSTimer timerWithTimeInterval:0.1
+                                               target:self
+                                             selector:@selector(buttonWatchTick:)
+                                             userInfo:nil
+                                              repeats:YES];
+    [NSRunLoop.mainRunLoop addTimer:self.buttonWatch forMode:NSRunLoopCommonModes];
     [self refreshDevices];
 }
 
@@ -819,7 +976,10 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     self.running = NO;
     [self.watchdog invalidate];
     self.watchdog = nil;
+    [self.buttonWatch invalidate];
+    self.buttonWatch = nil;
     [NSNotificationCenter.defaultCenter removeObserver:self];
+    NCLRSystemPointerHidden = NO;
     [self detachKeyboard:YES];
     [self detachMouse];
     if (self.pointerHiding) {
@@ -827,12 +987,21 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     }
     self.pointerHiding = nil;
     self.pointerHidingView = nil;
+    if (self.pointerHover) {
+        [self.pointerHover.view removeGestureRecognizer:self.pointerHover];
+        self.pointerHover = nil;
+    }
     horizon_ios_set_hardware_input(0, 0);
     self.cursorReady = NO;
 }
 
 - (void)devicesChanged:(NSNotification *)note {
-    (void)note;
+    if ([note.name isEqualToString:UIApplicationWillResignActiveNotification] ||
+        [note.name isEqualToString:UIApplicationDidEnterBackgroundNotification]) {
+        // Leaving the app is another place a release never arrives; the game
+        // must not keep mining behind the launcher.
+        [self releaseAllButtons];
+    }
     __weak typeof(self) weakSelf = self;
     NCLRRunOnMain(^{ [weakSelf refreshDevices]; });
 }
@@ -871,28 +1040,178 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     BOOL hasKeyboard = self.keyboard != nil;
     BOOL hasMouse = self.mouse != nil;
     horizon_ios_set_hardware_input((hasKeyboard || hasMouse) ? 1 : 0, hasMouse ? 1 : 0);
+    [self refreshPointerLock];
     [self syncSystemPointerHidden];
+    [self reconcileButtons];
 }
 
-- (void)syncSystemPointerHidden {
-    BOOL hide = horizon_ios_pointer_hidden() != 0;
-    UIWindow *window = nil;
+- (UIWindow *)keyWindowForPointer {
+    UIWindow *fallback = nil;
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
             if (candidate.hidden || candidate.alpha < 0.01) continue;
-            if (candidate.isKeyWindow) { window = candidate; break; }
-            if (!window) window = candidate;
+            if (candidate.isKeyWindow) return candidate;
+            if (!fallback) fallback = candidate;
         }
-        if (window != nil && window.isKeyWindow) break;
     }
-    if (!window) return;
-    if (self.pointerHiding && self.pointerHidingView == window) {
-        if (hide != self.pointerHidden) {
-            self.pointerHidden = hide;
+    return fallback;
+}
+
+/// The view the game actually draws into: winit's view controller owns it, and
+/// it can be inset or rotated inside the window. Attaching the pointer
+/// interaction to the window instead put every reported location off by that
+/// inset, which is the fixed gap between the system pointer and the game's own
+/// cursor.
+- (UIView *)pointerTargetView {
+    UIWindow *window = [self keyWindowForPointer];
+    UIView *view = window.rootViewController.view;
+    return view ?: window;
+}
+
+- (void)pointerLockStateChanged:(NSNotification *)note {
+    (void)note;
+    // The system drops the lock by itself (its own release gesture, a scene
+    // that stops qualifying). Re-derive what we hide and heal any button the
+    // path change swallowed; the next click asks for the lock again.
+    [self updateLockState];
+}
+
+- (void)windowBecameKey:(NSNotification *)note {
+    (void)note;
+    if (self.lockDesired) {
+        [self requestPointerLock];
+    }
+    // The window may have been missing when start() first attached the pointer
+    // gesture; make sure it is on the view before the state is read.
+    [self ensureHoverForView:[self pointerTargetView]];
+    [self updateLockState];
+}
+
+- (void)buttonWatchTick:(NSTimer *)timer {
+    (void)timer;
+    [self reconcileButtons];
+}
+
+- (void)updateLockState {
+    BOOL locked = NO;
+    if (@available(iOS 14.1, *)) {
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            if (((UIWindowScene *)scene).pointerLockState.isLocked) {
+                locked = YES;
+                break;
+            }
+        }
+    }
+    if (locked == self.lockHeld) return;
+    self.lockHeld = locked;
+    [self syncSystemPointerHidden];
+    // A lock transition is the one moment a button's release can go missing:
+    // the press came down on one pointer path and the release leaves on the
+    // other. Release everything so no mining/use latch can survive it.
+    [self releaseAllButtons];
+}
+
+- (void)refreshPointerLock {
+    // No pointer lock on iOS: the system pointer stays visible and moving, and
+    // both the camera and the menus follow its absolute position.
+    BOOL desired = NO;
+    if (desired != self.lockDesired) {
+        self.lockDesired = desired;
+        NCLRLog(@"pointer: lock desired=%d", desired);
+        // A menu opens with the lock still held: hide state has to follow the
+        // new intent before UIKit answers, or the arrow stays hidden.
+        [self syncSystemPointerHidden];
+        [self requestPointerLock];
+    }
+    [self updateLockState];
+}
+
+- (void)requestPointerLock {
+    UIWindow *window = [self keyWindowForPointer];
+    // Ask the window's own root controller, not a presented alert: the
+    // preference that matters is the one the game's window reads.
+    UIViewController *controller = window.rootViewController;
+    if ([controller respondsToSelector:@selector(setNeedsUpdateOfPrefersPointerLocked)]) {
+        [controller setNeedsUpdateOfPrefersPointerLocked];
+    }
+}
+
+- (void)reconcileButtons {
+    GCMouse *mouse = self.mouse;
+    if (!mouse) {
+        [self setButton:0 down:NO];
+        [self setButton:1 down:NO];
+        [self setButton:2 down:NO];
+        self.leftLockout = NO;
+        self.rightLockout = NO;
+        self.middleLockout = NO;
+        return;
+    }
+    [self reconcileButton:0 pressed:mouse.mouseInput.leftButton.isPressed
+                  lockout:&_leftLockout];
+    [self reconcileButton:1 pressed:mouse.mouseInput.rightButton.isPressed
+                  lockout:&_rightLockout];
+    [self reconcileButton:2 pressed:mouse.mouseInput.middleButton.isPressed
+                  lockout:&_middleLockout];
+}
+
+/// One button's polled state. A lockout means the pointer path changed mid-press
+/// (granting or dropping the lock): we already told the game it came up, so the
+/// physical button stays out of the game until the finger/mouse really does
+/// let go, instead of silently pressing it again and wedging a mining latch.
+- (void)reconcileButton:(int)button pressed:(BOOL)pressed lockout:(BOOL *)lockout {
+    if (*lockout) {
+        if (pressed) return;
+        *lockout = NO;
+    }
+    [self setButton:button down:pressed];
+}
+
+/// The pointer path is about to change: release every button now, and keep the
+/// physically-held ones suppressed until they are released for real.
+- (void)releaseAllButtons {
+    GCMouse *mouse = self.mouse;
+    if (mouse) {
+        self.leftLockout = mouse.mouseInput.leftButton.isPressed;
+        self.rightLockout = mouse.mouseInput.rightButton.isPressed;
+        self.middleLockout = mouse.mouseInput.middleButton.isPressed;
+    }
+    [self setButton:0 down:NO];
+    [self setButton:1 down:NO];
+    [self setButton:2 down:NO];
+}
+
+- (void)setButton:(int)button down:(BOOL)down {
+    BOOL *slot = NULL;
+    switch (button) {
+        case 0: slot = &_leftDown; break;
+        case 1: slot = &_rightDown; break;
+        case 2: slot = &_middleDown; break;
+        default: return;
+    }
+    if (*slot == down) return;
+    *slot = down;
+    horizon_ios_hardware_mouse_button(button, down ? 1 : 0);
+    if (!down && self.lockDesired && !self.lockHeld) {
+        // A click is the user gesture iPadOS wants before it grants back a lock
+        // it dropped, and the field rule is to ask on the release: asking on
+        // the press flips the pointer path in the middle of the click and
+        // strands its release on the other one.
+        [self requestPointerLock];
+    }
+}
+
+- (void)syncSystemPointerHidden {
+    UIView *view = [self pointerTargetView];
+    NCLRSystemPointerHidden = self.lockDesired && self.lockHeld;
+    [self ensureHoverForView:view];
+    if (self.pointerHiding && self.pointerHidingView == view) {
+        if (NCLRSystemPointerHidden != self.pointerHidden) {
+            self.pointerHidden = NCLRSystemPointerHidden;
             [self.pointerHiding invalidate];
         }
-        [self updatePointerLockForWindow:window];
         return;
     }
     if (self.pointerHiding) {
@@ -900,23 +1219,31 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
         self.pointerHiding = nil;
         self.pointerHidingView = nil;
     }
+    if (!view) return;
     static NCLRHiddenPointerDelegate *hiddenPointer;
     if (!hiddenPointer) hiddenPointer = [NCLRHiddenPointerDelegate new];
     self.pointerHiding = [[UIPointerInteraction alloc] initWithDelegate:hiddenPointer];
-    self.pointerHidingView = window;
-    self.pointerHidden = hide;
-    [window addInteraction:self.pointerHiding];
-    [self updatePointerLockForWindow:window];
+    self.pointerHidingView = view;
+    self.pointerHidden = NCLRSystemPointerHidden;
+    [view addInteraction:self.pointerHiding];
 }
 
-- (void)updatePointerLockForWindow:(UIWindow *)window {
-    UIViewController *controller = window.rootViewController;
-    while (controller.presentedViewController != nil) {
-        controller = controller.presentedViewController;
+/// The hover recognizer is attached once per view and survives the pointer
+/// interaction being re-created for a lock change.
+- (void)ensureHoverForView:(UIView *)view {
+    if (!view) return;
+    if (self.pointerHover && self.pointerHover.view == view) return;
+    if (self.pointerHover) {
+        [self.pointerHover.view removeGestureRecognizer:self.pointerHover];
+        self.pointerHover = nil;
     }
-    if ([controller respondsToSelector:@selector(setNeedsUpdateOfPrefersPointerLocked)]) {
-        [controller setNeedsUpdateOfPrefersPointerLocked];
-    }
+    static NCLRHiddenPointerDelegate *hoverTarget;
+    if (!hoverTarget) hoverTarget = [NCLRHiddenPointerDelegate new];
+    UIHoverGestureRecognizer *hover =
+        [[UIHoverGestureRecognizer alloc] initWithTarget:hoverTarget action:@selector(hovered:)];
+    hover.cancelsTouchesInView = NO;
+    [view addGestureRecognizer:hover];
+    self.pointerHover = hover;
 }
 
 - (uint8_t)modifiersForInput:(GCKeyboardInput *)input {
@@ -990,17 +1317,17 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     mouse.mouseInput.leftButton.pressedChangedHandler =
         ^(GCControllerButtonInput *button, float value, BOOL pressed) {
         (void)button; (void)value;
-        NCLRRunOnMain(^{ horizon_ios_hardware_mouse_button(0, pressed ? 1 : 0); });
+        NCLRRunOnMain(^{ [NCLRHardwareInput.shared setButton:0 down:pressed]; });
     };
     mouse.mouseInput.rightButton.pressedChangedHandler =
         ^(GCControllerButtonInput *button, float value, BOOL pressed) {
         (void)button; (void)value;
-        NCLRRunOnMain(^{ horizon_ios_hardware_mouse_button(1, pressed ? 1 : 0); });
+        NCLRRunOnMain(^{ [NCLRHardwareInput.shared setButton:1 down:pressed]; });
     };
     mouse.mouseInput.middleButton.pressedChangedHandler =
         ^(GCControllerButtonInput *button, float value, BOOL pressed) {
         (void)button; (void)value;
-        NCLRRunOnMain(^{ horizon_ios_hardware_mouse_button(2, pressed ? 1 : 0); });
+        NCLRRunOnMain(^{ [NCLRHardwareInput.shared setButton:2 down:pressed]; });
     };
     // The scroll wheel arrives as raw axes: vertical motion rides the first
     // axis with the sign flipped, horizontal motion the second. The game reads
@@ -1014,6 +1341,9 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
         NCLRRunOnMain(^{ horizon_ios_hardware_mouse_scroll(horizontal, vertical); });
     };
     self.cursorReady = NO;
+    self.hasAbsolutePixel = NO;
+    self.lastAbsolutePixel = CGPointMake(-1.0, -1.0);
+    [self reconcileButtons];
     [self applyMotionDX:0.0f dy:0.0f];
 }
 
@@ -1033,12 +1363,20 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     os_unfair_lock_unlock(&NCLRMotionLock);
     self.mouse = nil;
     for (int button = 0; button < 3; button++) {
-        horizon_ios_hardware_mouse_button(button, 0);
+        [self setButton:button down:NO];
     }
+    self.leftLockout = NO;
+    self.rightLockout = NO;
+    self.middleLockout = NO;
     self.cursorReady = NO;
+    self.hasAbsolutePixel = NO;
+    self.lastAbsolutePixel = CGPointMake(-1.0, -1.0);
 }
 
 - (void)applyMotionDX:(float)deltaX dy:(float)deltaY {
+    // Hover reports can be missed when the view appeared after start(); attach
+    // on the first mouse report as well.
+    [self ensureHoverForView:[self pointerTargetView]];
     UIWindow *window = nil;
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
@@ -1065,7 +1403,16 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     UIScreen *screen = window.screen ?: UIScreen.mainScreen;
     CGSize size = window ? window.bounds.size : screen.bounds.size;
     if (size.width < 1.0 || size.height < 1.0) return;
-    [self updatePointerLockForWindow:window];
+    // The engine's hidden flag flips when a screen opens or a world starts.
+    // Ask UIKit for the new lock the moment it changes; asking once per motion
+    // sample made the lock re-evaluate at the mouse's report rate.
+    if ((horizon_ios_pointer_hidden() != 0) != self.lockDesired) {
+        [self refreshPointerLock];
+    }
+    UIView *surface = window.rootViewController.view;
+    CGFloat scale = (surface && surface.contentScaleFactor > 0.0)
+        ? surface.contentScaleFactor
+        : (screen.scale > 0.0 ? screen.scale : 1.0);
     if (!self.cursorReady || !CGSizeEqualToSize(self.cursorBounds, size)) {
         self.cursor = CGPointMake(size.width * 0.5, size.height * 0.5);
         self.cursorBounds = size;
@@ -1074,33 +1421,101 @@ static CGPoint NCLRPointerPixel = {-1.0, -1.0};
     CGFloat x = fmax(0.0, fmin(size.width - 1.0, self.cursor.x + deltaX));
     CGFloat y = fmax(0.0, fmin(size.height - 1.0, self.cursor.y + deltaY));
     self.cursor = CGPointMake(x, y);
-    CGFloat scale = screen.scale > 0.0 ? screen.scale : 1.0;
     float dx = NCLRMouseSwapAxes ? deltaY : deltaX;
     float dy = NCLRMouseSwapAxes ? deltaX : deltaY;
     if (NCLRMouseInvertX) dx = -dx;
     if (NCLRMouseInvertY) dy = -dy;
     dx *= NCLRMouseSensitivity;
     dy *= NCLRMouseSensitivity;
-    // In game the pointer is hidden and only the delta matters, so the window
-    // lookup can be skipped for the high-rate reports that arrive while
-    // turning.
-    if (horizon_ios_pointer_hidden() != 0) {
-        horizon_ios_hardware_mouse_motion(
-            dx, -dy, fmax(0.0, NCLRPointerPixel.x), fmax(0.0, NCLRPointerPixel.y));
+    // In game only the delta matters; keep the last absolute position for the
+    // clicks that land on a menu later, because GCMouse has no position of its
+    // own and an unknown pointer must not pin the game cursor to (0, 0).
+    if (self.lockDesired) {
+        if (!self.lockHeld) {
+            // The system is not locked: UIKit reports the pointer absolutely
+            // and notePointerAtPixel turns that into look. GCMouse has no
+            // relative motion here; forwarding any would double the turn.
+            return;
+        }
+        CGPoint position = self.hasAbsolutePixel
+            ? self.lastAbsolutePixel
+            : CGPointMake(x * scale, y * scale);
+        horizon_ios_hardware_mouse_motion(dx, -dy, position.x, position.y);
         return;
     }
-    // GameController reports pointer deltas in screen points, where y grows
-    // downward. The camera takes winit deltas, where a positive y looks up.
-    // Relative motion stays in points so the turn matches the cursor on every
-    // display scale; the pointer position is a drawable pixel. When the system
-    // pointer has reported a position, use it: the menu clicks then land under
-    // the pointer the player actually sees.
-    CGPoint cursorPixels = NCLRPointerPixel.x >= 0.0
-        ? NCLRPointerPixel
-        : CGPointMake(x * scale, y * scale);
-    horizon_ios_hardware_mouse_motion(dx, -dy, cursorPixels.x, cursorPixels.y);
+    // Menus: follow the real system pointer while its reports are fresh; those
+    // reports already carry the movement to the camera. Only when UIKit has
+    // stopped reporting does GCMouse's own delta drive the cursor.
+    NSTimeInterval now = CFAbsoluteTimeGetCurrent();
+    BOOL fresh = self.hasAbsolutePixel && now - self.lastAbsoluteTime < 0.3;
+    if (fresh) {
+        return;
+    }
+    // The synthetic position is in the same space as notePointerAtPixel's: Y
+    // from the bottom of the window, which is what the game's iOS window takes.
+    CGPoint absolute = CGPointMake(x * scale, y * scale);
+    if (size.height > 0.0) {
+        absolute.y = size.height * scale - absolute.y;
+    }
+    horizon_ios_hardware_mouse_motion(dx, -dy, absolute.x, absolute.y);
+}
+
+- (void)notePointerAtPixel:(CGPoint)pixel {
+    CGPoint previous = self.lastAbsolutePixel;
+    BOOL hadPrevious = self.hasAbsolutePixel;
+    self.lastAbsolutePixel = pixel;
+    self.hasAbsolutePixel = YES;
+    self.lastAbsoluteTime = CFAbsoluteTimeGetCurrent();
+    NCLRPointerPixel = pixel;
+    // UIKit reports Y from the top, while the game's window on iOS takes the
+    // pointer position with Y from the bottom: passing the raw value mirrored
+    // the menu cursor vertically and the further the mouse moved the further
+    // the two drifted apart. Send Y in the game's own space and keep the raw Y
+    // for the movement that turns the camera.
+    UIView *target = [self pointerTargetView];
+    CGFloat targetScale = target.contentScaleFactor > 0.0 ? target.contentScaleFactor : 1.0;
+    CGPoint absolute = pixel;
+    if (target.bounds.size.height > 0.0) {
+        absolute.y = target.bounds.size.height * targetScale - pixel.y;
+    }
+    static int logged;
+    if (logged < 3) {
+        logged++;
+        NCLRLog(@"pointer: raw=(%.0f,%.0f) sent=(%.0f,%.0f) h=%.0f",
+                pixel.x, pixel.y, absolute.x, absolute.y,
+                target.bounds.size.height * targetScale);
+    }
+    if (!self.lockDesired) {
+        // No pointer lock: the absolute position moves menus, and the movement
+        // itself turns the camera while playing. Without this a menu cursor
+        // sits still and the camera only moves from GCMouse's locked deltas.
+        CGFloat dx = pixel.x - previous.x;
+        CGFloat dy = pixel.y - previous.y;
+        BOOL moved = hadPrevious && (dx != 0.0 || dy != 0.0);
+        horizon_ios_hardware_mouse_motion(moved ? dx : 0.0, moved ? -dy : 0.0,
+                                          absolute.x, absolute.y);
+        return;
+    }
+    if (self.lockHeld || !hadPrevious) {
+        // Locked: GCMouse is the motion source. Keep the position current so a
+        // click that opens a menu lands under the pointer.
+        horizon_ios_hardware_mouse_motion(0.0, 0.0, absolute.x, absolute.y);
+        return;
+    }
+    // Playing without the lock (iPadOS refuses it in Stage Manager or Split
+    // View, and drops it on its own gesture): GCMouse reports no deltas, so
+    // turn the view from the pointer's own movement instead of leaving the
+    // camera dead until a click wins the lock back.
+    CGFloat dx = pixel.x - previous.x;
+    CGFloat dy = pixel.y - previous.y;
+    if (dx == 0.0 && dy == 0.0) return;
+    horizon_ios_hardware_mouse_motion(dx, -dy, absolute.x, absolute.y);
 }
 @end
+
+static void NCLRNotePointerAtPixel(CGPoint pixel) {
+    [NCLRHardwareInput.shared notePointerAtPixel:pixel];
+}
 
 static NSString *NCLRModSwitchesPath(void) {
     return [NCLRDocuments() stringByAppendingPathComponent:@"horizon-mods.txt"];
@@ -1912,6 +2327,159 @@ static NSDictionary *NCLRActiveTexture(NSDictionary *profile, NSString *key) {
     return nil;
 }
 
+#pragma mark - Skin library
+
+// Skins the player imported, beside the game in `Documents/skins`, with the
+// chosen one in `index.json`. A premium account uploads the file to Microsoft
+// when it is applied; an offline account only records it in its own JSON, so
+// the engine reads it through HORIZON_OFFLINE_SKIN at launch.
+static NSString *NCLRSkinsDirectory(void) {
+    NSString *directory = [NCLRDocuments() stringByAppendingPathComponent:@"skins"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                              withIntermediateDirectories:YES attributes:nil error:nil];
+    return directory;
+}
+
+static NSString *NCLRSkinIndexPath(void) {
+    return [NCLRSkinsDirectory() stringByAppendingPathComponent:@"index.json"];
+}
+
+static NSMutableDictionary *NCLRSkinIndex(void) {
+    NSData *data = [NSData dataWithContentsOfFile:NCLRSkinIndexPath()];
+    id json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if ([json isKindOfClass:NSDictionary.class] && [json[@"skins"] isKindOfClass:NSArray.class]) {
+        return [NSMutableDictionary dictionaryWithDictionary:@{
+            @"skins": [json[@"skins"] mutableCopy] ?: [NSMutableArray array],
+            @"active": NCLRString(json[@"active"]) ?: @"",
+        }];
+    }
+    return [NSMutableDictionary dictionaryWithDictionary:
+        @{ @"skins": [NSMutableArray array], @"active": @"" }];
+}
+
+static void NCLRSaveSkinIndex(NSDictionary *index) {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:index options:0 error:nil];
+    [data writeToFile:NCLRSkinIndexPath() atomically:YES];
+}
+
+static NSArray<NSDictionary *> *NCLRSkins(void) {
+    return NCLRSkinIndex()[@"skins"] ?: @[];
+}
+
+static NSDictionary *NCLRSkinWithId(NSString *identifier) {
+    if (identifier.length == 0) return nil;
+    for (NSDictionary *skin in NCLRSkins()) {
+        if ([NCLRString(skin[@"id"]) isEqualToString:identifier]) return skin;
+    }
+    return nil;
+}
+
+static NSDictionary *NCLRActiveSkin(void) {
+    NSDictionary *skin = NCLRSkinWithId(NCLRString(NCLRSkinIndex()[@"active"]) ?: @"");
+    return skin ?: NCLRSkins().firstObject;
+}
+
+static NSString *NCLRSkinPath(NSDictionary *skin) {
+    NSString *file = NCLRString(skin[@"file"]);
+    if (file.length == 0) file = NCLRString(skin[@"id"]);
+    if (file.length == 0) return nil;
+    return [NCLRSkinsDirectory() stringByAppendingPathComponent:file];
+}
+
+static BOOL NCLRSkinIsSlim(NSDictionary *skin) {
+    return [NCLRString(skin[@"variant"]).lowercaseString isEqualToString:@"slim"];
+}
+
+static BOOL NCLRSkinPngIsValid(NSData *data) {
+    UIImage *image = data ? [UIImage imageWithData:data] : nil;
+    CGImageRef cg = image.CGImage;
+    if (!cg) return NO;
+    size_t width = CGImageGetWidth(cg);
+    size_t height = CGImageGetHeight(cg);
+    return width == 64 && (height == 64 || height == 32);
+}
+
+static UIImage *NCLRSkinHeadImage(UIImage *skin) {
+    CGImageRef cg = skin.CGImage;
+    if (!cg) return nil;
+    CGFloat unit = CGImageGetWidth(cg) / 64.0;
+    CGRect rect = CGRectMake(8.0 * unit, 8.0 * unit, 8.0 * unit, 8.0 * unit);
+    CGImageRef head = CGImageCreateWithImageInRect(cg, rect);
+    if (!head) return nil;
+    UIImage *image = [UIImage imageWithCGImage:head];
+    CGImageRelease(head);
+    return image;
+}
+
+static void NCLRSetActiveSkin(NSString *identifier) {
+    NSMutableDictionary *index = NCLRSkinIndex();
+    index[@"active"] = identifier ?: @"";
+    NCLRSaveSkinIndex(index);
+}
+
+static BOOL NCLRUpdateSkinVariant(NSString *identifier, BOOL slim) {
+    NSMutableDictionary *index = NCLRSkinIndex();
+    NSMutableArray *skins = index[@"skins"];
+    for (NSInteger position = 0; position < (NSInteger)skins.count; position++) {
+        if (![NCLRString(skins[position][@"id"]) isEqualToString:identifier]) continue;
+        NSMutableDictionary *skin = [skins[position] mutableCopy];
+        skin[@"variant"] = slim ? @"slim" : @"classic";
+        skins[position] = skin;
+        index[@"skins"] = skins;
+        NCLRSaveSkinIndex(index);
+        return YES;
+    }
+    return NO;
+}
+
+static BOOL NCLRApplySkinToOfflineProfile(NSDictionary *skin) {
+    NSDictionary *profile = NCLRActiveOfflineProfile();
+    NSString *file = NCLRString(profile[@"file"]);
+    if (file.length == 0) return NO;
+    NSString *path = [NCLROfflineDirectory() stringByAppendingPathComponent:file];
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    id json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    NSMutableDictionary *account = [json isKindOfClass:NSDictionary.class]
+        ? [json mutableCopy] : [NSMutableDictionary dictionary];
+    account[@"skin"] = NCLRSkinPath(skin) ?: @"";
+    account[@"slim"] = @(NCLRSkinIsSlim(skin));
+    NSData *out = [NSJSONSerialization dataWithJSONObject:account options:0 error:nil];
+    return out && [out writeToFile:path atomically:YES];
+}
+
+static void NCLRCacheSkinForPremium(NSString *uuid, NSDictionary *skin) {
+    if (uuid.length != 32) return;
+    NSString *source = NCLRSkinPath(skin);
+    NSString *cache = NCLRTextureCache(uuid, @"skin.png");
+    if (source.length && cache.length) {
+        [[NSFileManager defaultManager] removeItemAtPath:cache error:nil];
+        [[NSFileManager defaultManager] copyItemAtPath:source toPath:cache error:nil];
+    }
+    NSMutableDictionary *appearance = [NCLRReadAppearance(uuid) mutableCopy]
+        ?: [NSMutableDictionary dictionaryWithDictionary:
+            @{ @"id": uuid, @"skins": @[], @"capes": @[] }];
+    appearance[@"skins"] = @[@{
+        @"state": @"ACTIVE",
+        @"variant": NCLRSkinIsSlim(skin) ? @"slim" : @"classic",
+        @"url": @"",
+    }];
+    NCLRSaveAppearance(appearance);
+}
+
+static NSData *NCLRSkinMultipartBody(NSString *boundary, NSString *variant, NSData *png) {
+    NSMutableData *body = [NSMutableData data];
+    [body appendData:[[NSString stringWithFormat:
+        @"--%@\r\nContent-Disposition: form-data; name=\"variant\"\r\n\r\n%@\r\n",
+        boundary, variant] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:
+        @"--%@\r\nContent-Disposition: form-data; name=\"file\"; filename=\"skin.png\"\r\nContent-Type: image/png\r\n\r\n",
+        boundary] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:png];
+    [body appendData:[[NSString stringWithFormat:@"\r\n--%@--\r\n", boundary]
+        dataUsingEncoding:NSUTF8StringEncoding]];
+    return body;
+}
+
 static void NCLRFetchTexture(NSDictionary *entry, void (^completion)(UIImage *)) {
     NSString *source = NCLRString(entry[@"url"]);
     NSURLComponents *parts = source ? [NSURLComponents componentsWithString:source] : nil;
@@ -1944,6 +2512,9 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 - (void)logout;
 - (void)fetchProfileWithToken:(NSString *)token completion:(NCLRAuthCompletion)completion;
 - (void)refreshAppearance:(void (^)(NSDictionary *profile))completion;
+- (void)uploadSkinData:(NSData *)png
+               variant:(NSString *)variant
+            completion:(void (^)(NSString *error))completion;
 @property (nonatomic, copy) NSString *token;
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, assign) BOOL developerPremium;
@@ -2346,6 +2917,48 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
             if (![profile isKindOfClass:NSDictionary.class] || ![profile[@"id"] isEqualToString:uuid]) return;
             NCLRSaveAppearance(profile);
             completion(profile);
+        });
+    }] resume];
+}
+
+- (void)uploadSkinData:(NSData *)png
+               variant:(NSString *)variant
+            completion:(void (^)(NSString *))completion {
+    if (png.length == 0) {
+        completion(@"皮肤文件为空");
+        return;
+    }
+    if (self.token.length == 0) {
+        completion(@"请先登录 Microsoft 正版账号");
+        return;
+    }
+    NSString *boundary = [NSString stringWithFormat:@"NCLR-%@", NSUUID.UUID.UUIDString];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:
+        [NSURL URLWithString:@"https://api.minecraftservices.com/minecraft/profile/skins"]];
+    request.HTTPMethod = @"POST";
+    request.timeoutInterval = 25.0;
+    [request setValue:[@"Bearer " stringByAppendingString:self.token] forHTTPHeaderField:@"Authorization"];
+    [request setValue:[@"multipart/form-data; boundary=" stringByAppendingString:boundary]
+   forHTTPHeaderField:@"Content-Type"];
+    request.HTTPBody = NCLRSkinMultipartBody(boundary, variant ?: @"classic", png);
+    [[NSURLSession.sharedSession dataTaskWithRequest:request
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSInteger status = [(NSHTTPURLResponse *)response statusCode];
+        NSDictionary *json = data.length
+            ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (error) {
+                completion(error.localizedDescription ?: @"无法连接 Minecraft 皮肤服务");
+                return;
+            }
+            if (status == 200 || status == 204) {
+                completion(nil);
+                return;
+            }
+            NSString *message = [json isKindOfClass:NSDictionary.class]
+                ? (NCLRString(json[@"errorMessage"]) ?: NCLRString(json[@"path"])) : nil;
+            completion(message.length ? message
+                : [NSString stringWithFormat:@"同步失败（HTTP %ld）", (long)status]);
         });
     }] resume];
 }
@@ -3089,7 +3702,19 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         fflush(stderr);
     }
     [[NCLRHardwareInput shared] start];
+    // The engine picks HDR10 whenever the surface's colorspaces list it, and an
+    // SDR panel can still list it; on those screens the HDR10 frame presented
+    // black. "off" matches no HDR output name, so the renderer stays SDR.
+    BOOL displayHDR = NCLRDisplayOffersHDR();
+    if (displayHDR) {
+        unsetenv("HORIZON_HDR_OUTPUT");
+    } else {
+        setenv("HORIZON_HDR_OUTPUT", "off", 1);
+    }
+    NCLRLog(@"engine start: resources=%@ display_hdr=%d refresh=%ld",
+            resources.lastPathComponent, displayHDR, (long)screenLimit);
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
+    NCLRLog(@"engine returned %d", result);
     [[NCLRHardwareInput shared] stop];
     [NCLRGyro.shared stop];
     [display invalidate];
@@ -3535,7 +4160,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 }
 @end
 
-@interface NCLRAccountController : NCLRPageController
+@interface NCLRAccountController : NCLRPageController <UIDocumentPickerDelegate>
 @end
 
 @implementation NCLRAccountController
@@ -3603,7 +4228,220 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [login.bottomAnchor constraintEqualToAnchor:account.bottomAnchor constant:-16.0],
     ]];
     [self.stack addArrangedSubview:account];
+    [self.stack addArrangedSubview:[self skinCard]];
+}
 
+- (UIView *)skinCard {
+    NCLRAuth *auth = NCLRAuth.shared;
+    BOOL premium = auth.token.length > 0;
+    NSDictionary *offline = auth.offlineProfile ?: NCLRActiveOfflineProfile();
+    BOOL available = premium || offline != nil;
+    NSDictionary *skin = NCLRActiveSkin();
+    UIView *card = [self card];
+
+    UILabel *title = [self eyebrow:@"皮肤"];
+    NSString *detailText = premium
+        ? @"导入或选择皮肤后同步到 Microsoft 账号，其他玩家看到的就是它。"
+        : (available ? @"离线账号：皮肤只保存在本机，其他玩家看不到。"
+                     : @"登录正版账号或添加离线账号后才能设置皮肤。");
+    UILabel *detail = [self label:detailText size:11.0 weight:UIFontWeightRegular
+                            color:NCLRColor(0.62, 0.62, 0.64, 1.0)];
+    detail.numberOfLines = 0;
+
+    UIImageView *preview = [[UIImageView alloc] init];
+    preview.translatesAutoresizingMaskIntoConstraints = NO;
+    preview.backgroundColor = NCLRColor(0.12, 0.12, 0.13, 1.0);
+    preview.layer.cornerRadius = 10.0;
+    preview.clipsToBounds = YES;
+    preview.contentMode = UIViewContentModeScaleAspectFit;
+    UIImage *activeImage = skin ? [UIImage imageWithContentsOfFile:NCLRSkinPath(skin)] : nil;
+    preview.image = activeImage ? NCLRSkinHeadImage(activeImage) : nil;
+
+    UILabel *name = [self label:(skin ? (NCLRString(skin[@"name"]) ?: @"已导入皮肤")
+                                     : @"还没有导入皮肤")
+                            size:15.0 weight:UIFontWeightSemibold
+                           color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
+    name.lineBreakMode = NSLineBreakByTruncatingTail;
+    UILabel *model = [self label:(skin ? (NCLRSkinIsSlim(skin) ? @"细手臂（slim）" : @"经典（classic）")
+                                     : @"经典（classic）")
+                           size:11.0 weight:UIFontWeightRegular
+                          color:NCLRColor(0.62, 0.62, 0.64, 1.0)];
+    UIStackView *texts = [[UIStackView alloc] initWithArrangedSubviews:@[name, model]];
+    texts.axis = UILayoutConstraintAxisVertical;
+    texts.spacing = 4.0;
+    UIStackView *top = [[UIStackView alloc] initWithArrangedSubviews:@[preview, texts]];
+    top.axis = UILayoutConstraintAxisHorizontal;
+    top.spacing = 12.0;
+    top.alignment = UIStackViewAlignmentCenter;
+
+    UISegmentedControl *variant = [[UISegmentedControl alloc] initWithItems:@[@"经典", @"细手臂"]];
+    variant.selectedSegmentIndex = NCLRSkinIsSlim(skin) ? 1 : 0;
+    variant.enabled = skin != nil;
+    [variant addTarget:self action:@selector(skinVariantChanged:)
+      forControlEvents:UIControlEventValueChanged];
+
+    UIButton *import = [self button:@"导入皮肤（64×64 或 64×32 PNG）"
+                             action:@selector(importSkinTapped) primary:YES];
+    import.enabled = available;
+    UIButton *apply = [self button:premium ? @"同步到 Microsoft 账号" : @"保存到本机账号"
+                            action:@selector(applySkinTapped) primary:NO];
+    apply.enabled = available && skin != nil;
+
+    UIStackView *thumbs = [[UIStackView alloc] init];
+    thumbs.axis = UILayoutConstraintAxisHorizontal;
+    thumbs.spacing = 8.0;
+    thumbs.alignment = UIStackViewAlignmentCenter;
+    for (NSDictionary *entry in NCLRSkins()) {
+        UIImage *image = [UIImage imageWithContentsOfFile:NCLRSkinPath(entry) ?: @""];
+        UIButton *thumb = [UIButton buttonWithType:UIButtonTypeCustom];
+        thumb.translatesAutoresizingMaskIntoConstraints = NO;
+        thumb.backgroundColor = NCLRColor(0.12, 0.12, 0.13, 1.0);
+        thumb.layer.cornerRadius = 8.0;
+        thumb.clipsToBounds = YES;
+        [thumb setImage:NCLRSkinHeadImage(image) forState:UIControlStateNormal];
+        thumb.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        thumb.accessibilityIdentifier = NCLRString(entry[@"id"]);
+        if ([entry[@"id"] isEqual:skin[@"id"]]) {
+            UIColor *accent = NCLRAccent();
+            thumb.layer.borderWidth = 2.0;
+            thumb.layer.borderColor = accent.CGColor;
+        }
+        [thumb addTarget:self action:@selector(skinThumbTapped:)
+        forControlEvents:UIControlEventTouchUpInside];
+        [thumb.widthAnchor constraintEqualToConstant:46.0].active = YES;
+        [thumb.heightAnchor constraintEqualToConstant:46.0].active = YES;
+        [thumbs addArrangedSubview:thumb];
+    }
+    UIScrollView *scroller = [[UIScrollView alloc] init];
+    scroller.translatesAutoresizingMaskIntoConstraints = NO;
+    scroller.showsHorizontalScrollIndicator = NO;
+    [scroller addSubview:thumbs];
+    thumbs.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [thumbs.leadingAnchor constraintEqualToAnchor:scroller.contentLayoutGuide.leadingAnchor],
+        [thumbs.trailingAnchor constraintEqualToAnchor:scroller.contentLayoutGuide.trailingAnchor],
+        [thumbs.topAnchor constraintEqualToAnchor:scroller.contentLayoutGuide.topAnchor],
+        [thumbs.bottomAnchor constraintEqualToAnchor:scroller.contentLayoutGuide.bottomAnchor],
+        [thumbs.heightAnchor constraintEqualToAnchor:scroller.frameLayoutGuide.heightAnchor],
+        [scroller.heightAnchor constraintEqualToConstant:48.0],
+    ]];
+    scroller.hidden = NCLRSkins().count == 0;
+
+    UIStackView *content = [[UIStackView alloc] initWithArrangedSubviews:
+        @[title, detail, top, variant, import, apply, scroller]];
+    content.axis = UILayoutConstraintAxisVertical;
+    content.spacing = 10.0;
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:content];
+    [NSLayoutConstraint activateConstraints:@[
+        [preview.widthAnchor constraintEqualToConstant:56.0],
+        [preview.heightAnchor constraintEqualToConstant:56.0],
+        [content.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+        [content.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+        [content.topAnchor constraintEqualToAnchor:card.topAnchor constant:14.0],
+        [content.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-14.0],
+    ]];
+    return card;
+}
+
+- (void)skinThumbTapped:(UIButton *)sender {
+    NSString *identifier = sender.accessibilityIdentifier;
+    if (identifier.length == 0) return;
+    NCLRSetActiveSkin(identifier);
+    [self applyActiveSkin];
+}
+
+- (void)skinVariantChanged:(UISegmentedControl *)sender {
+    NSDictionary *skin = NCLRActiveSkin();
+    NSString *identifier = NCLRString(skin[@"id"]);
+    if (identifier.length == 0) return;
+    NCLRUpdateSkinVariant(identifier, sender.selectedSegmentIndex == 1);
+    [self applyActiveSkin];
+}
+
+- (void)importSkinTapped {
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
+        initWithDocumentTypes:@[@"public.png"] inMode:UIDocumentPickerModeImport];
+    picker.delegate = self;
+    picker.allowsMultipleSelection = NO;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)applySkinTapped {
+    [self applyActiveSkin];
+}
+
+- (void)applyActiveSkin {
+    NCLRAuth *auth = NCLRAuth.shared;
+    NSDictionary *skin = NCLRActiveSkin();
+    NSString *path = NCLRSkinPath(skin);
+    NSData *png = path ? [NSData dataWithContentsOfFile:path] : nil;
+    if (png.length == 0) {
+        [self showSkinMessage:@"先导入一个皮肤再应用。"];
+        return;
+    }
+    if (auth.token.length > 0) {
+        [auth uploadSkinData:png variant:(NCLRSkinIsSlim(skin) ? @"slim" : @"classic")
+                  completion:^(NSString *error) {
+            if (error.length > 0) {
+                [self showSkinMessage:error];
+                return;
+            }
+            NCLRCacheSkinForPremium(auth.uuid, skin);
+            [self showSkinMessage:@"已同步到 Microsoft 账号。"];
+        }];
+        return;
+    }
+    if (NCLRApplySkinToOfflineProfile(skin)) {
+        [self showSkinMessage:@"已保存到本机账号。"];
+    } else {
+        [self showSkinMessage:@"没有可用的离线账号，无法保存皮肤。"];
+    }
+}
+
+- (void)showSkinMessage:(NSString *)message {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"皮肤"
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault
+        handler:^(UIAlertAction *action) {
+        if (self.onDataChanged) self.onDataChanged();
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    (void)controller;
+    NSURL *url = urls.firstObject;
+    if (url == nil) return;
+    BOOL scoped = [url startAccessingSecurityScopedResource];
+    NSData *data = [NSData dataWithContentsOfURL:url];
+    if (scoped) [url stopAccessingSecurityScopedResource];
+    if (!NCLRSkinPngIsValid(data)) {
+        [self showSkinMessage:@"皮肤必须是 64×64 或 64×32 的 PNG。"];
+        return;
+    }
+    NSString *file = [NSString stringWithFormat:@"skin-%@.png",
+                      NSUUID.UUID.UUIDString.lowercaseString];
+    NSString *path = [NCLRSkinsDirectory() stringByAppendingPathComponent:file];
+    if (![data writeToFile:path atomically:YES]) {
+        [self showSkinMessage:@"无法保存皮肤文件。"];
+        return;
+    }
+    NSMutableDictionary *index = NCLRSkinIndex();
+    NSMutableArray *skins = index[@"skins"];
+    NSDictionary *current = NCLRActiveSkin();
+    [skins insertObject:@{
+        @"id": file,
+        @"file": file,
+        @"name": [url.lastPathComponent stringByDeletingPathExtension] ?: @"皮肤",
+        @"variant": NCLRSkinIsSlim(current) ? @"slim" : @"classic",
+    } atIndex:0];
+    index[@"skins"] = skins;
+    index[@"active"] = file;
+    NCLRSaveSkinIndex(index);
+    [self applyActiveSkin];
 }
 
 - (void)configClientId {
@@ -4288,7 +5126,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [self.styleControl addTarget:self action:@selector(styleChanged:)
                 forControlEvents:UIControlEventValueChanged];
     UIStackView *settings = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.sizePresetControl, self.presetControl, self.styleControl, self.sizeRow, opacityRow,
+        @[self.styleControl, self.sizeRow, opacityRow,
           self.modeControl, dynamicRow, leftRow, sprintRow, sensitivityRow, deadzoneRow, sprintButtonRow, iconLabelsRow]];
     settings.axis = UILayoutConstraintAxisVertical;
     settings.spacing = 8.0;
@@ -4328,8 +5166,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
                          handler:^(__kindof UIAction *action) { [weakEditor resetLayoutTapped]; }],
     ]];
     more.showsMenuAsPrimaryAction = YES;
+    UIButton *addKeyTool = [self canvasTool:@"plus" label:@"添加触控键" action:@selector(addKeyTapped)];
     UIStackView *toolbar = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.canvasStatus, self.undoTool, self.redoTool, keyboardTool,
+        @[self.canvasStatus, self.undoTool, self.redoTool, addKeyTool, keyboardTool,
           self.gridTool, self.canvasClose, more]];
     toolbar.alignment = UIStackViewAlignmentCenter;
     toolbar.spacing = 2;
@@ -4914,8 +5753,13 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     self.grid.frame = self.preview.bounds;
     for (NSString *key in self.previewButtons) {
         UIButton *button = self.previewButtons[key];
+        // A menu key added here lives in `menuKeys`, not `bindings`; requiring a
+        // binding hid it from the editor while the game still drew it on the
+        // pause/inventory screen.
+        BOOL exists = NCLRKeymap.shared.bindings[key] != nil ||
+            [NCLRKeymap.shared isMenuCanvasKey:key];
         button.hidden = ![self showsKeyOnCanvas:key] ||
-            [NCLRKeymap.shared.deletedKeys containsObject:key] || !NCLRKeymap.shared.bindings[key];
+            [NCLRKeymap.shared.deletedKeys containsObject:key] || !exists;
         if (button.hidden) continue;
         NSDictionary *position = key.length ? NCLRKeymap.shared.positions[key] : nil;
         if (position == nil) position = @{ @"x" : @0.5, @"y" : @0.5, @"size" : @0.08, @"width" : @0.08 };
@@ -5540,6 +6384,178 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     return hex;
 }
 
+// First-run downloads run on a background URLSession. The system keeps moving
+// the bytes while the app is suspended or the screen is locked, and relaunches
+// the app for the last events, so a locked iPad keeps downloading instead of
+// stopping at the first suspension. Each task carries its destination and
+// SHA-1 in its task description: that survives a relaunch, and the delegate
+// can finish a file without the waiting code that asked for it.
+static NSString *const NCLRBackgroundSessionIdentifier = @"dev.zrxmaxlnx.nclr.resources";
+
+@interface NCLRBackgroundDownloads : NSObject <NSURLSessionDownloadDelegate>
+@property (atomic, assign) BOOL cancelled;
+@property (nonatomic, strong) NSURLSession *session;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, void (^)(NSData *, NSString *)> *waiters;
+@property (nonatomic, copy) void (^backgroundCompletion)(void);
++ (instancetype)shared;
+- (NSData *)downloadURL:(NSURL *)url
+                 toPath:(NSString *)path
+               expected:(NSString *)sha1
+               received:(void (^)(unsigned long long bytes))received
+                  error:(NSString **)error;
+- (void)cancel;
+- (void)handleEventsForBackgroundURLSession:(void (^)(void))completionHandler;
+@end
+
+@implementation NCLRBackgroundDownloads
++ (instancetype)shared {
+    static NCLRBackgroundDownloads *downloads = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ downloads = [[NCLRBackgroundDownloads alloc] init]; });
+    return downloads;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _waiters = [NSMutableDictionary dictionary];
+        NSURLSessionConfiguration *configuration =
+            [NSURLSessionConfiguration backgroundSessionConfigurationWithIdentifier:
+                NCLRBackgroundSessionIdentifier];
+        configuration.sessionSendsLaunchEvents = YES;
+        configuration.discretionary = NO;
+        configuration.timeoutIntervalForRequest = 30.0;
+        configuration.timeoutIntervalForResource = 900.0;
+        _session = [NSURLSession sessionWithConfiguration:configuration
+                                                 delegate:self
+                                            delegateQueue:nil];
+    }
+    return self;
+}
+
+- (NSData *)downloadURL:(NSURL *)url
+                 toPath:(NSString *)path
+               expected:(NSString *)sha1
+               received:(void (^)(unsigned long long))received
+                  error:(NSString **)error {
+    if (self.cancelled) {
+        if (error) *error = @"下载已取消";
+        return nil;
+    }
+    if (![url.scheme.lowercaseString isEqualToString:@"https"] || url.host.length == 0) {
+        if (error) *error = @"下载地址无效";
+        return nil;
+    }
+    NSDictionary *info = @{ @"path": path ?: @"", @"sha1": sha1 ?: @"" };
+    NSData *infoData = [NSJSONSerialization dataWithJSONObject:info options:0 error:nil];
+    NSString *description = infoData ? [[NSString alloc] initWithData:infoData
+                                                             encoding:NSUTF8StringEncoding] : nil;
+    NSString *failure = @"无响应";
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (self.cancelled) break;
+        __block NSData *result = nil;
+        __block NSString *attemptError = nil;
+        dispatch_semaphore_t finished = dispatch_semaphore_create(0);
+        NSURLSessionDownloadTask *task = [self.session downloadTaskWithURL:url];
+        task.taskDescription = description;
+        @synchronized (self.waiters) {
+            self.waiters[description ?: @""] = ^(NSData *data, NSString *problem) {
+                result = data;
+                attemptError = problem;
+                dispatch_semaphore_signal(finished);
+            };
+        }
+        [task resume];
+        while (dispatch_semaphore_wait(finished,
+                dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_MSEC))) {
+            if (received) received((unsigned long long)MAX(0, task.countOfBytesReceived));
+            if (self.cancelled) {
+                [task cancel];
+                break;
+            }
+        }
+        @synchronized (self.waiters) {
+            [self.waiters removeObjectForKey:description ?: @""];
+        }
+        if (result != nil) return result;
+        if (attemptError.length) failure = attemptError;
+        if (self.cancelled) break;
+    }
+    if (error) *error = self.cancelled ? @"下载已取消"
+        : [NSString stringWithFormat:@"下载失败：%@（%@）", url.lastPathComponent, failure];
+    return nil;
+}
+
+- (void)cancel {
+    self.cancelled = YES;
+    [self.session getTasksWithCompletionHandler:
+        ^(NSArray<NSURLSessionDataTask *> *dataTasks,
+          NSArray<NSURLSessionUploadTask *> *uploadTasks,
+          NSArray<NSURLSessionDownloadTask *> *downloadTasks) {
+        for (NSURLSessionTask *task in downloadTasks) [task cancel];
+    }];
+}
+
+- (void)handleEventsForBackgroundURLSession:(void (^)(void))completionHandler {
+    self.backgroundCompletion = completionHandler;
+}
+
+- (void)URLSession:(NSURLSession *)session
+      downloadTask:(NSURLSessionDownloadTask *)downloadTask
+      didFinishDownloadingToURL:(NSURL *)location {
+    NSDictionary *info = nil;
+    NSString *description = downloadTask.taskDescription;
+    if (description.length) {
+        id json = [NSJSONSerialization JSONObjectWithData:
+            [description dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+        if ([json isKindOfClass:NSDictionary.class]) info = json;
+    }
+    NSString *destination = NCLRString(info[@"path"]);
+    NSString *expected = NCLRString(info[@"sha1"]);
+    NSData *data = [NSData dataWithContentsOfURL:location
+                                         options:NSDataReadingMappedIfSafe
+                                           error:nil];
+    NSString *problem = nil;
+    if (data == nil) {
+        problem = @"下载文件不可读";
+    } else if (expected.length && ![NCLRSHA1Hex(data) isEqualToString:expected]) {
+        problem = @"下载文件 SHA-1 校验失败";
+    } else if (destination.length) {
+        NCLRCreateDirectory([destination stringByDeletingLastPathComponent]);
+        if (![data writeToFile:destination atomically:YES]) {
+            problem = @"无法写入下载文件";
+        }
+    }
+    @synchronized (self.waiters) {
+        void (^waiter)(NSData *, NSString *) = self.waiters[description ?: @""];
+        if (waiter) {
+            [self.waiters removeObjectForKey:description ?: @""];
+            waiter(problem ? nil : data, problem);
+        }
+    }
+}
+
+- (void)URLSession:(NSURLSession *)session
+              task:(NSURLSessionTask *)task
+didCompleteWithError:(NSError *)error {
+    if (error == nil) return;
+    NSString *description = task.taskDescription ?: @"";
+    @synchronized (self.waiters) {
+        void (^waiter)(NSData *, NSString *) = self.waiters[description];
+        if (waiter) {
+            [self.waiters removeObjectForKey:description];
+            waiter(nil, error.localizedDescription ?: @"下载中断");
+        }
+    }
+}
+
+- (void)URLSessionDidFinishEventsForBackgroundURLSession:(NSURLSession *)session {
+    void (^handler)(void) = self.backgroundCompletion;
+    self.backgroundCompletion = nil;
+    if (handler) dispatch_async(dispatch_get_main_queue(), handler);
+}
+@end
+
 /// First-run resource preparation: official jar and assets in, hzr-device out.
 /// Runs on a background queue; progress strings go back to the main queue.
 @implementation NCLRResourcePreparer {
@@ -5560,6 +6576,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     if (!self.preparing || !self.cancellable || self.cancelRequested) return;
     @synchronized (self) {
         self.cancelRequested = YES;
+        [[NCLRBackgroundDownloads shared] cancel];
         [self.downloadSession invalidateAndCancel];
     }
 }
@@ -5611,17 +6628,19 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];
     NSString *hash = metadata[@"sha1"];
     if (data != nil && [NCLRSHA1Hex(data) isEqualToString:hash]) return data;
-    data = [self download:metadata[@"url"] error:error];
-    if (data == nil) return nil;
-    if (![NCLRSHA1Hex(data) isEqualToString:hash]) {
-        *error = [NSString stringWithFormat:@"%@ SHA-1 校验失败", path.lastPathComponent];
+    NSString *urlString = NCLRString(metadata[@"url"]);
+    NSURL *url = urlString.length ? [NSURL URLWithString:urlString] : nil;
+    if (url == nil) {
+        if (error) *error = @"下载地址无效";
         return nil;
     }
-    NSError *writeError = nil;
-    if (![data writeToFile:path options:NSDataWritingAtomic error:&writeError]) {
-        *error = writeError.localizedDescription;
-        return nil;
-    }
+    // The background downloader verifies the SHA-1 and writes the file itself,
+    // so the transfer keeps going while the app is suspended.
+    data = [[NCLRBackgroundDownloads shared] downloadURL:url
+                                                  toPath:path
+                                                expected:hash
+                                                received:nil
+                                                   error:error];
     return data;
 }
 
@@ -5634,6 +6653,7 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     self.cancellable = YES;
     self.cancelRequested = NO;
+    [NCLRBackgroundDownloads shared].cancelled = NO;
     self.progressValue = 0;
     self.lastLine = @"准备游戏资源";
     NSURLSessionConfiguration *configuration = NSURLSessionConfiguration.ephemeralSessionConfiguration;
@@ -5793,8 +6813,11 @@ static NSString *NCLRSHA1Hex(NSData *data) {
                     NSString *file = [folder stringByAppendingPathComponent:hash];
                     NSString *url = [NSString stringWithFormat:@"https://resources.download.minecraft.net/%@/%@", prefix, hash];
                     NSString *oneError = nil;
-                    NSError *writeError = nil;
-                    NSData *data = [self download:url error:&oneError received:^(unsigned long long bytes) {
+                    NSData *data = [[NCLRBackgroundDownloads shared]
+                        downloadURL:[NSURL URLWithString:url]
+                             toPath:file
+                           expected:hash
+                           received:^(unsigned long long bytes) {
                         [state lock];
                         inFlight[hash] = @(MIN(bytes, sizes[hash].unsignedLongLongValue));
                         NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
@@ -5803,13 +6826,10 @@ static NSString *NCLRSHA1Hex(NSData *data) {
                             reportAssets(now);
                         }
                         [state unlock];
-                    }];
+                    } error:&oneError];
                     if (self.cancelRequested) return;
-                    if (data == nil || data.length != sizes[hash].unsignedLongLongValue ||
-                        ![NCLRSHA1Hex(data) isEqualToString:hash]) {
-                        oneError = oneError ?: [NSString stringWithFormat:@"资源校验失败：%@", hash];
-                    } else if (![data writeToFile:file options:NSDataWritingAtomic error:&writeError]) {
-                        oneError = writeError.localizedDescription;
+                    if (data == nil) {
+                        oneError = oneError ?: [NSString stringWithFormat:@"资源下载失败：%@", hash];
                     }
 
                     [state lock];
@@ -6456,6 +7476,28 @@ static CIContext *NCLRTransitionCIContext(void) {
 @property (nonatomic, strong) UIWindow *window;
 @end
 
+// The first launch asks for local-network access with a Bonjour browse. A
+// short request to the project host there also makes the app open a real
+// network path immediately, so the wireless-data prompt lands on the launcher
+// instead of in the middle of the first resource download.
+static void NCLRWarmUpNetwork(void) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([defaults boolForKey:@"NCLRNetworkWarmupDone"]) return;
+    [defaults setBool:YES forKey:@"NCLRNetworkWarmupDone"];
+    NSURLSessionConfiguration *config = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    config.timeoutIntervalForRequest = 3.0;
+    config.timeoutIntervalForResource = 3.0;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:config];
+    NSURLRequest *request = [NSURLRequest requestWithURL:[NSURL URLWithString:@"https://nclauncher.top/"]
+                                             cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                         timeoutInterval:3.0];
+    [[session dataTaskWithRequest:request
+               completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        (void)data; (void)response; (void)error;
+        [session finishTasksAndInvalidate];
+    }] resume];
+}
+
 @implementation NCLRSceneDelegate
 - (void)scene:(UIScene *)scene
     willConnectToSession:(UISceneSession *)session
@@ -6463,6 +7505,7 @@ static CIContext *NCLRTransitionCIContext(void) {
     if (![scene isKindOfClass:[UIWindowScene class]]) {
         return;
     }
+    NCLRLog(@"scene connected");
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     NCLRThemeLoad();
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
@@ -6472,6 +7515,7 @@ static CIContext *NCLRTransitionCIContext(void) {
     self.window.windowLevel = UIWindowLevelNormal;
     [self.window makeKeyAndVisible];
     dispatch_async(dispatch_get_main_queue(), ^{
+        NCLRWarmUpNetwork();
         [[NCLRLocalNetworkPermission shared] askOnFirstLaunch];
     });
 }
@@ -6480,10 +7524,156 @@ static CIContext *NCLRTransitionCIContext(void) {
 @interface NCLRAppDelegate : UIResponder <UIApplicationDelegate>
 @end
 
+static UIWindow *NCLRIMEKeyWindow(void) {
+    UIWindow *fallback = nil;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if (window.hidden || window.alpha < 0.01) continue;
+            if (window.isKeyWindow) return window;
+            if (!fallback) fallback = window;
+        }
+    }
+    return fallback;
+}
+
+// The shell owns the text-input responder while the game wants the keyboard.
+// Winit's view only implements UIKeyInput, which cannot compose Chinese; a real
+// UITextView can, and its committed text goes to the game as WindowEvent::Ime.
+@interface NCLRTextInput : NSObject <UITextViewDelegate>
+@property (nonatomic, strong) UITextView *textView;
+@property (nonatomic, copy) NSString *lastText;
++ (instancetype)shared;
+- (void)begin;
+- (void)end;
+@end
+
+@implementation NCLRTextInput
++ (instancetype)shared {
+    static NCLRTextInput *input;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ input = [[NCLRTextInput alloc] init]; });
+    return input;
+}
+
+- (void)begin {
+    UIWindow *window = NCLRIMEKeyWindow();
+    if (!window) return;
+    if (!self.textView) {
+        UITextView *view = [[UITextView alloc] initWithFrame:
+            CGRectMake(0.0, window.bounds.size.height - 1.0, 1.0, 1.0)];
+        view.backgroundColor = UIColor.clearColor;
+        view.tintColor = UIColor.clearColor;
+        view.alpha = 0.02;
+        view.keyboardType = UIKeyboardTypeDefault;
+        view.autocorrectionType = UITextAutocorrectionTypeNo;
+        view.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        view.spellCheckingType = UITextSpellCheckingTypeNo;
+        view.delegate = self;
+        self.textView = view;
+    }
+    self.textView.text = @"";
+    self.lastText = @"";
+    [window addSubview:self.textView];
+    [self.textView becomeFirstResponder];
+}
+
+- (void)end {
+    [self.textView resignFirstResponder];
+    [self.textView removeFromSuperview];
+    self.textView.text = @"";
+    self.lastText = @"";
+}
+
+- (void)textViewDidChange:(UITextView *)textView {
+    // While a Chinese keyboard composes, the text view holds marked (pinyin)
+    // text; only the committed string is text the game should receive.
+    if (textView.markedTextRange != nil) return;
+    [self flushText:textView.text ?: @""];
+}
+
+- (void)flushText:(NSString *)text {
+    NSString *previous = self.lastText ?: @"";
+    if ([text isEqualToString:previous]) return;
+    self.lastText = text;
+    if (text.length > previous.length && [text hasPrefix:previous]) {
+        [self commit:[text substringFromIndex:previous.length]];
+        return;
+    }
+    if (text.length < previous.length && [previous hasPrefix:text]) {
+        for (NSUInteger index = 0; index < previous.length - text.length; index++) {
+            [self backspace];
+        }
+        return;
+    }
+    NSUInteger prefix = 0;
+    NSUInteger limit = MIN(text.length, previous.length);
+    while (prefix < limit && [text characterAtIndex:prefix] == [previous characterAtIndex:prefix]) {
+        prefix++;
+    }
+    NSString *tail = [text substringFromIndex:prefix];
+    if (tail.length > 0) {
+        [self commit:tail];
+    } else {
+        [self backspace];
+    }
+}
+
+- (BOOL)textView:(UITextView *)textView
+    shouldChangeTextInRange:(NSRange)range
+            replacementText:(NSString *)text {
+    if ([text isEqualToString:@"\n"]) {
+        horizon_ios_hardware_key(0x28, 1, 0, 0);
+        horizon_ios_hardware_key(0x28, 0, 0, 0);
+        return NO;
+    }
+    return YES;
+}
+
+- (void)commit:(NSString *)text {
+    if (text.length == 0) return;
+    horizon_ios_text_commit(text.UTF8String);
+}
+
+- (void)backspace {
+    horizon_ios_hardware_key(0x2A, 1, 0, 0);
+    horizon_ios_hardware_key(0x2A, 0, 0, 0);
+}
+@end
+
+static void NCLRTextInputBeginHook(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [[NCLRTextInput shared] begin]; });
+}
+
+static void NCLRTextInputEndHook(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [[NCLRTextInput shared] end]; });
+}
+
 @implementation NCLRAppDelegate
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    // Reconnect the background download session a previous launch left, so its
+    // delegate hears about the files it finished while the app was away.
+    (void)[NCLRBackgroundDownloads shared];
+    NCLRInstallCrashHandlers();
+    NCLRLog(@"launch iOS %@ model %@", UIDevice.currentDevice.systemVersion,
+            UIDevice.currentDevice.model);
+    horizon_ios_set_text_input_hooks(NCLRTextInputBeginHook, NCLRTextInputEndHook);
     return YES;
+}
+
+- (void)applicationDidEnterBackground:(UIApplication *)application {
+    [[NCLRTextInput shared] end];
+}
+
+- (void)application:(UIApplication *)application
+    handleEventsForBackgroundURLSession:(NSString *)identifier
+    completionHandler:(void (^)(void))completionHandler {
+    if ([identifier isEqualToString:NCLRBackgroundSessionIdentifier]) {
+        [[NCLRBackgroundDownloads shared] handleEventsForBackgroundURLSession:completionHandler];
+    } else {
+        completionHandler();
+    }
 }
 @end
 

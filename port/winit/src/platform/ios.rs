@@ -281,6 +281,18 @@ pub fn send_hardware_mouse_scroll(dx: f64, dy: f64) {
     crate::platform_impl::hardware_input::send_mouse_scroll(dx, dy);
 }
 
+/// Committed text from the shell's IME view (Chinese composition included).
+pub fn send_ime_commit(text: &str) {
+    crate::platform_impl::hardware_input::send_ime_commit(text);
+}
+
+/// Hands the text-input view to the UIKit shell: `begin` shows it and makes it
+/// first responder (system keyboard with real IME composition), `end` hides
+/// it. Without hooks, winit falls back to its own plain key-input view.
+pub fn set_ime_hooks(begin: Option<extern "C" fn()>, end: Option<extern "C" fn()>) {
+    crate::platform_impl::set_ime_hooks(begin, end);
+}
+
 /// Additional methods on [`WindowAttributes`] that are specific to iOS.
 pub trait WindowAttributesExtIOS {
     /// Sets the [`contentScaleFactor`] of the underlying [`UIWindow`] to `scale_factor`.
