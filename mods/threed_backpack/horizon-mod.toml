@@ -1,0 +1,7 @@
+id = "threed_backpack"
+name = "3D Backpack"
+version = "0.1.0"
+description = "A 3D backpack screen: the inventory opens as a turning room of your items, with your player standing in it."
+api = "0.2"
+side = "client"
+capabilities = ["registries"]

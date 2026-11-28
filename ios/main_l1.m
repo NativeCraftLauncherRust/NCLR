@@ -27,6 +27,20 @@ extern void horizon_ios_hardware_key(uint16_t usage, int pressed, int repeat, ui
 extern void horizon_ios_hardware_mouse_motion(double dx, double dy, double x, double y);
 extern void horizon_ios_hardware_mouse_button(int button, int pressed);
 extern void horizon_ios_hardware_mouse_scroll(double dx, double dy);
+
+// The game locks the iPadOS pointer while it is playing so a mouse dragged to
+// the screen edge cannot open the dock, Control Centre or the app switcher.
+// The lock follows the engine's pointer-hidden flag, so menus release it and
+// get their cursor back. This category reaches winit's own view controller,
+// which the shell cannot subclass.
+@interface UIViewController (NCLRPointerLock)
+@end
+@implementation UIViewController (NCLRPointerLock)
+- (BOOL)prefersPointerLocked {
+    return horizon_ios_pointer_hidden() != 0;
+}
+@end
+
 @class NCLRResourcePreparer;
 static NSString *const NCLRPrepareProgressNotification = @"NCLRPrepareProgress";
 static NSString *const NCLRPrepareFinishedNotification = @"NCLRPrepareFinished";
@@ -675,6 +689,7 @@ static bool NCLRMotionFlushScheduled = false;
 static BOOL NCLRMouseInvertX = NO;
 static BOOL NCLRMouseInvertY = NO;
 static BOOL NCLRMouseSwapAxes = NO;
+static CGFloat NCLRMouseSensitivity = 1.5;
 
 /// A window that resigned key stops the engine's mouse-look events until it
 /// becomes key again. iOS can leave the game window resigned with nothing
@@ -696,6 +711,11 @@ static void NCLRRestoreVisibleKeyWindow(void) {
     }
 }
 
+// The system pointer's position in drawable pixels, or (-1, -1) before the
+// first report. The game's menu cursor follows it so clicks land under the
+// visible pointer instead of a virtual cursor drifting from it.
+static CGPoint NCLRPointerPixel = {-1.0, -1.0};
+
 // The game draws its own crosshair, and a captured pointer means the player is
 // turning the camera. Hide the system arrow then, and restore it whenever the
 // game releases the pointer so menus keep a usable cursor.
@@ -706,8 +726,13 @@ static void NCLRRestoreVisibleKeyWindow(void) {
 - (UIPointerRegion *)pointerInteraction:(UIPointerInteraction *)interaction
                         regionForRequest:(UIPointerRegionRequest *)request
                            defaultRegion:(UIPointerRegion *)defaultRegion {
-    (void)interaction;
-    (void)request;
+    UIView *view = interaction.view;
+    CGFloat scale = view.window.screen.scale > 0.0 ? view.window.screen.scale : 1.0;
+    CGPoint point = request.location;
+    NCLRPointerPixel = CGPointMake(point.x * scale, point.y * scale);
+    // Re-send the absolute position so the game's GUI cursor sits exactly
+    // where the system pointer is drawn.
+    horizon_ios_hardware_mouse_motion(0.0, 0.0, NCLRPointerPixel.x, NCLRPointerPixel.y);
     return defaultRegion;
 }
 
@@ -715,7 +740,10 @@ static void NCLRRestoreVisibleKeyWindow(void) {
                          styleForRegion:(UIPointerRegion *)region {
     (void)interaction;
     (void)region;
-    return [UIPointerStyle hiddenPointerStyle];
+    if (horizon_ios_pointer_hidden() != 0) {
+        return [UIPointerStyle hiddenPointerStyle];
+    }
+    return nil;
 }
 @end
 
@@ -733,11 +761,13 @@ static void NCLRRestoreVisibleKeyWindow(void) {
 @property (nonatomic, assign) NSInteger mouseMissTicks;
 @property (nonatomic, strong) UIPointerInteraction *pointerHiding;
 @property (nonatomic, weak) UIView *pointerHidingView;
+@property (nonatomic, assign) BOOL pointerHidden;
 + (instancetype)shared;
 - (void)start;
 - (void)stop;
 - (void)applyMotionDX:(float)deltaX dy:(float)deltaY;
 - (void)syncSystemPointerHidden;
+- (void)updatePointerLockForWindow:(UIWindow *)window;
 @end
 
 @implementation NCLRHardwareInput
@@ -845,29 +875,26 @@ static void NCLRRestoreVisibleKeyWindow(void) {
 }
 
 - (void)syncSystemPointerHidden {
-    BOOL hide = horizon_ios_pointer_hidden() != 0 && self.mouse != nil;
-    if (!hide) {
-        if (self.pointerHiding) {
-            [self.pointerHidingView removeInteraction:self.pointerHiding];
-        }
-        self.pointerHiding = nil;
-        self.pointerHidingView = nil;
-        return;
-    }
+    BOOL hide = horizon_ios_pointer_hidden() != 0;
     UIWindow *window = nil;
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
-            if (candidate.isKeyWindow && !candidate.hidden) {
-                window = candidate;
-                break;
-            }
+            if (candidate.hidden || candidate.alpha < 0.01) continue;
+            if (candidate.isKeyWindow) { window = candidate; break; }
+            if (!window) window = candidate;
         }
-        if (window) break;
+        if (window != nil && window.isKeyWindow) break;
     }
-    UIView *view = window.rootViewController.view;
-    if (!view) return;
-    if (self.pointerHiding && self.pointerHidingView == view) return;
+    if (!window) return;
+    if (self.pointerHiding && self.pointerHidingView == window) {
+        if (hide != self.pointerHidden) {
+            self.pointerHidden = hide;
+            [self.pointerHiding invalidate];
+        }
+        [self updatePointerLockForWindow:window];
+        return;
+    }
     if (self.pointerHiding) {
         [self.pointerHidingView removeInteraction:self.pointerHiding];
         self.pointerHiding = nil;
@@ -876,8 +903,20 @@ static void NCLRRestoreVisibleKeyWindow(void) {
     static NCLRHiddenPointerDelegate *hiddenPointer;
     if (!hiddenPointer) hiddenPointer = [NCLRHiddenPointerDelegate new];
     self.pointerHiding = [[UIPointerInteraction alloc] initWithDelegate:hiddenPointer];
-    self.pointerHidingView = view;
-    [view addInteraction:self.pointerHiding];
+    self.pointerHidingView = window;
+    self.pointerHidden = hide;
+    [window addInteraction:self.pointerHiding];
+    [self updatePointerLockForWindow:window];
+}
+
+- (void)updatePointerLockForWindow:(UIWindow *)window {
+    UIViewController *controller = window.rootViewController;
+    while (controller.presentedViewController != nil) {
+        controller = controller.presentedViewController;
+    }
+    if ([controller respondsToSelector:@selector(setNeedsUpdateOfPrefersPointerLocked)]) {
+        [controller setNeedsUpdateOfPrefersPointerLocked];
+    }
 }
 
 - (uint8_t)modifiersForInput:(GCKeyboardInput *)input {
@@ -942,25 +981,11 @@ static void NCLRRestoreVisibleKeyWindow(void) {
     mouse.handlerQueue = dispatch_get_main_queue();
     mouse.mouseInput.mouseMovedHandler = ^(GCMouseInput *input, float deltaX, float deltaY) {
         (void)input;
-        os_unfair_lock_lock(&NCLRMotionLock);
-        NCLRMotionDX += deltaX;
-        NCLRMotionDY += deltaY;
-        bool schedule = !NCLRMotionFlushScheduled;
-        NCLRMotionFlushScheduled = schedule;
-        os_unfair_lock_unlock(&NCLRMotionLock);
-        if (schedule) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                os_unfair_lock_lock(&NCLRMotionLock);
-                NCLRMotionFlushScheduled = false;
-                float dx = NCLRMotionDX;
-                float dy = NCLRMotionDY;
-                NCLRMotionDX = 0.0f;
-                NCLRMotionDY = 0.0f;
-                os_unfair_lock_unlock(&NCLRMotionLock);
-                if (dx == 0.0f && dy == 0.0f) return;
-                [NCLRHardwareInput.shared applyMotionDX:dx dy:dy];
-            });
-        }
+        // GameController calls this on the main queue at the mouse's report
+        // rate. Passing each report straight on lets the game's own accumulator
+        // feed one turn per frame; batching here added a queue hop and made the
+        // view move in steps.
+        [NCLRHardwareInput.shared applyMotionDX:deltaX dy:deltaY];
     };
     mouse.mouseInput.leftButton.pressedChangedHandler =
         ^(GCControllerButtonInput *button, float value, BOOL pressed) {
@@ -1040,6 +1065,7 @@ static void NCLRRestoreVisibleKeyWindow(void) {
     UIScreen *screen = window.screen ?: UIScreen.mainScreen;
     CGSize size = window ? window.bounds.size : screen.bounds.size;
     if (size.width < 1.0 || size.height < 1.0) return;
+    [self updatePointerLockForWindow:window];
     if (!self.cursorReady || !CGSizeEqualToSize(self.cursorBounds, size)) {
         self.cursor = CGPointMake(size.width * 0.5, size.height * 0.5);
         self.cursorBounds = size;
@@ -1053,11 +1079,26 @@ static void NCLRRestoreVisibleKeyWindow(void) {
     float dy = NCLRMouseSwapAxes ? deltaX : deltaY;
     if (NCLRMouseInvertX) dx = -dx;
     if (NCLRMouseInvertY) dy = -dy;
+    dx *= NCLRMouseSensitivity;
+    dy *= NCLRMouseSensitivity;
+    // In game the pointer is hidden and only the delta matters, so the window
+    // lookup can be skipped for the high-rate reports that arrive while
+    // turning.
+    if (horizon_ios_pointer_hidden() != 0) {
+        horizon_ios_hardware_mouse_motion(
+            dx, -dy, fmax(0.0, NCLRPointerPixel.x), fmax(0.0, NCLRPointerPixel.y));
+        return;
+    }
     // GameController reports pointer deltas in screen points, where y grows
     // downward. The camera takes winit deltas, where a positive y looks up.
     // Relative motion stays in points so the turn matches the cursor on every
-    // display scale; the pointer position is a drawable pixel.
-    horizon_ios_hardware_mouse_motion(dx, -dy, x * scale, y * scale);
+    // display scale; the pointer position is a drawable pixel. When the system
+    // pointer has reported a position, use it: the menu clicks then land under
+    // the pointer the player actually sees.
+    CGPoint cursorPixels = NCLRPointerPixel.x >= 0.0
+        ? NCLRPointerPixel
+        : CGPointMake(x * scale, y * scale);
+    horizon_ios_hardware_mouse_motion(dx, -dy, cursorPixels.x, cursorPixels.y);
 }
 @end
 
@@ -1149,6 +1190,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
 @property (nonatomic, assign) BOOL mouseInvertX;
 @property (nonatomic, assign) BOOL mouseInvertY;
 @property (nonatomic, assign) BOOL mouseSwapAxes;
+@property (nonatomic, assign) CGFloat mouseSensitivity;
 @property (nonatomic, assign) CGFloat joystickDeadzone;
 @property (nonatomic, assign) BOOL sprintButton;
 @property (nonatomic, assign) NSInteger buttonStyle;
@@ -1225,6 +1267,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     self.mouseInvertX = NO;
     self.mouseInvertY = NO;
     self.mouseSwapAxes = NO;
+    self.mouseSensitivity = 1.5;
     self.joystickDeadzone = 0.16;
     self.sprintButton = YES;
     self.buttonStyle = 0;
@@ -1302,9 +1345,14 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     if ([mouseInvertX isKindOfClass:NSNumber.class]) self.mouseInvertX = mouseInvertX.boolValue;
     if ([mouseInvertY isKindOfClass:NSNumber.class]) self.mouseInvertY = mouseInvertY.boolValue;
     if ([mouseSwapAxes isKindOfClass:NSNumber.class]) self.mouseSwapAxes = mouseSwapAxes.boolValue;
+    NSNumber *mouseSensitivity = json[@"mouseSensitivity"];
+    if ([mouseSensitivity isKindOfClass:NSNumber.class] && isfinite(mouseSensitivity.doubleValue)) {
+        self.mouseSensitivity = MAX(0.5, MIN(5.0, mouseSensitivity.doubleValue));
+    }
     NCLRMouseInvertX = self.mouseInvertX;
     NCLRMouseInvertY = self.mouseInvertY;
     NCLRMouseSwapAxes = self.mouseSwapAxes;
+    NCLRMouseSensitivity = self.mouseSensitivity;
     NSNumber *sensitivity = json[@"sensitivity"];
     if ([sensitivity isKindOfClass:[NSNumber class]]) {
         self.sensitivity = MAX(0.3, MIN(2.5, sensitivity.doubleValue));
@@ -1570,6 +1618,7 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
         @"mouseInvertX" : @(self.mouseInvertX),
         @"mouseInvertY" : @(self.mouseInvertY),
         @"mouseSwapAxes" : @(self.mouseSwapAxes),
+        @"mouseSensitivity" : @(self.mouseSensitivity),
         @"joystickDeadzone" : @(self.joystickDeadzone),
         @"sprintButton" : @(self.sprintButton),
         @"buttonStyle" : @(self.buttonStyle),
@@ -1904,6 +1953,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 @property (nonatomic, strong) ASWebAuthenticationSession *session;
 @property (nonatomic, weak) UIViewController *presenter;
 @property (nonatomic, strong) SFSafariViewController *authSafari;
+@property (nonatomic, copy) void (^progressHandler)(CGFloat fraction, NSString *status);
 @end
 
 @implementation NCLRAuth
@@ -1912,6 +1962,12 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
     static dispatch_once_t once;
     dispatch_once(&once, ^{ auth = [[NCLRAuth alloc] init]; });
     return auth;
+}
+
+- (void)reportProgress:(CGFloat)fraction status:(NSString *)status {
+    void (^handler)(CGFloat, NSString *) = self.progressHandler;
+    if (!handler) return;
+    dispatch_async(dispatch_get_main_queue(), ^{ handler(fraction, status); });
 }
 
 - (instancetype)init {
@@ -2029,6 +2085,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         return;
     }
     self.presenter = presenter;
+    [self reportProgress:0.08 status:@"正在打开 Microsoft 登录页…"];
     unsigned char random[48];
     arc4random_buf(random, sizeof(random));
     NSData *randomData = [NSData dataWithBytes:random length:sizeof(random)];
@@ -2085,6 +2142,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                 @"grant_type=authorization_code&client_id=%@&code=%@&redirect_uri=%@&code_verifier=%@&scope=%@",
                 clientId, code, @"nclr%3A%2F%2Fauth", verifier,
                 @"offline_access%20XboxLive.signin"];
+            [weakSelf reportProgress:0.35 status:@"已获取授权，正在换取令牌…"];
             [weakSelf postForm:@"https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
                         body:body
                   completion:^(NSDictionary *json, NSString *tokenError) {
@@ -2225,6 +2283,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
         @"TokenType" : @"JWT",
     };
     __weak typeof(self) weakSelf = self;
+    [self reportProgress:0.55 status:@"正在验证 Xbox Live…"];
     [self postJSON:@"https://user.auth.xboxlive.com/user/authenticate"
               body:xblBody headers:@{} completion:^(NSDictionary *xbl, NSInteger status, NSString *error) {
         NSString *xblToken = NCLRString(xbl[@"Token"]);
@@ -2241,6 +2300,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
             @"RelyingParty" : @"rp://api.minecraftservices.com/",
             @"TokenType" : @"JWT",
         };
+        [weakSelf reportProgress:0.7 status:@"正在验证 XSTS…"];
         [weakSelf postJSON:@"https://xsts.auth.xboxlive.com/xsts/authorize"
                       body:xstsBody headers:@{} completion:^(NSDictionary *xsts, NSInteger xstsStatus, NSString *xstsError) {
             NSString *xstsToken = NCLRString(xsts[@"Token"]);
@@ -2253,6 +2313,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
             NSDictionary *mcBody = @{
                 @"identityToken" : [NSString stringWithFormat:@"XBL3.0 x=%@;%@", uhs, xstsToken],
             };
+            [weakSelf reportProgress:0.85 status:@"正在登录 Minecraft…"];
             [weakSelf postJSON:@"https://api.minecraftservices.com/authentication/login_with_xbox"
                           body:mcBody headers:@{} completion:^(NSDictionary *mc, NSInteger mcStatus, NSString *mcError) {
                 NSString *mcToken = NCLRString(mc[@"access_token"]);
@@ -2290,6 +2351,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 }
 
 - (void)fetchProfileWithToken:(NSString *)token completion:(NCLRAuthCompletion)completion {
+    [self reportProgress:0.95 status:@"正在读取玩家档案…"];
     __weak typeof(self) weakSelf = self;
     NSMutableURLRequest *request = [NSMutableURLRequest
         requestWithURL:[NSURL URLWithString:@"https://api.minecraftservices.com/minecraft/profile"]];
@@ -2321,6 +2383,7 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
                 [[NSNotificationCenter defaultCenter] postNotificationName:NCLRAvatarUpdatedNotification object:auth];
                 [weakSelf.authSafari dismissViewControllerAnimated:YES completion:nil];
                 weakSelf.authSafari = nil;
+                [auth reportProgress:1.0 status:@"登录完成"];
                 completion(token, name, nil);
             });
         }] resume];
@@ -3564,6 +3627,71 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [self presentViewController:alert animated:YES completion:nil];
 }
 
+- (void)showLoginProgress {
+    if ([self.view viewWithTag:0x4C4F47]) return;
+    UIView *mask = [[UIView alloc] init];
+    mask.tag = 0x4C4F47;
+    mask.translatesAutoresizingMaskIntoConstraints = NO;
+    mask.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.55];
+    UIView *card = [[UIView alloc] init];
+    card.translatesAutoresizingMaskIntoConstraints = NO;
+    card.backgroundColor = NCLRColor(0.10, 0.10, 0.11, 0.98);
+    card.layer.cornerRadius = 16.0;
+    UILabel *title = [self label:@"登录 Microsoft 账号" size:16
+                           weight:UIFontWeightSemibold color:UIColor.whiteColor];
+    UILabel *status = [self label:@"正在打开 Microsoft 登录页…" size:12
+                            weight:UIFontWeightMedium color:NCLRColor(0.70, 0.70, 0.72, 1)];
+    status.tag = 0x535441;
+    UIProgressView *bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    bar.tag = 0x505247;
+    bar.progress = 0.06;
+    bar.progressTintColor = NCLRAccent();
+    bar.trackTintColor = NCLRColor(0.24, 0.24, 0.26, 1);
+    bar.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:title];
+    [card addSubview:status];
+    [card addSubview:bar];
+    [mask addSubview:card];
+    [self.view addSubview:mask];
+    [NSLayoutConstraint activateConstraints:@[
+        [mask.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [mask.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [mask.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [mask.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [card.centerXAnchor constraintEqualToAnchor:mask.centerXAnchor],
+        [card.centerYAnchor constraintEqualToAnchor:mask.centerYAnchor],
+        [card.widthAnchor constraintEqualToConstant:300],
+        [title.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:20],
+        [title.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-20],
+        [title.topAnchor constraintEqualToAnchor:card.topAnchor constant:20],
+        [status.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+        [status.trailingAnchor constraintEqualToAnchor:title.trailingAnchor],
+        [status.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:8],
+        [bar.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+        [bar.trailingAnchor constraintEqualToAnchor:title.trailingAnchor],
+        [bar.topAnchor constraintEqualToAnchor:status.bottomAnchor constant:16],
+        [bar.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-22],
+    ]];
+    mask.alpha = 0.0;
+    [UIView animateWithDuration:0.18 animations:^{ mask.alpha = 1.0; }];
+}
+
+- (void)updateLoginProgress:(CGFloat)fraction status:(NSString *)status {
+    UIView *mask = [self.view viewWithTag:0x4C4F47];
+    if (!mask) return;
+    UIProgressView *bar = (UIProgressView *)[mask viewWithTag:0x505247];
+    UILabel *label = (UILabel *)[mask viewWithTag:0x535441];
+    if (status.length > 0) label.text = status;
+    [bar setProgress:MAX(0.02, MIN(1.0, fraction)) animated:YES];
+}
+
+- (void)hideLoginProgress {
+    UIView *mask = [self.view viewWithTag:0x4C4F47];
+    if (!mask) return;
+    [UIView animateWithDuration:0.18 animations:^{ mask.alpha = 0.0; }
+                     completion:^(BOOL finished) { [mask removeFromSuperview]; }];
+}
+
 - (void)loginTapped {
     if (NCLRAuth.shared.token.length > 0) {
         [NCLRAuth.shared logout];
@@ -3574,9 +3702,15 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         NCLRStore.shared.clientId = kNCLRDefaultClientID;
     }
     __weak typeof(self) weakSelf = self;
+    [self showLoginProgress];
+    NCLRAuth.shared.progressHandler = ^(CGFloat fraction, NSString *status) {
+        [weakSelf updateLoginProgress:fraction status:status];
+    };
     [NCLRAuth.shared startWithBrowserClientId:NCLRStore.shared.clientId
                              presenter:self
                             completion:^(NSString *token, NSString *name, NSString *error) {
+        NCLRAuth.shared.progressHandler = nil;
+        [weakSelf hideLoginProgress];
         if (error) {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"登录失败"
                                                                            message:error
@@ -3715,6 +3849,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 @property (nonatomic, strong) UISwitch *mouseInvertXSwitch;
 @property (nonatomic, strong) UISwitch *mouseInvertYSwitch;
 @property (nonatomic, strong) UISwitch *mouseSwapAxesSwitch;
+@property (nonatomic, strong) UISlider *mouseSensitivitySlider;
+@property (nonatomic, strong) UILabel *mouseSensitivityValue;
 @property (nonatomic, strong) UILabel *gyroValue;
 @property (nonatomic, strong) UILabel *canvasStatus;
 @property (nonatomic, assign) BOOL canvasFullscreen;
@@ -4565,6 +4701,24 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
                             size:11 weight:UIFontWeightRegular
                            color:NCLRColor(0.66, 0.66, 0.66, 1)];
     hint.numberOfLines = 0;
+    self.mouseSensitivitySlider = [[UISlider alloc] init];
+    self.mouseSensitivitySlider.minimumValue = 0.5;
+    self.mouseSensitivitySlider.maximumValue = 5.0;
+    self.mouseSensitivitySlider.value = NCLRKeymap.shared.mouseSensitivity;
+    self.mouseSensitivitySlider.minimumTrackTintColor = NCLRAccent();
+    self.mouseSensitivitySlider.accessibilityLabel = @"鼠标灵敏度";
+    [self.mouseSensitivitySlider addTarget:self
+                                    action:@selector(mouseSensitivityChanged:)
+                          forControlEvents:UIControlEventValueChanged];
+    UILabel *sensCaption = [self label:@"灵敏度" size:12 weight:UIFontWeightMedium
+                                color:NCLRColor(0.76, 0.76, 0.76, 1)];
+    self.mouseSensitivityValue = [self label:[NSString stringWithFormat:@"%.2f×", self.mouseSensitivitySlider.value]
+                                        size:12 weight:UIFontWeightSemibold color:NCLRAccent()];
+    self.mouseSensitivityValue.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightSemibold];
+    UIStackView *sensRow = [[UIStackView alloc] initWithArrangedSubviews:
+        @[sensCaption, self.mouseSensitivitySlider, self.mouseSensitivityValue]];
+    sensRow.alignment = UIStackViewAlignmentCenter;
+    sensRow.spacing = 10;
     self.mouseInvertXSwitch = [self mouseAxisSwitch:NCLRKeymap.shared.mouseInvertX
                                              label:@"反转 X 轴（左右）"];
     self.mouseInvertYSwitch = [self mouseAxisSwitch:NCLRKeymap.shared.mouseInvertY
@@ -4574,6 +4728,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     UIStackView *content = [[UIStackView alloc] initWithArrangedSubviews:@[
         header,
         hint,
+        sensRow,
         [self mouseAxisRow:self.mouseInvertXSwitch],
         [self mouseAxisRow:self.mouseInvertYSwitch],
         [self mouseAxisRow:self.mouseSwapAxesSwitch],
@@ -4585,6 +4740,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [NSLayoutConstraint activateConstraints:@[
         [icon.widthAnchor constraintEqualToConstant:22],
         [icon.heightAnchor constraintEqualToConstant:22],
+        [self.mouseSensitivityValue.widthAnchor constraintEqualToConstant:46],
         [content.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:14],
         [content.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-14],
         [content.topAnchor constraintEqualToAnchor:card.topAnchor constant:10],
@@ -4620,7 +4776,15 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     NCLRMouseInvertX = keymap.mouseInvertX;
     NCLRMouseInvertY = keymap.mouseInvertY;
     NCLRMouseSwapAxes = keymap.mouseSwapAxes;
+    NCLRMouseSensitivity = keymap.mouseSensitivity;
     [keymap save];
+}
+
+- (void)mouseSensitivityChanged:(UISlider *)sender {
+    self.mouseSensitivityValue.text = [NSString stringWithFormat:@"%.2f×", sender.value];
+    NCLRKeymap.shared.mouseSensitivity = sender.value;
+    NCLRMouseSensitivity = sender.value;
+    [NCLRKeymap.shared save];
 }
 
 - (void)gyroToggled:(UISwitch *)sender {
@@ -6251,6 +6415,40 @@ static CIContext *NCLRTransitionCIContext(void) {
 
 #pragma mark - App
 
+// iOS shows its local-network prompt the first time an app touches the LAN.
+// A short Bonjour browse at startup asks it once, before the player tries to
+// join a LAN world (iOS has no cellular permission prompt; cellular data is
+// used automatically when there is no Wi-Fi).
+@interface NCLRLocalNetworkPermission : NSObject <NSNetServiceBrowserDelegate>
+@property (nonatomic, strong) NSNetServiceBrowser *browser;
++ (instancetype)shared;
+- (void)askOnFirstLaunch;
+@end
+
+@implementation NCLRLocalNetworkPermission
++ (instancetype)shared {
+    static NCLRLocalNetworkPermission *permission;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ permission = [[NCLRLocalNetworkPermission alloc] init]; });
+    return permission;
+}
+
+- (void)askOnFirstLaunch {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([defaults boolForKey:@"NCLRLocalNetworkAsked"]) return;
+    [defaults setBool:YES forKey:@"NCLRLocalNetworkAsked"];
+    self.browser = [NSNetServiceBrowser new];
+    self.browser.delegate = self;
+    [self.browser searchForServicesOfType:@"_minecraft._tcp" inDomain:@"local."];
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf.browser stop];
+        weakSelf.browser = nil;
+    });
+}
+@end
+
 @interface NCLRSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (nonatomic, strong) UIWindow *window;
 @end
@@ -6270,6 +6468,9 @@ static CIContext *NCLRTransitionCIContext(void) {
     self.window.rootViewController = [[NCLRRootController alloc] init];
     self.window.windowLevel = UIWindowLevelNormal;
     [self.window makeKeyAndVisible];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NCLRLocalNetworkPermission shared] askOnFirstLaunch];
+    });
 }
 @end
 

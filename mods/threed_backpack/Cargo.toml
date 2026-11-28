@@ -1,0 +1,12 @@
+[package]
+name = "threed-backpack"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+horizon-mod-api = { path = "../../crates/horizon-mod-api" }
+log = "0.4"
+
+# A mod is its own project, not a member of the game's workspace.
+[workspace]

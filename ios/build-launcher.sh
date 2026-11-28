@@ -47,7 +47,7 @@ cp "$ROOT/ios/Info-launcher.plist" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion $IPHONEOS_DEPLOYMENT_TARGET" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleSupportedPlatforms:0 $BUNDLE_PLATFORM" "$APP/Info.plist"
 
-cp "$ROOT/ios/icons/"*.png "$APP/"
+bash "$ROOT/ios/compile-app-icon.sh" "$APP" "$OUT" "$ROOT/ios/icons"
 mkdir -p "$APP/versions" "$APP/mods"
 
 if nclr_uses_swift_sidebar "$MAIN_SOURCE"; then

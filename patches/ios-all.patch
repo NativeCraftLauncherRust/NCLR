@@ -202,6 +202,25 @@ index b08731f..c214ad1 100644
      }
  }
  
+diff --git a/crates/horizon-client-input/src/keymapping.rs b/crates/horizon-client-input/src/keymapping.rs
+index fd10c0a..99f1634 100644
+--- a/crates/horizon-client-input/src/keymapping.rs
++++ b/crates/horizon-client-input/src/keymapping.rs
+@@ -81,6 +81,14 @@ impl KeyState {
+             self.is_down = down;
+         }
+     }
++
++    /// Forces the mapping up and drops a pad toggle. A touch attack tapped in
++    /// toggle mode otherwise leaves the mapping down after the finger lifts,
++    /// and set_down(false) cannot clear it.
++    pub fn force_up(&mut self) {
++        self.is_down = false;
++        self.pad_toggled = false;
++    }
+     /// `KeyboardHandler.keyPress` for this mapping's key: a release sets it up
+     /// (`KeyMapping.set(key, false)`); a press or a repeat with no screen open
+     /// sets it down and clicks it (`KeyMapping.set(key, true)`, `KeyMapping.click`).
 diff --git a/crates/horizon-client-lib/Cargo.toml b/crates/horizon-client-lib/Cargo.toml
 index ed7d483..3136fdb 100644
 --- a/crates/horizon-client-lib/Cargo.toml
@@ -2003,16 +2022,32 @@ index 026382e..9289a31 100644
                  if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
              {
 diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
-index 16664ff..c009838 100644
+index 16664ff..a69822c 100644
 --- a/crates/horizon-client/src/game/interface/pointer_capture.rs
 +++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
-@@ -7,6 +7,20 @@ fn studio_suppresses_focus_pause(replay_active: bool, freecam_active: bool) -> b
+@@ -7,6 +7,36 @@ fn studio_suppresses_focus_pause(replay_active: bool, freecam_active: bool) -> b
  }
  
  impl Game<'_> {
 +    /// Whether the iOS shell reports a hardware keyboard or mouse.
 +    pub(super) fn hardware_input_attached(&self) -> bool {
 +        self.ios_hardware_input
++    }
++
++    /// Whether a GUI owns touches: a screen, the title, a dialog, the sign
++    /// editor or a server prompt. Only a bare world uses the on-screen
++    /// controls; everywhere else a finger has to click like a mouse, or the
++    /// overlay's buttons cannot be pressed.
++    pub(super) fn gui_takes_touch(&self) -> bool {
++        self.screen != Screen::Playing
++            || self.title.is_some()
++            || self.sign_edit.is_some()
++            || self.remote_loading()
++            || self.dialog_open()
++            || self.command_prompt.is_some()
++            || self.link_prompt.is_some()
++            || self.code_of_conduct.is_some()
++            || self.book.is_some()
 +    }
 +
 +    /// The persistent on-screen keyboard button, in the frame's GUI pixels.
@@ -2027,7 +2062,7 @@ index 16664ff..c009838 100644
      /// The options `MouseHandler.turnPlayer` reads.
      pub(super) fn look_options(&self) -> LookOptions {
          LookOptions {
-@@ -55,6 +69,210 @@ impl Game<'_> {
+@@ -55,6 +85,214 @@ impl Game<'_> {
          let zoom = self.zoom_turn_scale();
          self.turn_player(x * zoom, y * zoom);
      }
@@ -2173,12 +2208,16 @@ index 16664ff..c009838 100644
 +        // The touch release clears its own latch even while a keyboard or
 +        // mouse is attached. Only a physical button that still holds the same
 +        // action keeps it down.
-+        if held || !self.mouse_mapping_held_elsewhere(button, Source::Pad) {
++        if held {
++            self.toggles.0[2].set_down(true, false);
++            self.left = self.toggles.is_down(2);
++        } else if !self.mouse_mapping_held_elsewhere(button, Source::Pad) {
 +            // Releasing is idempotent and must run even when the previous
 +            // frame already saw no attack. Otherwise a release that arrives
-+            // after a screen transition can leave `left` stuck down and mine
-+            // again as soon as the world resumes.
-+            self.toggles.0[2].set_down(held, false);
++            // after a screen transition can leave left stuck down and mine
++            // again as soon as the world resumes. force_up also drops a pad
++            // toggle that set_down(false) cannot clear.
++            self.toggles.0[2].force_up();
 +            self.left = self.toggles.is_down(2);
 +        }
 +        if (!was_held && held) || clicked {
@@ -2239,7 +2278,7 @@ index 16664ff..c009838 100644
      pub(super) fn pauses_game(&self) -> bool {
          self.has_singleplayer_server()
 diff --git a/crates/horizon-client/src/game/runtime/loading_screen.rs b/crates/horizon-client/src/game/runtime/loading_screen.rs
-index 2511aa2..afd94da 100644
+index 2511aa2..f276011 100644
 --- a/crates/horizon-client/src/game/runtime/loading_screen.rs
 +++ b/crates/horizon-client/src/game/runtime/loading_screen.rs
 @@ -3,6 +3,11 @@
@@ -2398,7 +2437,7 @@ index 2511aa2..afd94da 100644
 +                        return;
 +                    }
 +                }
-+                if game.host.screen == Screen::Playing && game.host.title.is_none() {
++                if !game.host.gui_takes_touch() {
 +                    game.host.touch_event(touch);
 +                    return;
 +                }
@@ -2437,7 +2476,7 @@ index 2511aa2..afd94da 100644
 +        };
 +        if let App::Ready(game) = self {
 +            if let WindowEvent::Touch(touch) = &event
-+                && (game.host.screen != Screen::Playing || game.host.title.is_some())
++                && game.host.gui_takes_touch()
 +                && touch.phase == winit::event::TouchPhase::Started
 +            {
 +                let size = game
@@ -2645,10 +2684,10 @@ index ee73abf..3704fed 100644
      pub(super) fn facts(&self) -> &BlockFacts {
          &self.core.facts
 diff --git a/crates/horizon-client/src/game/runtime/window_handler.rs b/crates/horizon-client/src/game/runtime/window_handler.rs
-index 6a86a75..8388ee5 100644
+index 6a86a75..57db634 100644
 --- a/crates/horizon-client/src/game/runtime/window_handler.rs
 +++ b/crates/horizon-client/src/game/runtime/window_handler.rs
-@@ -312,9 +312,34 @@ impl Game<'_> {
+@@ -312,9 +312,33 @@ impl Game<'_> {
          }
          horizon_client::spans::time("server_packs", || self.tick_server_packs());
          horizon_client::spans::time("control", || self.poll_control(event_loop));
@@ -2658,12 +2697,9 @@ index 6a86a75..8388ee5 100644
              return;
          }
 +        let mut touch_attack = false;
-+        if self.screen == Screen::Playing && self.focused {
++        if self.screen == Screen::Playing && self.focused && !self.gui_takes_touch() {
 +            #[cfg(target_os = "ios")]
-+            if self.title.is_none()
-+                && (gyro_x != 0.0 || gyro_y != 0.0)
-+                && !self.touch.look_dragging()
-+            {
++            if self.title.is_none() && (gyro_x != 0.0 || gyro_y != 0.0) {
 +                self.look_turn(gyro_x, gyro_y);
 +            }
 +            let mut touch = self.touch.poll_state();
@@ -2672,9 +2708,11 @@ index 6a86a75..8388ee5 100644
 +            self.pad.inject_state(touch);
 +            self.apply_touch_requests();
 +        } else {
-+            // A finger can open a menu while it is still down. Clear the
-+            // touch pad before the menu's mouse/keyboard input, or the last
-+            // button stays held and the next screen looks like pad mode.
++            // A screen or overlay (inventory, sign editor, a dialog) owns the
++            // touches. A finger that opened it is still down, and its release
++            // goes to the overlay as a click instead of lifting the touch
++            // control, so clear the pad here or the last button stays held and
++            // keeps mining.
 +            self.touch.clear();
 +            self.pad.inject_state(Default::default());
 +        }
@@ -2683,7 +2721,7 @@ index 6a86a75..8388ee5 100644
          horizon_client::spans::time("pads", || self.poll_pads(event_loop));
          self.settle_after_run(event_loop);
          self.pause_if_inactive();
-@@ -326,9 +351,13 @@ impl Game<'_> {
+@@ -326,9 +350,13 @@ impl Game<'_> {
              return;
          }
          if let Some(w) = &self.window {
@@ -2698,7 +2736,7 @@ index 6a86a75..8388ee5 100644
                  let id = w.id();
                  self.handle_window_event(
                      event_loop,
-@@ -351,11 +380,21 @@ impl Game<'_> {
+@@ -351,11 +379,21 @@ impl Game<'_> {
          }
          // Consume the last frame's result: a hidden compositor may stop sending
          // redraws altogether, leaving a successful result stale indefinitely.
@@ -2722,7 +2760,7 @@ index 6a86a75..8388ee5 100644
      }
  }
  
-@@ -417,6 +456,8 @@ impl ApplicationHandler for Game<'_> {
+@@ -417,6 +455,8 @@ impl ApplicationHandler for Game<'_> {
          self.resize_state = Some(self.resize_state_of(window.inner_size()));
          self.window = Some(window);
          self.ime_allowed = false;
@@ -2731,7 +2769,7 @@ index 6a86a75..8388ee5 100644
          self.ime_area = None;
          self.apply_settings();
          self.previous = Instant::now();
-@@ -437,14 +478,13 @@ impl ApplicationHandler for Game<'_> {
+@@ -437,14 +477,13 @@ impl ApplicationHandler for Game<'_> {
          };
          self.handle_window_event(event_loop, id, event, input_trace::InputOrigin::User);
          if let Some((event, modifiers)) = key {

@@ -99,9 +99,8 @@ if [ -n "${RESOURCE_DIR:-}" ]; then
     cp -R "$RESOURCE_DIR/"* "$APP/horizon-client/26.3/"
 fi
 
-if [ -n "${ICON_DIR:-}" ]; then
-    cp "$ICON_DIR/"*.png "$APP/"
-fi
+# Compile the native Icon Composer app icon before signing.
+bash "$ROOT/ios/compile-app-icon.sh" "$APP" "$OUT" "$ICON_DIR"
 
 # The shipped table bundle sits at the app root, where the shell looks it up by
 # name (pathForResource:@"ship" ofType:@"hzr3"). With it, a first run needs no
