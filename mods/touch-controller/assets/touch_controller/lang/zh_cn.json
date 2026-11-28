@@ -1,0 +1,23 @@
+{
+  "touch_controller.setting.layout": "布局",
+  "touch_controller.setting.layout.tooltip": "摇杆按推开的距离移动；方向键按下四个移动键。",
+  "touch_controller.layout.joystick": "摇杆",
+  "touch_controller.layout.dpad": "方向键",
+  "touch_controller.setting.scale": "控件大小",
+  "touch_controller.setting.scale.tooltip": "放大或缩小屏幕上的所有控件。",
+  "touch_controller.setting.opacity": "控件不透明度",
+  "touch_controller.setting.opacity.tooltip": "控件盖在世界上的浓度。",
+  "touch_controller.setting.deadzone": "摇杆死区",
+  "touch_controller.setting.deadzone.tooltip": "摇杆要推开多远玩家才开始移动。",
+  "touch_controller.setting.left_handed": "左手模式",
+  "touch_controller.setting.left_handed.tooltip": "左右镜像：摇杆在右，按钮在左。",
+  "touch_controller.setting.sneak_toggle": "潜行开关",
+  "touch_controller.setting.sneak_toggle.tooltip": "潜行键点一下保持，再点一下取消，而不是按住才生效。",
+  "touch_controller.button.attack": "攻击",
+  "touch_controller.button.use": "使用",
+  "touch_controller.button.jump": "跳跃",
+  "touch_controller.button.sneak": "潜行",
+  "touch_controller.button.sprint": "疾跑",
+  "touch_controller.button.inventory": "背包",
+  "touch_controller.button.swap": "换手"
+}

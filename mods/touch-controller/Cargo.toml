@@ -1,0 +1,13 @@
+[package]
+name = "touch-controller"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }
+
+# A mod is its own project, not a member of the game's workspace. The SDK it
+# builds against is fetched into `.horizon/`, which is never a member.
+[workspace]
+exclude = [".horizon"]

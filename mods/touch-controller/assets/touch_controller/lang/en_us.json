@@ -1,0 +1,23 @@
+{
+  "touch_controller.setting.layout": "Layout",
+  "touch_controller.setting.layout.tooltip": "A joystick moves by how far it is pushed; a D-pad presses the four movement keys.",
+  "touch_controller.layout.joystick": "Joystick",
+  "touch_controller.layout.dpad": "D-Pad",
+  "touch_controller.setting.scale": "Control size",
+  "touch_controller.setting.scale.tooltip": "Grows or shrinks every on-screen control.",
+  "touch_controller.setting.opacity": "Control opacity",
+  "touch_controller.setting.opacity.tooltip": "How solid the controls look over the world.",
+  "touch_controller.setting.deadzone": "Stick dead zone",
+  "touch_controller.setting.deadzone.tooltip": "How far the stick moves before the player does.",
+  "touch_controller.setting.left_handed": "Left-handed",
+  "touch_controller.setting.left_handed.tooltip": "Mirrors the controls: the stick on the right, the buttons on the left.",
+  "touch_controller.setting.sneak_toggle": "Sneak toggles",
+  "touch_controller.setting.sneak_toggle.tooltip": "The sneak button stays on until it is tapped again, instead of only while held.",
+  "touch_controller.button.attack": "Attack",
+  "touch_controller.button.use": "Use",
+  "touch_controller.button.jump": "Jump",
+  "touch_controller.button.sneak": "Sneak",
+  "touch_controller.button.sprint": "Sprint",
+  "touch_controller.button.inventory": "Bag",
+  "touch_controller.button.swap": "Swap"
+}

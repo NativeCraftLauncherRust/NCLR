@@ -136,7 +136,7 @@ HORIZON_DIR="$PWD/.local/horizon" PROFILE=fast bash scripts/build-launcher.sh
 
 产物位于 `dist/`，同时生成同名的 `.manifest.json`。源码检查可以单独运行 `bash scripts/check-launcher-source.sh`，已有 IPA 可以运行 `bash scripts/verify-launcher-ipa.sh dist/<文件名>.ipa` 复核。
 
-仓库管理约定：`main` 只保留可发布的入口和已验证功能。新的 UI、下载器或模组工作先放在独立分支，完成构建与产物检查后合入。CI 和本地发布都使用 `ios/main_l1.m`；旧入口脚本只在明确测试旧启动器时使用。
+仓库管理约定：功能改动从 `main` 拉出短生命周期分支，用 Pull Request 或至少一次明确的独立提交合入。每次合并后重新构建并验证产物。新的 UI、下载器或模组工作先放在独立分支，完成构建与产物检查后合入。CI 和本地发布都使用 `ios/main_l1.m`；旧入口脚本只在明确测试旧启动器时使用。
 
 `ios/build-launcher.sh` 用于独立的旧版启动器入口 `ios/main_launcher_only.m`。完整引擎构建需要先构建 `horizon-ios` 静态库。两个脚本都会在构建输出中打印实际使用的入口文件。
 

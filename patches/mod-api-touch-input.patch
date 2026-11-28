@@ -1,0 +1,94 @@
+diff --git a/crates/horizon-mod-vocab/src/hooks/touch_input.rs b/crates/horizon-mod-vocab/src/hooks/touch_input.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/horizon-mod-vocab/src/hooks/touch_input.rs
+@@ -0,0 +1,27 @@
++//! The `touch_input` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
++
++pub trait Hooks {
++    /// A finger on a touch screen, while a world is open (`id` names it for the whole gesture).
++    /// `phase` is 0 when it lands, 1 while it moves, 2 when it lifts and 3 when the system
++    /// cancels it. `point` is where it is on the surface, `0..1` across its width and height —
++    /// the surface the HUD draws on, so `point` times a `DrawContext`'s size is that point in
++    /// GUI pixels — and `surface` is that surface in pixels.
++    ///
++    /// Set `canceled` to take the finger: the game's own touch controls ignore it for the rest
++    /// of its gesture, so a mod's controls and the built-in joystick never answer the same
++    /// finger. A mod that draws its own controls cancels the fingers that land on them and
++    /// leaves the rest to the game.
++    ///
++    /// Fired for every finger, before the built-in touch controls see it, whether or not a
++    /// hardware keyboard or mouse is attached, and whether or not the player has a touch
++    /// layout: a mod's overlay is told of touches the game's controls would drop. Not on the
++    /// title screen or the loading screen, where a finger is the menus' own click.
++    /// Client only, and only on a touch screen: a platform without one never fires it.
++    #[hook(
++        side = "client",
++        contract = "cancel",
++        out = "canceled",
++        neoforge = "none (NeoForge has no touch event; a touchscreen reaches it as a mouse)"
++    )]
++    fn touch_input();
++}
+diff --git a/crates/horizon-client/src/game/native_hooks/touch_input.rs b/crates/horizon-client/src/game/native_hooks/touch_input.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/horizon-client/src/game/native_hooks/touch_input.rs
+@@ -0,0 +1,19 @@
++use super::*;
++
++/// The hook points. Each does nothing in Horizon.
++impl Game<'_> {
++    /// A finger on the touch screen, before the built-in touch controls see it: `id` names it
++    /// for the gesture, `phase` is 0 (land), 1 (move), 2 (lift) or 3 (cancel), `point` is
++    /// `0..1` across the surface and `surface` its size in pixels. Set `canceled` to take the
++    /// finger from the game's own controls.
++    pub(in crate::game) fn native_touch_input(
++        &mut self,
++        id: u64,
++        phase: i32,
++        point: [f32; 2],
++        surface: [u32; 2],
++        canceled: &mut bool,
++    ) {
++        self.fire_touch_input(id, phase, point, surface, canceled);
++    }
++}
+diff --git a/crates/horizon-client/src/game/interface/pointer_capture.rs b/crates/horizon-client/src/game/interface/pointer_capture.rs
+--- a/crates/horizon-client/src/game/interface/pointer_capture.rs
++++ b/crates/horizon-client/src/game/interface/pointer_capture.rs
+@@ -63,9 +63,6 @@
+     /// One finger on the on-screen controls: the joystick and buttons feed the
+     /// virtual pad; a drag on the world turns the camera.
+     pub(super) fn touch_event(&mut self, touch: &winit::event::Touch) {
+-        if self.hardware_input_attached() {
+-            return;
+-        }
+         // The renderer, the HUD and the touch controls all use the surface
+         // size. winit's `inner_size` is the safe area and is smaller than the
+         // surface on a notched device, so it must not be used here.
+@@ -87,6 +84,24 @@
+             (touch.location.x as f32 / width as f32).clamp(0.0, 1.0),
+             (touch.location.y as f32 / height as f32).clamp(0.0, 1.0),
+         ];
++        // A mod's own controls see the finger first and may take it, so the two
++        // never answer the same touch. They are told even when a hardware
++        // keyboard or mouse hides the game's controls.
++        let phase = match touch.phase {
++            winit::event::TouchPhase::Started => 0,
++            winit::event::TouchPhase::Moved => 1,
++            winit::event::TouchPhase::Ended => 2,
++            winit::event::TouchPhase::Cancelled => 3,
++        };
++        let mut canceled = false;
++        self.native_touch_input(touch.id as u64, phase, point, [width, height], &mut canceled);
++        if canceled {
++            self.touch.ignore(touch.id as u64);
++            return;
++        }
++        if self.hardware_input_attached() {
++            return;
++        }
+         if touch.phase == winit::event::TouchPhase::Cancelled {
+             self.touch.cancel(touch.id as u64);
+             return;

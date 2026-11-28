@@ -1,0 +1,8 @@
+# The SDK `cargo horizon-mod` fetches (or a link to a checkout), never packed.
+.horizon/
+# Build output: the package is published, not committed.
+target/
+mod.wasm
+
+# The built package.
+touch_controller.hmod

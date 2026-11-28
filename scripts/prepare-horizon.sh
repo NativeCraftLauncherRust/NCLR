@@ -81,4 +81,18 @@ else
     exit 1
 fi
 
+# The mod API's touch hook, which the TouchController .hmod builds against: a
+# hook declaration, its entry point and the call in the touch path. Applied on
+# top of the iOS patch, so it has to come second.
+for patch in mod-api-touch-input; do
+    if (cd "$HORIZON_DIR" && git apply --check "$ROOT/patches/$patch.patch"); then
+        (cd "$HORIZON_DIR" && git apply "$ROOT/patches/$patch.patch")
+    elif (cd "$HORIZON_DIR" && git apply --reverse --check "$ROOT/patches/$patch.patch"); then
+        echo "$patch already applied"
+    else
+        echo "patch $patch does not apply to $PIN" >&2
+        exit 1
+    fi
+done
+
 echo "prepared $HORIZON_DIR at $PIN"

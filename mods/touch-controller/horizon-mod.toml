@@ -1,0 +1,16 @@
+id = "touch_controller"
+name = "TouchController"
+version = "0.1.0"
+description = "Bedrock-style touch controls for Horizon and NCLR: a joystick or D-pad, attack and use, jump, sneak, sprint, the inventory and the off hand, laid out from a config file."
+authors = ["NCLR contributors"]
+license = "LGPL-3.0-or-later"
+license_url = "https://www.gnu.org/licenses/lgpl-3.0.html"
+homepage = "https://github.com/TouchController/TouchController"
+issues = "https://github.com/TouchController/TouchController/issues"
+api = "0.2"
+side = "client"
+capabilities = ["registries"]
+
+[wasm]
+sha512 = "9221130cb32e82b87156086c420607e59e2f07d12580c5caba4e52ec8932ae827e49b6f972b8cf763a61742e394f803dac2c98cf80ba94c9ce7a169814823e54"
+toolchain = "1.99.1 58cf8f9c35b355199727627d07ae34a4e2846d67"
