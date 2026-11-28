@@ -42,6 +42,90 @@ pub extern "C" fn horizon_ios_pointer_hidden() -> i32 {
     }
 }
 
+/// The shell reads one coherent snapshot: mode, GUI width and GUI height.
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_touch_look(x: f64, y: f64) {
+    #[cfg(target_os = "ios")]
+    horizon_client::entry::add_ios_touch_look(x, y);
+    #[cfg(not(target_os = "ios"))]
+    let _ = (x, y);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_touch_revision() -> u64 {
+    #[cfg(target_os = "ios")]
+    { horizon_client::entry::ios_touch_revision() }
+    #[cfg(not(target_os = "ios"))]
+    { 0 }
+}
+
+/// Copies the canonical drawing geometry into a caller-owned UTF-8 buffer.
+/// Returns the required capacity including the trailing NUL.
+///
+/// # Safety
+/// A non-null output must point to at least capacity writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn horizon_ios_touch_layout(output: *mut u8, capacity: usize) -> usize {
+    #[cfg(target_os = "ios")]
+    let layout = horizon_client::entry::ios_touch_layout();
+    #[cfg(not(target_os = "ios"))]
+    let layout = String::new();
+    let required = layout.len() + 1;
+    if !output.is_null() && capacity >= required {
+        unsafe {
+            std::ptr::copy_nonoverlapping(layout.as_ptr(), output, layout.len());
+            *output.add(layout.len()) = 0;
+        }
+    }
+    required
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_touch_visuals(value: *const c_char) {
+    #[cfg(target_os = "ios")]
+    if let Some(snapshot) = text(value) {
+        horizon_client::entry::set_ios_touch_visuals(snapshot);
+    }
+    #[cfg(not(target_os = "ios"))]
+    let _ = value;
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_touch_status() -> u64 {
+    #[cfg(target_os = "ios")]
+    { horizon_client::entry::ios_touch_status() }
+    #[cfg(not(target_os = "ios"))]
+    { 0 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_touch_key(usage: u16, pressed: i32) {
+    #[cfg(target_os = "ios")]
+    winit::platform::ios::send_touch_key(usage, pressed != 0);
+    #[cfg(not(target_os = "ios"))]
+    let _ = (usage, pressed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_touch_button(button: u8, pressed: i32) {
+    #[cfg(target_os = "ios")]
+    winit::platform::ios::send_touch_mouse_button(button, pressed != 0);
+    #[cfg(not(target_os = "ios"))]
+    let _ = (button, pressed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_touch_reset() {
+    #[cfg(target_os = "ios")]
+    winit::platform::ios::reset_touch_input();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_touch_keyboard() {
+    #[cfg(target_os = "ios")]
+    horizon_client::entry::request_ios_keyboard();
+}
+
 /// A hardware key from GCKeyboard. `usage` is a USB HID keyboard usage code.
 #[unsafe(no_mangle)]
 pub extern "C" fn horizon_ios_hardware_key(

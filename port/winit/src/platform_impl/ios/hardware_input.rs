@@ -19,6 +19,13 @@ use crate::keyboard::{
 };
 use crate::platform_impl::KeyEventExtra;
 
+#[path = "input_sources.rs"]
+mod input_sources;
+thread_local! {
+    static INPUT_SOURCES: std::cell::RefCell<input_sources::InputSources> =
+        std::cell::RefCell::new(input_sources::InputSources::default());
+}
+
 const MOD_SHIFT: u8 = 1;
 const MOD_CONTROL: u8 = 2;
 const MOD_ALT: u8 = 4;
@@ -151,6 +158,28 @@ fn key_spec(usage: u16) -> Option<(KeyCode, LogicalKey, KeyLocation)> {
 }
 
 pub(crate) fn send_key(usage: u16, pressed: bool, repeat: bool, modifiers: u8) {
+    send_source_key(0, usage, pressed, repeat, modifiers);
+}
+
+pub(crate) fn send_touch_key(usage: u16, pressed: bool) {
+    send_source_key(1, usage, pressed, false, 0);
+}
+
+fn send_source_key(source: usize, usage: u16, pressed: bool, repeat: bool, modifiers: u8) {
+    if MainThreadMarker::new().is_none() || (pressed && app_state::key_window_id().is_none()) {
+        return;
+    }
+    let (emit, modifiers) = INPUT_SOURCES.with(|inputs| {
+        let mut inputs = inputs.borrow_mut();
+        let emit = inputs.key(source, usage, pressed, repeat);
+        (emit, inputs.modifiers(source, modifiers))
+    });
+    if emit {
+        emit_key(usage, pressed, repeat, modifiers);
+    }
+}
+
+fn emit_key(usage: u16, pressed: bool, repeat: bool, modifiers: u8) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
@@ -224,6 +253,41 @@ pub(crate) fn send_mouse_motion(dx: f64, dy: f64, x: f64, y: f64) {
 }
 
 pub(crate) fn send_mouse_button(button: u8, pressed: bool) {
+    send_source_button(0, button, pressed);
+}
+
+pub(crate) fn send_touch_button(button: u8, pressed: bool) {
+    send_source_button(1, button, pressed);
+}
+
+fn send_source_button(source: usize, button: u8, pressed: bool) {
+    if button > 2 || MainThreadMarker::new().is_none()
+        || (pressed && app_state::key_window_id().is_none()) {
+        return;
+    }
+    if INPUT_SOURCES.with(|inputs| inputs.borrow_mut().button(source, button, pressed)) {
+        emit_mouse_button(button, pressed);
+    }
+}
+
+pub(crate) fn reset_touch_input() {
+    let (keys, buttons) = INPUT_SOURCES.with(|inputs| inputs.borrow().touch_held());
+    for usage in keys {
+        let (emit, modifiers) = INPUT_SOURCES.with(|inputs| {
+            let mut inputs = inputs.borrow_mut();
+            let emit = inputs.key(1, usage, false, false);
+            (emit, inputs.modifiers(1, 0))
+        });
+        if emit { emit_key(usage, false, false, modifiers); }
+    }
+    for button in buttons {
+        if INPUT_SOURCES.with(|inputs| inputs.borrow_mut().button(1, button, false)) {
+            emit_mouse_button(button, false);
+        }
+    }
+}
+
+fn emit_mouse_button(button: u8, pressed: bool) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };

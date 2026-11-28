@@ -905,6 +905,7 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
 - (void)updateLockState;
 - (void)syncSystemPointerHidden;
 - (void)ensureHoverForView:(UIView *)view;
+- (UIView *)pointerTargetView;
 @end
 
 @implementation NCLRHardwareInput
@@ -2046,6 +2047,8 @@ static CGFloat NCLRKeyWidthForPosition(NSDictionary *position, NSString *key) {
     [data writeToFile:self.path atomically:YES];
 }
 @end
+
+#include "NCLRTouchOverlay.inc"
 
 #pragma mark - Store
 
@@ -3696,6 +3699,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         fflush(stderr);
     }
     [[NCLRHardwareInput shared] start];
+    NCLRTouchOverlayStart();
     // The engine picks HDR10 whenever the surface's colorspaces list it, and an
     // SDR panel can still list it; on those screens the HDR10 frame presented
     // black. "off" matches no HDR output name, so the renderer stays SDR.
@@ -3709,6 +3713,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
             resources.lastPathComponent, displayHDR, (long)screenLimit);
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
     NCLRLog(@"engine returned %d", result);
+    NCLRTouchOverlayStop();
     [[NCLRHardwareInput shared] stop];
     [NCLRGyro.shared stop];
     [display invalidate];

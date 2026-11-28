@@ -261,6 +261,21 @@ impl WindowExtIOS for Window {
 
 /// Sends a hardware keyboard event from the GameController framework into the
 /// running event loop. `usage` is a USB HID keyboard usage code.
+/// Keyboard input owned by the native touch overlay.
+pub fn send_touch_key(usage: u16, pressed: bool) {
+    crate::platform_impl::hardware_input::send_touch_key(usage, pressed);
+}
+
+/// Mouse input owned by the native touch overlay.
+pub fn send_touch_mouse_button(button: u8, pressed: bool) {
+    crate::platform_impl::hardware_input::send_touch_button(button, pressed);
+}
+
+/// Releases only the native overlay's input on cancellation or a screen change.
+pub fn reset_touch_input() {
+    crate::platform_impl::hardware_input::reset_touch_input();
+}
+
 pub fn send_hardware_key(usage: u16, pressed: bool, repeat: bool, modifiers: u8) {
     crate::platform_impl::hardware_input::send_key(usage, pressed, repeat, modifiers);
 }
