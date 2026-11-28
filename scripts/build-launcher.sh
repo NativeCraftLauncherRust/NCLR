@@ -68,6 +68,7 @@ manifest = {
     "profile": profile,
     "build_number": build_number,
     "commit": git("rev-parse", "HEAD"),
+    "dirty": bool(git("status", "--porcelain")),
     "worktree": git("status", "--porcelain"),
     "built_at": datetime.now(timezone.utc).isoformat(),
     "feature_download_concurrency": True,
