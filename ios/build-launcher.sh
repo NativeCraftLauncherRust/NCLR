@@ -41,7 +41,7 @@ cp "$ROOT/ios/Info-launcher.plist" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $DISPLAY_NAME" "$APP/Info.plist"
 
-cp "$ROOT/ios/icons/"*.png "$APP/"
+bash "$ROOT/ios/compile-app-icon.sh" "$APP" "$OUT" "$ROOT/ios/icons"
 mkdir -p "$APP/versions" "$APP/mods"
 
 codesign --force --sign - --timestamp=none "$APP/$APP_NAME"

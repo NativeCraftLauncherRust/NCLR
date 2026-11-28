@@ -10,10 +10,24 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+      - name: Verify Xcode 27
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          xcodebuild -version | grep -E '^Xcode 27(\.|$)'
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Validate Icon Composer assets
+        run: |
+          set -euxo pipefail
+          icon_test="$(mktemp -d)"
+          trap 'rm -rf "$icon_test"' EXIT
+          mkdir -p "$icon_test/NCLR.app"
+          cp ios/Info-launcher.plist "$icon_test/NCLR.app/Info.plist"
+          bash ios/compile-app-icon.sh "$icon_test/NCLR.app" "$icon_test" "$PWD/ios/icons"
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.100.0

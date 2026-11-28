@@ -87,27 +87,8 @@ if [ -n "${RESOURCE_DIR:-}" ]; then
     cp -R "$RESOURCE_DIR/"* "$APP/horizon-client/26.3/"
 fi
 
-if [ -n "${ICON_DIR:-}" ]; then
-    cp "$ICON_DIR/"*.png "$APP/"
-fi
-
-# Compile the app-icon catalogue. Loose PNGs alone left iOS to pick a size it
-# then had to scale; the catalogue gives every slot (and the marketing icon)
-# an exact image.
-ASSETS_CATALOG="$ROOT/ios/Assets.xcassets"
-if [ -d "$ASSETS_CATALOG" ]; then
-    ICON_PARTIAL="$OUT/AppIcon-partial.plist"
-    xcrun --sdk iphoneos actool \
-        --compile "$APP" \
-        --platform iphoneos \
-        --minimum-deployment-target 15.0 \
-        --app-icon AppIcon \
-        --output-partial-info-plist "$ICON_PARTIAL" \
-        "$ASSETS_CATALOG" > /dev/null
-    if [ -f "$ICON_PARTIAL" ]; then
-        /usr/libexec/PlistBuddy -c "Merge $ICON_PARTIAL" "$APP/Info.plist"
-    fi
-fi
+# Compile the native Icon Composer app icon before signing.
+bash "$ROOT/ios/compile-app-icon.sh" "$APP" "$OUT" "$ICON_DIR"
 
 # The shipped table bundle sits at the app root, where the shell looks it up by
 # name (pathForResource:@"ship" ofType:@"hzr3"). With it, a first run needs no
