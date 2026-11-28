@@ -454,6 +454,17 @@ static void NCLRInstallCrashHandlers(void) {
     }
 }
 
+/// Whether this display really shows extended range. The engine asks Metal for an
+/// HDR10 (PQ) swapchain, and some iPads answer yes even when the panel cannot show
+/// it: the picture then comes out black while the music keeps playing. Gate HDR on
+/// the screen's potential EDR headroom instead; an SDR screen gets SDR output.
+static BOOL NCLRDisplayOffersHDR(void) {
+    if (@available(iOS 16.0, *)) {
+        return UIScreen.mainScreen.potentialEDRHeadroom > 1.01;
+    }
+    return NO;
+}
+
 static NSString *NCLRWasmRefusalText(void) {
     NSString *path = [NCLRDocuments() stringByAppendingPathComponent:@"nclr-wasm-refusals.txt"];
     NSString *text = [NSString stringWithContentsOfFile:path
@@ -3594,7 +3605,17 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         fflush(stderr);
     }
     [[NCLRHardwareInput shared] start];
-    NCLRLog(@"engine start: resources=%@", resources.lastPathComponent);
+    // The engine picks HDR10 whenever the surface's colorspaces list it, and an
+    // SDR panel can still list it; on those screens the HDR10 frame presented
+    // black. "off" matches no HDR output name, so the renderer stays SDR.
+    BOOL displayHDR = NCLRDisplayOffersHDR();
+    if (displayHDR) {
+        unsetenv("HORIZON_HDR_OUTPUT");
+    } else {
+        setenv("HORIZON_HDR_OUTPUT", "off", 1);
+    }
+    NCLRLog(@"engine start: resources=%@ display_hdr=%d", resources.lastPathComponent,
+            displayHDR);
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
     NCLRLog(@"engine returned %d", result);
     [[NCLRHardwareInput shared] stop];
