@@ -2379,6 +2379,45 @@ index c748964..39bcc47 100644
          }
      }
  
+diff --git a/crates/horizon-client/src/game/runtime/frame_autotune.rs b/crates/horizon-client/src/game/runtime/frame_autotune.rs
+index 37af012..4f33a46 100644
+--- a/crates/horizon-client/src/game/runtime/frame_autotune.rs
++++ b/crates/horizon-client/src/game/runtime/frame_autotune.rs
+@@ -42,6 +42,34 @@ pub(super) fn observe(
+             culling.reset();
+         }
+     }
++    // A pack that misses the display's frame rate has one expensive pass to blame, and the
++    // player's log is the only place that can say which. Once per half minute, write each
++    // pass's GPU time (the same numbers the shader debug overlay shows).
++    if r.shader_pack_kind().is_some() {
++        static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
++        let now = std::time::Instant::now();
++        let due = LAST
++            .lock()
++            .map(|mut last| {
++                let due = (*last).is_none_or(|at| now.duration_since(at).as_secs() >= 30);
++                if due {
++                    *last = Some(now);
++                }
++                due
++            })
++            .unwrap_or(false);
++        if due {
++            let times = r.shader_pass_times();
++            if !times.is_empty() {
++                let line = times
++                    .iter()
++                    .map(|(name, ms)| format!("{}={ms:.1}", name.replace(' ', "_")))
++                    .collect::<Vec<_>>()
++                    .join(" ");
++                log::info!("Horizon: shader pack pass times (ms): {line}");
++            }
++        }
++    }
+     // Dynamic Resolution: gentle while a shader pack runs (its history starts over at each
+     // change), quick for Horizon's own renderer.
+     if g.dynamic_resolution {
 diff --git a/crates/horizon-client/src/game/runtime/loading_screen.rs b/crates/horizon-client/src/game/runtime/loading_screen.rs
 index 2511aa2..f276011 100644
 --- a/crates/horizon-client/src/game/runtime/loading_screen.rs
