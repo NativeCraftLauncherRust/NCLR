@@ -1451,7 +1451,13 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     if (fresh) {
         return;
     }
-    horizon_ios_hardware_mouse_motion(dx, -dy, x * scale, y * scale);
+    // The synthetic position is in the same space as notePointerAtPixel's: Y
+    // from the bottom of the window, which is what the game's iOS window takes.
+    CGPoint absolute = CGPointMake(x * scale, y * scale);
+    if (size.height > 0.0) {
+        absolute.y = size.height * scale - absolute.y;
+    }
+    horizon_ios_hardware_mouse_motion(dx, -dy, absolute.x, absolute.y);
 }
 
 - (void)notePointerAtPixel:(CGPoint)pixel {
