@@ -772,7 +772,7 @@ index b38a955..cb4f2a2 100644
          }
          state
 diff --git a/crates/horizon-client-render/src/touch/draw.rs b/crates/horizon-client-render/src/touch/draw.rs
-index 9e8d8e4..5abdaf4 100644
+index 9e8d8e4..94e69c8 100644
 --- a/crates/horizon-client-render/src/touch/draw.rs
 +++ b/crates/horizon-client-render/src/touch/draw.rs
 @@ -10,16 +10,42 @@
@@ -846,7 +846,7 @@ index 9e8d8e4..5abdaf4 100644
          }
          if let Some(point) = self.pointer() {
              let center = [point[0] * b.width, point[1] * b.height];
-@@ -52,6 +88,22 @@ impl TouchControls {
+@@ -52,6 +88,39 @@ impl TouchControls {
          }
      }
  
@@ -866,10 +866,27 @@ index 9e8d8e4..5abdaf4 100644
 +        );
 +    }
 +
++    /// The menu's ESC button: the same atlas, shape, opacity and label
++    /// treatment as the in-game keys, so the overlay looks like the rest of
++    /// the controls instead of a plain grey box.
++    pub fn draw_menu_escape(&self, b: &mut HudBatch, a: &HudAtlas, inventory: bool) {
++        let [x, y, w, h] = self.settings.menu_escape_rect(inventory, b.width, b.height);
++        let opacity = self.settings.menu_escape[if inventory { 0 } else { 1 }].opacity;
++        button(
++            b,
++            a,
++            [x, y, w, h],
++            "ESC",
++            false,
++            rgba(255, 255, 255, alpha(opacity)),
++            self.settings.button_style,
++        );
++    }
++
      /// Whether a control shows as held: its button is down, or it latched.
      fn held(&self, control: Control, state: &PadState) -> bool {
          if control == Control::Sneak && self.sneaking {
-@@ -64,30 +116,47 @@ impl TouchControls {
+@@ -64,30 +133,47 @@ impl TouchControls {
          })
      }
  
@@ -937,7 +954,7 @@ index 9e8d8e4..5abdaf4 100644
      }
  
      /// The joystick (a rim and a knob) or the D-pad (four arrow buttons).
-@@ -109,16 +178,17 @@ impl TouchControls {
+@@ -109,16 +195,17 @@ impl TouchControls {
              None if self.dynamic_joystick() => return,
              _ => p.center,
          };
@@ -960,7 +977,7 @@ index 9e8d8e4..5abdaf4 100644
          let [r, g, blue, opacity] = color.to_le_bytes();
          ring(b, a, middle, size / 2.0, color);
          disc(b, a, middle, size / 2.0, rgba(0, 0, 0, opacity / 3));
-@@ -147,14 +217,16 @@ fn knob(middle: [f32; 2], left: [f32; 2], size: f32) -> [f32; 2] {
+@@ -147,14 +234,16 @@ fn knob(middle: [f32; 2], left: [f32; 2], size: f32) -> [f32; 2] {
      ]
  }
  
@@ -984,7 +1001,7 @@ index 9e8d8e4..5abdaf4 100644
      ]
  }
  
-@@ -171,42 +243,36 @@ fn button(
+@@ -171,42 +260,36 @@ fn button(
      label: &str,
      pressed: bool,
      color: u32,
@@ -1046,7 +1063,7 @@ index 9e8d8e4..5abdaf4 100644
      };
      let drop = if pressed { (h / 18.0).min(2.0) } else { 0.0 };
      let width = HudBatch::text_width(a, label);
-@@ -219,15 +285,23 @@ fn button(
+@@ -219,15 +302,23 @@ fn button(
          text,
          true,
      );
@@ -1773,7 +1790,7 @@ index 78cfdee..b20da24 100644
  /// Cells cannot roll back: each copy merges all requesting rows, so stopping the whole
  /// start is how we ensure none of a refused mod's rows run.
 diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.rs
-index 55bd735..9f49e1a 100644
+index 55bd735..8fe7d50 100644
 --- a/crates/horizon-client/src/game.rs
 +++ b/crates/horizon-client/src/game.rs
 @@ -1113,6 +1113,10 @@ struct Game<'a> {
@@ -1814,7 +1831,7 @@ index 55bd735..9f49e1a 100644
          batch
      }
      fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
-@@ -5306,6 +5323,39 @@ impl Game<'_> {
+@@ -5306,6 +5323,32 @@ impl Game<'_> {
          self.draw_studio_bars(&mut batch);
          if show_hud {
              self.draw_pad_guide(&mut batch, guide_from);
@@ -1831,14 +1848,7 @@ index 55bd735..9f49e1a 100644
 +        if self.screen != Screen::Playing {
 +            let menu_inventory = matches!(self.screen, Screen::Inventory | Screen::Creative);
 +            if !self.hardware_input_attached() {
-+                let [x, y, w, h] = self.touch.settings.menu_escape_rect(
-+                    menu_inventory, batch.width, batch.height,
-+                );
-+                batch.fill(&self.gui.atlas, x, y, w, h, rgba(0, 0, 0, 210));
-+                if w > 2.0 && h > 2.0 {
-+                    batch.fill(&self.gui.atlas, x + 1.0, y + 1.0, w - 2.0, h - 2.0, rgba(90, 90, 90, 230));
-+                }
-+                self.native_text(&mut batch, "ESC", [x + w * 0.12, y + (h - 8.0).max(0.0) / 2.0], 0xFFFFFFFF, true);
++                self.touch.draw_menu_escape(&mut batch, &self.gui.atlas, menu_inventory);
 +                let menu_screen = match self.screen {
 +                    Screen::Inventory | Screen::Creative => Some(0),
 +                    Screen::Paused => Some(1),
@@ -1854,7 +1864,7 @@ index 55bd735..9f49e1a 100644
          }
          batch
      }
-@@ -10262,6 +10312,35 @@ impl Game<'_> {
+@@ -10262,6 +10305,35 @@ impl Game<'_> {
                      horizon_client::spans::time("recover_device", || self.recover_device())?;
                      self.observe_fullscreen();
                      self.sync_ime();
@@ -1890,7 +1900,7 @@ index 55bd735..9f49e1a 100644
                      let now = Instant::now();
                      horizon_threads::work::tick_start();
                      let elapsed = now.duration_since(self.previous);
-@@ -10701,6 +10780,8 @@ impl<'a> Game<'a> {
+@@ -10701,6 +10773,8 @@ impl<'a> Game<'a> {
              unclaimed_modifiers: None,
              focus_after_run: None,
              ime_allowed: false,
@@ -1899,7 +1909,7 @@ index 55bd735..9f49e1a 100644
              ime_area: None,
              focus_lost: None,
              modifiers: winit::keyboard::ModifiersState::empty(),
-@@ -10741,6 +10822,20 @@ impl<'a> Game<'a> {
+@@ -10741,6 +10815,20 @@ impl<'a> Game<'a> {
              previous: now,
              last_input: now,
              pad: Default::default(),

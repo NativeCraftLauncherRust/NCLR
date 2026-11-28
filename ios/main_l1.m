@@ -729,7 +729,10 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
                         regionForRequest:(UIPointerRegionRequest *)request
                            defaultRegion:(UIPointerRegion *)defaultRegion {
     UIView *view = interaction.view;
-    CGFloat scale = view.window.screen.scale > 0.0 ? view.window.screen.scale : 1.0;
+    // The interaction lives on the game's own view now, so the reported point
+    // is already in that view's coordinate space: only the view's scale stands
+    // between it and the drawable pixels the game counts in.
+    CGFloat scale = view.contentScaleFactor > 0.0 ? view.contentScaleFactor : 1.0;
     CGPoint point = request.location;
     NCLRNotePointerAtPixel(CGPointMake(point.x * scale, point.y * scale));
     return defaultRegion;
@@ -921,6 +924,17 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     return fallback;
 }
 
+/// The view the game actually draws into: winit's view controller owns it, and
+/// it can be inset or rotated inside the window. Attaching the pointer
+/// interaction to the window instead put every reported location off by that
+/// inset, which is the fixed gap between the system pointer and the game's own
+/// cursor.
+- (UIView *)pointerTargetView {
+    UIWindow *window = [self keyWindowForPointer];
+    UIView *view = window.rootViewController.view;
+    return view ?: window;
+}
+
 - (void)pointerLockStateChanged:(NSNotification *)note {
     (void)note;
     // The system drops the lock by itself (its own release gesture, a scene
@@ -1015,9 +1029,9 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
 }
 
 - (void)syncSystemPointerHidden {
-    UIWindow *window = [self keyWindowForPointer];
+    UIView *view = [self pointerTargetView];
     NCLRSystemPointerHidden = self.lockDesired && self.lockHeld;
-    if (self.pointerHiding && self.pointerHidingView == window) {
+    if (self.pointerHiding && self.pointerHidingView == view) {
         if (NCLRSystemPointerHidden != self.pointerHidden) {
             self.pointerHidden = NCLRSystemPointerHidden;
             [self.pointerHiding invalidate];
@@ -1029,13 +1043,13 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
         self.pointerHiding = nil;
         self.pointerHidingView = nil;
     }
-    if (!window) return;
+    if (!view) return;
     static NCLRHiddenPointerDelegate *hiddenPointer;
     if (!hiddenPointer) hiddenPointer = [NCLRHiddenPointerDelegate new];
     self.pointerHiding = [[UIPointerInteraction alloc] initWithDelegate:hiddenPointer];
-    self.pointerHidingView = window;
+    self.pointerHidingView = view;
     self.pointerHidden = NCLRSystemPointerHidden;
-    [window addInteraction:self.pointerHiding];
+    [view addInteraction:self.pointerHiding];
 }
 
 - (uint8_t)modifiersForInput:(GCKeyboardInput *)input {
@@ -1195,6 +1209,10 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     if ((horizon_ios_pointer_hidden() != 0) != self.lockDesired) {
         [self refreshPointerLock];
     }
+    UIView *surface = window.rootViewController.view;
+    CGFloat scale = (surface && surface.contentScaleFactor > 0.0)
+        ? surface.contentScaleFactor
+        : (screen.scale > 0.0 ? screen.scale : 1.0);
     if (!self.cursorReady || !CGSizeEqualToSize(self.cursorBounds, size)) {
         self.cursor = CGPointMake(size.width * 0.5, size.height * 0.5);
         self.cursorBounds = size;
@@ -1203,7 +1221,6 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     CGFloat x = fmax(0.0, fmin(size.width - 1.0, self.cursor.x + deltaX));
     CGFloat y = fmax(0.0, fmin(size.height - 1.0, self.cursor.y + deltaY));
     self.cursor = CGPointMake(x, y);
-    CGFloat scale = screen.scale > 0.0 ? screen.scale : 1.0;
     float dx = NCLRMouseSwapAxes ? deltaY : deltaX;
     float dy = NCLRMouseSwapAxes ? deltaX : deltaY;
     if (NCLRMouseInvertX) dx = -dx;
@@ -1226,16 +1243,14 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
         horizon_ios_hardware_mouse_motion(dx, -dy, position.x, position.y);
         return;
     }
-    // GameController reports pointer deltas in screen points, where y grows
-    // downward. The camera takes winit deltas, where a positive y looks up.
-    // Relative motion stays in points so the turn matches the cursor on every
-    // display scale; the pointer position is a drawable pixel. When the system
-    // pointer has reported a position, use it: the menu clicks then land under
-    // the pointer the player actually sees.
-    CGPoint cursorPixels = NCLRPointerPixel.x >= 0.0
-        ? NCLRPointerPixel
-        : CGPointMake(x * scale, y * scale);
-    horizon_ios_hardware_mouse_motion(dx, -dy, cursorPixels.x, cursorPixels.y);
+    // Menus: the game's cursor follows the real system pointer, never a
+    // synthetic one. Without a reported position there is nothing to send -
+    // starting from the middle and drifting by deltas is what made the two
+    // cursors wander apart.
+    if (!self.hasAbsolutePixel) {
+        return;
+    }
+    horizon_ios_hardware_mouse_motion(0.0, 0.0, self.lastAbsolutePixel.x, self.lastAbsolutePixel.y);
 }
 
 - (void)notePointerAtPixel:(CGPoint)pixel {
@@ -4448,7 +4463,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     [self.styleControl addTarget:self action:@selector(styleChanged:)
                 forControlEvents:UIControlEventValueChanged];
     UIStackView *settings = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.sizePresetControl, self.presetControl, self.styleControl, self.sizeRow, opacityRow,
+        @[self.styleControl, self.sizeRow, opacityRow,
           self.modeControl, dynamicRow, leftRow, sprintRow, sensitivityRow, deadzoneRow, sprintButtonRow, iconLabelsRow]];
     settings.axis = UILayoutConstraintAxisVertical;
     settings.spacing = 8.0;
@@ -4488,8 +4503,9 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
                          handler:^(__kindof UIAction *action) { [weakEditor resetLayoutTapped]; }],
     ]];
     more.showsMenuAsPrimaryAction = YES;
+    UIButton *addKeyTool = [self canvasTool:@"plus" label:@"添加触控键" action:@selector(addKeyTapped)];
     UIStackView *toolbar = [[UIStackView alloc] initWithArrangedSubviews:
-        @[self.canvasStatus, self.undoTool, self.redoTool, keyboardTool,
+        @[self.canvasStatus, self.undoTool, self.redoTool, addKeyTool, keyboardTool,
           self.gridTool, self.canvasClose, more]];
     toolbar.alignment = UIStackViewAlignmentCenter;
     toolbar.spacing = 2;
@@ -6970,6 +6986,28 @@ static CIContext *NCLRTransitionCIContext(void) {
 @property (nonatomic, strong) UIWindow *window;
 @end
 
+// The first launch asks for local-network access with a Bonjour browse. A
+// short request to the project host there also makes the app open a real
+// network path immediately, so the wireless-data prompt lands on the launcher
+// instead of in the middle of the first resource download.
+static void NCLRWarmUpNetwork(void) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([defaults boolForKey:@"NCLRNetworkWarmupDone"]) return;
+    [defaults setBool:YES forKey:@"NCLRNetworkWarmupDone"];
+    NSURLSessionConfiguration *config = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    config.timeoutIntervalForRequest = 3.0;
+    config.timeoutIntervalForResource = 3.0;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:config];
+    NSURLRequest *request = [NSURLRequest requestWithURL:[NSURL URLWithString:@"https://nclauncher.top/"]
+                                             cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                         timeoutInterval:3.0];
+    [[session dataTaskWithRequest:request
+               completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        (void)data; (void)response; (void)error;
+        [session finishTasksAndInvalidate];
+    }] resume];
+}
+
 @implementation NCLRSceneDelegate
 - (void)scene:(UIScene *)scene
     willConnectToSession:(UISceneSession *)session
@@ -6986,6 +7024,7 @@ static CIContext *NCLRTransitionCIContext(void) {
     self.window.windowLevel = UIWindowLevelNormal;
     [self.window makeKeyAndVisible];
     dispatch_async(dispatch_get_main_queue(), ^{
+        NCLRWarmUpNetwork();
         [[NCLRLocalNetworkPermission shared] askOnFirstLaunch];
     });
 }
