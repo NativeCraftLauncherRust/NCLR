@@ -2634,10 +2634,10 @@ index 2511aa2..f276011 100644
              App::Loading(loading) => loading.window_event(event_loop, id, event),
              App::Ready(game) => game.window_event(event_loop, id, event),
 diff --git a/crates/horizon-client/src/game/runtime/loading_window.rs b/crates/horizon-client/src/game/runtime/loading_window.rs
-index 041b72b..04f9cf6 100644
+index 041b72b..84a6565 100644
 --- a/crates/horizon-client/src/game/runtime/loading_window.rs
 +++ b/crates/horizon-client/src/game/runtime/loading_window.rs
-@@ -297,6 +297,16 @@ pub(super) fn start_game<'a>(
+@@ -297,6 +297,22 @@ pub(super) fn start_game<'a>(
          Some(settings) => settings,
          None => Settings::load(&Game::options_path()),
      };
@@ -2650,11 +2650,17 @@ index 041b72b..04f9cf6 100644
 +            };
 +        settings.vsync = true;
 +        settings.horizon.battery = false;
++        // Vanilla's AFK limit drops to 30 FPS after a minute without an input
++        // event, and a touch player moving the joystick generates none: the
++        // game looked like it "slid down to 30 FPS" until opening a screen
++        // counted as input again. On iOS the limit only applies when the app
++        // is minimised, not while someone is playing.
++        settings.inactivity_fps_limit = "minimized".into();
 +    }
      if let Some(d) = options.distance_override {
          settings.render_distance = d;
      }
-@@ -327,8 +337,11 @@ pub(super) fn start_game<'a>(
+@@ -327,8 +343,11 @@ pub(super) fn start_game<'a>(
      if game.options.benchmark.is_some() {
          // The same conditions on every machine: no VSync, no frame cap, no
          // pause or idle limit without focus. In memory only, never saved.
