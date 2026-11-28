@@ -11,27 +11,31 @@ BUNDLE_ID="${BUNDLE_ID:-dev.zrxmaxlnx.nclr}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(date -u +%Y%m%d%H%M)}"
 IPA_NAME="${IPA_NAME:-NCLR-Launcher-unsigned.ipa}"
 MAIN_SOURCE="${MAIN_SOURCE:-$ROOT/ios/main_launcher_only.m}"
-SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 OUT="${BUILD_DIR:-$ROOT/build-launcher}"
 APP="$OUT/$APP_NAME.app"
 DIST="${DIST_DIR:-$ROOT/dist-launcher}"
 
+source "$ROOT/scripts/ios-swift-support.sh"
+nclr_configure_ios_toolchain
+test -f "$MAIN_SOURCE"
+if nclr_uses_swift_sidebar "$MAIN_SOURCE"; then
+    bash "$ROOT/scripts/check-launcher-source.sh" "$MAIN_SOURCE"
+fi
+
 rm -rf "$OUT" "$DIST"
 mkdir -p "$APP" "$DIST"
 
-xcrun --sdk iphoneos clang \
-    -arch arm64 \
-    -mios-version-min=15.0 \
-    -isysroot "$SDK" \
-    -fobjc-arc \
-    -O2 \
+nclr_compile_ios_sources "$MAIN_SOURCE" "$OUT/Objects"
+
+"${IOS_LINKER[@]}" \
+    -Xlinker -rpath -Xlinker @executable_path/Frameworks \
     -framework UIKit \
     -framework Foundation \
     -framework CoreFoundation \
     -framework CoreGraphics \
     -framework QuartzCore \
     -framework Security \
-    "$MAIN_SOURCE" \
+    "${IOS_OBJECTS[@]}" \
     -o "$APP/$APP_NAME"
 
 cp "$ROOT/ios/Info-launcher.plist" "$APP/Info.plist"
@@ -40,10 +44,15 @@ cp "$ROOT/ios/Info-launcher.plist" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $APP_NAME" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $DISPLAY_NAME" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :MinimumOSVersion $IPHONEOS_DEPLOYMENT_TARGET" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleSupportedPlatforms:0 $BUNDLE_PLATFORM" "$APP/Info.plist"
 
 cp "$ROOT/ios/icons/"*.png "$APP/"
 mkdir -p "$APP/versions" "$APP/mods"
 
+if nclr_uses_swift_sidebar "$MAIN_SOURCE"; then
+    nclr_embed_swift_runtime "$APP" "$APP_NAME"
+fi
 codesign --force --sign - --timestamp=none "$APP/$APP_NAME"
 codesign --force --sign - --timestamp=none "$APP"
 

@@ -13,13 +13,16 @@ IPA_NAME="${IPA_NAME:-NCLR-unsigned.ipa}"
 DIST_DIR="${DIST_DIR:-$ROOT/dist}"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build-nclr}"
 
+source "$ROOT/scripts/ios-swift-support.sh"
+nclr_configure_ios_toolchain
+
 mkdir -p "$DIST_DIR"
 
 cd "$ROOT"
 bash scripts/check-launcher-source.sh "$MAIN_SOURCE"
 
-if [ ! -f "$TARGET_DIR/aarch64-apple-ios/$PROFILE/libhorizon_ios.a" ]; then
-    echo "missing static library: $TARGET_DIR/aarch64-apple-ios/$PROFILE/libhorizon_ios.a" >&2
+if [ ! -f "$TARGET_DIR/$RUST_TARGET/$PROFILE/libhorizon_ios.a" ]; then
+    echo "missing static library: $TARGET_DIR/$RUST_TARGET/$PROFILE/libhorizon_ios.a" >&2
     echo "prepare and build horizon-ios first" >&2
     exit 1
 fi
@@ -42,7 +45,7 @@ IPA="$DIST_DIR/$IPA_NAME"
 bash scripts/verify-launcher-ipa.sh "$IPA" "$MAIN_SOURCE"
 
 MANIFEST="$DIST_DIR/${IPA_NAME%.ipa}.manifest.json"
-python3 - "$ROOT" "$MAIN_SOURCE" "$IPA" "$MANIFEST" "$BUILD_NUMBER" "$PROFILE" <<'PY'
+python3 - "$ROOT" "$MAIN_SOURCE" "$IPA" "$MANIFEST" "$BUILD_NUMBER" "$PROFILE" "$IOS_TARGET" <<'PY'
 import hashlib
 import json
 import subprocess
@@ -56,15 +59,22 @@ ipa = Path(sys.argv[3])
 output = Path(sys.argv[4])
 build_number = sys.argv[5]
 profile = sys.argv[6]
+ios_target = sys.argv[7]
 
 def git(*args):
     return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
 
 digest = hashlib.sha256(ipa.read_bytes()).hexdigest()
+sources = [source, root / "ios/NCLRSidebar.swift", root / "ios/NCLRSidebar.h"]
 manifest = {
     "ipa": ipa.name,
     "sha256": digest,
     "source": str(source.relative_to(root)),
+    "source_sha256": {
+        str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sources
+    },
+    "ios_target": ios_target,
     "profile": profile,
     "build_number": build_number,
     "commit": git("rev-parse", "HEAD"),
