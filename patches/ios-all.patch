@@ -323,6 +323,35 @@ index f2d3b3a..4acedae 100644
          wgpu::Backends::GL => "OpenGL",
          _ => "graphics",
      }
+diff --git a/crates/horizon-client-render/src/gfx/pack_uniforms.rs b/crates/horizon-client-render/src/gfx/pack_uniforms.rs
+index 81e6cf7..dacc5db 100644
+--- a/crates/horizon-client-render/src/gfx/pack_uniforms.rs
++++ b/crates/horizon-client-render/src/gfx/pack_uniforms.rs
+@@ -151,6 +151,8 @@ pub struct PlayerStatus {
+     pub invisible: bool,
+     pub sneaking: bool,
+     pub sprinting: bool,
++    /// Health above zero (`is_alive`).
++    pub alive: bool,
+ }
+ 
+ /// `maxPlayerHunger`, `maxPlayerAir` and `maxPlayerArmor`: Minecraft's own maximums.
+@@ -334,6 +336,7 @@ pub const NAMES: &[&str] = &[
+     "is_invisible",
+     "is_sneaking",
+     "is_sprinting",
++    "is_alive",
+     "endFlashIntensity",
+     "endFlashPosition",
+     "ambientLight",
+@@ -1115,6 +1118,7 @@ fn status_value(name: &str, inputs: &PackInputs) -> Option<Value> {
+         "is_invisible" => flag(status.invisible || status.spectator),
+         "is_sneaking" => flag(status.sneaking),
+         "is_sprinting" => flag(status.sprinting),
++        "is_alive" => flag(status.alive),
+         "endFlashIntensity" => Value::f(&[inputs.end_flash]),
+         _ => return None,
+     })
 diff --git a/crates/horizon-client-render/src/settings.rs b/crates/horizon-client-render/src/settings.rs
 index 550d63c..7c07782 100644
 --- a/crates/horizon-client-render/src/settings.rs
@@ -2338,6 +2367,18 @@ index 16664ff..6e5ecd6 100644
          }
      }
      /// A Linux window manager can release the native pointer grab while the
+diff --git a/crates/horizon-client/src/game/interface/shader_packs.rs b/crates/horizon-client/src/game/interface/shader_packs.rs
+index c748964..39bcc47 100644
+--- a/crates/horizon-client/src/game/interface/shader_packs.rs
++++ b/crates/horizon-client/src/game/interface/shader_packs.rs
+@@ -631,6 +631,7 @@ impl Game<'_> {
+             invisible,
+             sneaking: p.pose == horizon_client::pose::Pose::Crouching,
+             sprinting: p.sprinting,
++            alive: p.health.health() > 0.0,
+         }
+     }
+ 
 diff --git a/crates/horizon-client/src/game/runtime/loading_screen.rs b/crates/horizon-client/src/game/runtime/loading_screen.rs
 index 2511aa2..f276011 100644
 --- a/crates/horizon-client/src/game/runtime/loading_screen.rs
