@@ -2729,7 +2729,7 @@ index 2511aa2..f276011 100644
              App::Loading(loading) => loading.window_event(event_loop, id, event),
              App::Ready(game) => game.window_event(event_loop, id, event),
 diff --git a/crates/horizon-client/src/game/runtime/loading_window.rs b/crates/horizon-client/src/game/runtime/loading_window.rs
-index 041b72b..bc5671a 100644
+index 041b72b..782a513 100644
 --- a/crates/horizon-client/src/game/runtime/loading_window.rs
 +++ b/crates/horizon-client/src/game/runtime/loading_window.rs
 @@ -297,6 +297,39 @@ pub(super) fn start_game<'a>(
@@ -2763,7 +2763,7 @@ index 041b72b..bc5671a 100644
 +            // start the resolution at a 50% floor and let Dynamic Resolution
 +            // climb toward 100% only while the frame time has room. A pack is
 +            // off, or has no option, this leaves the player's own setting.
-+            settings.horizon.resolution_scale = settings.horizon.resolution_scale.min(40);
++            settings.horizon.resolution_scale = settings.horizon.resolution_scale.min(30);
 +            settings.horizon.dynamic_resolution = true;
 +            // Reuse the shadow map while nothing that changes it has moved.
 +            settings.horizon.shadow_cache = true;
@@ -3390,23 +3390,34 @@ index 08e1688..932545a 100644
      config.epoch_interruption(ENGINE_CONFIG.1);
      config.max_wasm_stack(horizon_guest_stack::GUEST_STACK_BYTES);
 diff --git a/crates/horizon-shaders/src/config.rs b/crates/horizon-shaders/src/config.rs
-index 407abf0..153ecb6 100644
+index 407abf0..2e095c3 100644
 --- a/crates/horizon-shaders/src/config.rs
 +++ b/crates/horizon-shaders/src/config.rs
-@@ -411,6 +411,13 @@ impl Config {
+@@ -411,9 +411,23 @@ impl Config {
              "shadowMapResolution" => {
                  if let Some(n) = number(value).filter(|n| *n >= 1.0) {
                      s.resolution = (n as u32).min(16384);
 +                    // A phone or tablet cannot afford a 2048² shadow map at
-+                    // 120 Hz. 1024² is a quarter of the texels and the shadow
-+                    // is soft enough that the difference is hard to see.
++                    // 120 Hz: 768² is under a fifth of its texels.
 +                    #[cfg(target_os = "ios")]
 +                    {
-+                        s.resolution = s.resolution.min(1024);
++                        s.resolution = s.resolution.min(768);
 +                    }
++                }
++            }
++            "shadowDistance" => {
++                float(&mut s.distance);
++                // Fewer chunks in the shadow pass buys about what halving its
++                // resolution does, with less shimmer on the ground.
++                #[cfg(target_os = "ios")]
++                {
++                    s.distance = s.distance.min(96.0);
                  }
              }
-             "shadowDistance" => float(&mut s.distance),
+-            "shadowDistance" => float(&mut s.distance),
+             "shadowDistanceRenderMul" => float(&mut s.render_mul),
+             "voxelDistance" => float(&mut s.voxel_distance),
+             "shadowIntervalSize" => float(&mut s.interval),
 diff --git a/crates/horizon-threads/Cargo.toml b/crates/horizon-threads/Cargo.toml
 index 6d86d1f..ad08c0c 100644
 --- a/crates/horizon-threads/Cargo.toml
