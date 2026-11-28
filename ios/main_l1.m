@@ -830,6 +830,11 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     CGFloat scale = view.contentScaleFactor > 0.0 ? view.contentScaleFactor : 1.0;
     CGPoint point = request.location;
     NCLRNotePointerAtPixel(CGPointMake(point.x * scale, point.y * scale));
+    static BOOL logged;
+    if (!logged) {
+        logged = YES;
+        NCLRLog(@"pointer: UIPointerInteraction reports positions");
+    }
     return defaultRegion;
 }
 
@@ -850,6 +855,11 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     CGPoint point = [recognizer locationInView:view];
     CGFloat scale = view.contentScaleFactor > 0.0 ? view.contentScaleFactor : 1.0;
     NCLRNotePointerAtPixel(CGPointMake(point.x * scale, point.y * scale));
+    static BOOL logged;
+    if (!logged) {
+        logged = YES;
+        NCLRLog(@"pointer: UIHoverGestureRecognizer reports positions");
+    }
 }
 @end
 
@@ -879,6 +889,7 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
 @property (nonatomic, assign) BOOL middleLockout;
 @property (nonatomic, assign) CGPoint lastAbsolutePixel;
 @property (nonatomic, assign) BOOL hasAbsolutePixel;
+@property (nonatomic, assign) NSTimeInterval lastAbsoluteTime;
 @property (nonatomic, strong) NSTimer *buttonWatch;
 + (instancetype)shared;
 - (void)start;
@@ -1071,6 +1082,9 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     if (self.lockDesired) {
         [self requestPointerLock];
     }
+    // The window may have been missing when start() first attached the pointer
+    // gesture; make sure it is on the view before the state is read.
+    [self ensureHoverForView:[self pointerTargetView]];
     [self updateLockState];
 }
 
@@ -1103,6 +1117,7 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     BOOL desired = horizon_ios_pointer_hidden() != 0;
     if (desired != self.lockDesired) {
         self.lockDesired = desired;
+        NCLRLog(@"pointer: lock desired=%d", desired);
         // A menu opens with the lock still held: hide state has to follow the
         // new intent before UIKit answers, or the arrow stays hidden.
         [self syncSystemPointerHidden];
@@ -1357,6 +1372,9 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
 }
 
 - (void)applyMotionDX:(float)deltaX dy:(float)deltaY {
+    // Hover reports can be missed when the view appeared after start(); attach
+    // on the first mouse report as well.
+    [self ensureHoverForView:[self pointerTargetView]];
     UIWindow *window = nil;
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
@@ -1423,14 +1441,14 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
         horizon_ios_hardware_mouse_motion(dx, -dy, position.x, position.y);
         return;
     }
-    // Menus: the game's cursor follows the real system pointer, never a
-    // synthetic one. Without a reported position there is nothing to send -
-    // starting from the middle and drifting by deltas is what made the two
-    // cursors wander apart.
-    if (!self.hasAbsolutePixel) {
-        return;
-    }
-    horizon_ios_hardware_mouse_motion(0.0, 0.0, self.lastAbsolutePixel.x, self.lastAbsolutePixel.y);
+    // Menus: follow the real system pointer while its reports are fresh. When
+    // UIKit stops reporting (the pointer interaction was not asked for a
+    // region) fall back to the accumulated GCMouse position, so dragging still
+    // moves the game's cursor instead of freezing it where reports stopped.
+    NSTimeInterval now = CFAbsoluteTimeGetCurrent();
+    BOOL fresh = self.hasAbsolutePixel && now - self.lastAbsoluteTime < 0.3;
+    CGPoint position = fresh ? self.lastAbsolutePixel : CGPointMake(x * scale, y * scale);
+    horizon_ios_hardware_mouse_motion(dx, -dy, position.x, position.y);
 }
 
 - (void)notePointerAtPixel:(CGPoint)pixel {
@@ -1438,6 +1456,7 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     BOOL hadPrevious = self.hasAbsolutePixel;
     self.lastAbsolutePixel = pixel;
     self.hasAbsolutePixel = YES;
+    self.lastAbsoluteTime = CFAbsoluteTimeGetCurrent();
     NCLRPointerPixel = pixel;
     if (!self.lockDesired) {
         // Menus (or a stopped world): the game moves its cursor with the
