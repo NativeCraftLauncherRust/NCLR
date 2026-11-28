@@ -51,3 +51,31 @@ impl fmt::Display for OsError {
         write!(f, "os error")
     }
 }
+
+/// Callbacks the UIKit shell registers so it can own the text-input view: the
+/// engine's `set_ime_allowed` then asks the shell to show/hide its IME-capable
+/// text view, instead of making winit's plain key-input view first responder
+/// (which cannot compose Chinese).
+static IME_HOOKS: std::sync::Mutex<Option<(extern "C" fn(), extern "C" fn())>> =
+    std::sync::Mutex::new(None);
+
+pub fn set_ime_hooks(begin: Option<extern "C" fn()>, end: Option<extern "C" fn()>) {
+    if let Ok(mut hooks) = IME_HOOKS.lock() {
+        *hooks = begin.zip(end);
+    }
+}
+
+/// Runs the shell's begin/end hook for the requested IME state. True when a
+/// hook took the request, so winit must not touch the responder chain.
+pub fn run_ime_hook(allowed: bool) -> bool {
+    let hooks = IME_HOOKS.lock().ok().and_then(|hooks| *hooks);
+    let Some((begin, end)) = hooks else {
+        return false;
+    };
+    if allowed {
+        begin();
+    } else {
+        end();
+    }
+    true
+}

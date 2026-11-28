@@ -82,6 +82,34 @@ pub extern "C" fn horizon_ios_hardware_mouse_scroll(dx: f64, dy: f64) {
     let _ = (dx, dy);
 }
 
+/// Committed text from the shell's IME view. The game sees the same
+/// `WindowEvent::Ime(Commit)` a desktop input method sends, so the text lands
+/// in the focused box through `ime_commit` (dialog fields and Chinese both).
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_text_commit(value: *const c_char) {
+    #[cfg(target_os = "ios")]
+    if let Some(value) = text(value) {
+        winit::platform::ios::send_ime_commit(&value);
+    }
+    #[cfg(not(target_os = "ios"))]
+    let _ = value;
+}
+
+/// Hands the text-input view to the UIKit shell. While these hooks are
+/// installed, `set_ime_allowed` shows the shell's IME-capable view (a real
+/// UITextView, so a Chinese keyboard can compose) instead of winit's plain
+/// key-input view.
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_ios_set_text_input_hooks(
+    begin: Option<extern "C" fn()>,
+    end: Option<extern "C" fn()>,
+) {
+    #[cfg(target_os = "ios")]
+    winit::platform::ios::set_ime_hooks(begin, end);
+    #[cfg(not(target_os = "ios"))]
+    let _ = (begin, end);
+}
+
 /// Returns a NUL-terminated UTF-8 diagnostics string owned by this library.
 ///
 /// The pointer stays valid for the lifetime of the process.

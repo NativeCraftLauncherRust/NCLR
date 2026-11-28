@@ -25,6 +25,8 @@ extern void horizon_ios_hardware_key(uint16_t usage, int pressed, int repeat, ui
 extern void horizon_ios_hardware_mouse_motion(double dx, double dy, double x, double y);
 extern void horizon_ios_hardware_mouse_button(int button, int pressed);
 extern void horizon_ios_hardware_mouse_scroll(double dx, double dy);
+extern void horizon_ios_text_commit(const char *text);
+extern void horizon_ios_set_text_input_hooks(void (*begin)(void), void (*end)(void));
 
 // The game locks the iPadOS pointer while it is playing so a mouse dragged to
 // the screen edge cannot open the dock, Control Centre or the app switcher.
@@ -766,6 +768,9 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
 @property (nonatomic, assign) BOOL leftDown;
 @property (nonatomic, assign) BOOL rightDown;
 @property (nonatomic, assign) BOOL middleDown;
+@property (nonatomic, assign) BOOL leftLockout;
+@property (nonatomic, assign) BOOL rightLockout;
+@property (nonatomic, assign) BOOL middleLockout;
 @property (nonatomic, assign) CGPoint lastAbsolutePixel;
 @property (nonatomic, assign) BOOL hasAbsolutePixel;
 @property (nonatomic, strong) NSTimer *buttonWatch;
@@ -776,6 +781,8 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
 - (void)notePointerAtPixel:(CGPoint)pixel;
 - (void)setButton:(int)button down:(BOOL)down;
 - (void)reconcileButtons;
+- (void)reconcileButton:(int)button pressed:(BOOL)pressed lockout:(BOOL *)lockout;
+- (void)releaseAllButtons;
 - (void)refreshPointerLock;
 - (void)requestPointerLock;
 - (void)updateLockState;
@@ -867,7 +874,12 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
 }
 
 - (void)devicesChanged:(NSNotification *)note {
-    (void)note;
+    if ([note.name isEqualToString:UIApplicationWillResignActiveNotification] ||
+        [note.name isEqualToString:UIApplicationDidEnterBackgroundNotification]) {
+        // Leaving the app is another place a release never arrives; the game
+        // must not keep mining behind the launcher.
+        [self releaseAllButtons];
+    }
     __weak typeof(self) weakSelf = self;
     NCLRRunOnMain(^{ [weakSelf refreshDevices]; });
 }
@@ -970,7 +982,10 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     if (locked == self.lockHeld) return;
     self.lockHeld = locked;
     [self syncSystemPointerHidden];
-    [self reconcileButtons];
+    // A lock transition is the one moment a button's release can go missing:
+    // the press came down on one pointer path and the release leaves on the
+    // other. Release everything so no mining/use latch can survive it.
+    [self releaseAllButtons];
 }
 
 - (void)refreshPointerLock {
@@ -1001,11 +1016,43 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
         [self setButton:0 down:NO];
         [self setButton:1 down:NO];
         [self setButton:2 down:NO];
+        self.leftLockout = NO;
+        self.rightLockout = NO;
+        self.middleLockout = NO;
         return;
     }
-    [self setButton:0 down:mouse.mouseInput.leftButton.isPressed];
-    [self setButton:1 down:mouse.mouseInput.rightButton.isPressed];
-    [self setButton:2 down:mouse.mouseInput.middleButton.isPressed];
+    [self reconcileButton:0 pressed:mouse.mouseInput.leftButton.isPressed
+                  lockout:&_leftLockout];
+    [self reconcileButton:1 pressed:mouse.mouseInput.rightButton.isPressed
+                  lockout:&_rightLockout];
+    [self reconcileButton:2 pressed:mouse.mouseInput.middleButton.isPressed
+                  lockout:&_middleLockout];
+}
+
+/// One button's polled state. A lockout means the pointer path changed mid-press
+/// (granting or dropping the lock): we already told the game it came up, so the
+/// physical button stays out of the game until the finger/mouse really does
+/// let go, instead of silently pressing it again and wedging a mining latch.
+- (void)reconcileButton:(int)button pressed:(BOOL)pressed lockout:(BOOL *)lockout {
+    if (*lockout) {
+        if (pressed) return;
+        *lockout = NO;
+    }
+    [self setButton:button down:pressed];
+}
+
+/// The pointer path is about to change: release every button now, and keep the
+/// physically-held ones suppressed until they are released for real.
+- (void)releaseAllButtons {
+    GCMouse *mouse = self.mouse;
+    if (mouse) {
+        self.leftLockout = mouse.mouseInput.leftButton.isPressed;
+        self.rightLockout = mouse.mouseInput.rightButton.isPressed;
+        self.middleLockout = mouse.mouseInput.middleButton.isPressed;
+    }
+    [self setButton:0 down:NO];
+    [self setButton:1 down:NO];
+    [self setButton:2 down:NO];
 }
 
 - (void)setButton:(int)button down:(BOOL)down {
@@ -1171,6 +1218,9 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     for (int button = 0; button < 3; button++) {
         [self setButton:button down:NO];
     }
+    self.leftLockout = NO;
+    self.rightLockout = NO;
+    self.middleLockout = NO;
     self.cursorReady = NO;
     self.hasAbsolutePixel = NO;
     self.lastAbsolutePixel = CGPointMake(-1.0, -1.0);
@@ -7620,13 +7670,143 @@ static void NCLRWarmUpNetwork(void) {
 @interface NCLRAppDelegate : UIResponder <UIApplicationDelegate>
 @end
 
+static UIWindow *NCLRIMEKeyWindow(void) {
+    UIWindow *fallback = nil;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if (window.hidden || window.alpha < 0.01) continue;
+            if (window.isKeyWindow) return window;
+            if (!fallback) fallback = window;
+        }
+    }
+    return fallback;
+}
+
+// The shell owns the text-input responder while the game wants the keyboard.
+// Winit's view only implements UIKeyInput, which cannot compose Chinese; a real
+// UITextView can, and its committed text goes to the game as WindowEvent::Ime.
+@interface NCLRTextInput : NSObject <UITextViewDelegate>
+@property (nonatomic, strong) UITextView *textView;
+@property (nonatomic, copy) NSString *lastText;
++ (instancetype)shared;
+- (void)begin;
+- (void)end;
+@end
+
+@implementation NCLRTextInput
++ (instancetype)shared {
+    static NCLRTextInput *input;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ input = [[NCLRTextInput alloc] init]; });
+    return input;
+}
+
+- (void)begin {
+    UIWindow *window = NCLRIMEKeyWindow();
+    if (!window) return;
+    if (!self.textView) {
+        UITextView *view = [[UITextView alloc] initWithFrame:
+            CGRectMake(0.0, window.bounds.size.height - 1.0, 1.0, 1.0)];
+        view.backgroundColor = UIColor.clearColor;
+        view.tintColor = UIColor.clearColor;
+        view.alpha = 0.02;
+        view.keyboardType = UIKeyboardTypeDefault;
+        view.autocorrectionType = UITextAutocorrectionTypeNo;
+        view.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        view.spellCheckingType = UITextSpellCheckingTypeNo;
+        view.delegate = self;
+        self.textView = view;
+    }
+    self.textView.text = @"";
+    self.lastText = @"";
+    [window addSubview:self.textView];
+    [self.textView becomeFirstResponder];
+}
+
+- (void)end {
+    [self.textView resignFirstResponder];
+    [self.textView removeFromSuperview];
+    self.textView.text = @"";
+    self.lastText = @"";
+}
+
+- (void)textViewDidChange:(UITextView *)textView {
+    // While a Chinese keyboard composes, the text view holds marked (pinyin)
+    // text; only the committed string is text the game should receive.
+    if (textView.markedTextRange != nil) return;
+    [self flushText:textView.text ?: @""];
+}
+
+- (void)flushText:(NSString *)text {
+    NSString *previous = self.lastText ?: @"";
+    if ([text isEqualToString:previous]) return;
+    self.lastText = text;
+    if (text.length > previous.length && [text hasPrefix:previous]) {
+        [self commit:[text substringFromIndex:previous.length]];
+        return;
+    }
+    if (text.length < previous.length && [previous hasPrefix:text]) {
+        for (NSUInteger index = 0; index < previous.length - text.length; index++) {
+            [self backspace];
+        }
+        return;
+    }
+    NSUInteger prefix = 0;
+    NSUInteger limit = MIN(text.length, previous.length);
+    while (prefix < limit && [text characterAtIndex:prefix] == [previous characterAtIndex:prefix]) {
+        prefix++;
+    }
+    NSString *tail = [text substringFromIndex:prefix];
+    if (tail.length > 0) {
+        [self commit:tail];
+    } else {
+        [self backspace];
+    }
+}
+
+- (BOOL)textView:(UITextView *)textView
+    shouldChangeTextInRange:(NSRange)range
+            replacementText:(NSString *)text {
+    if ([text isEqualToString:@"\n"]) {
+        horizon_ios_hardware_key(0x28, 1, 0, 0);
+        horizon_ios_hardware_key(0x28, 0, 0, 0);
+        return NO;
+    }
+    return YES;
+}
+
+- (void)commit:(NSString *)text {
+    if (text.length == 0) return;
+    horizon_ios_text_commit(text.UTF8String);
+}
+
+- (void)backspace {
+    horizon_ios_hardware_key(0x2A, 1, 0, 0);
+    horizon_ios_hardware_key(0x2A, 0, 0, 0);
+}
+@end
+
+static void NCLRTextInputBeginHook(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [[NCLRTextInput shared] begin]; });
+}
+
+static void NCLRTextInputEndHook(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [[NCLRTextInput shared] end]; });
+}
+
 @implementation NCLRAppDelegate
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     // Reconnect the background download session a previous launch left, so its
     // delegate hears about the files it finished while the app was away.
     (void)[NCLRBackgroundDownloads shared];
+    horizon_ios_set_text_input_hooks(NCLRTextInputBeginHook, NCLRTextInputEndHook);
     return YES;
+}
+
+- (void)applicationDidEnterBackground:(UIApplication *)application {
+    [[NCLRTextInput shared] end];
 }
 
 - (void)application:(UIApplication *)application
