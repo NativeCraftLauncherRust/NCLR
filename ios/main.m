@@ -25,7 +25,7 @@ static NSString *const kNCLRResourceConcurrencyKey = @"NCLRResourceDownloadConcu
 
 static NSInteger NCLRResourceDownloadConcurrency(void) {
     NSInteger value = [[NSUserDefaults standardUserDefaults] integerForKey:kNCLRResourceConcurrencyKey];
-    return (value >= 1 && value <= 8) ? value : 4;
+    return (value >= 1 && value <= 64) ? value : 4;
 }
 
 // Set in main() before UIApplicationMain. The scene delegate must create the
@@ -476,7 +476,7 @@ static UIColor *NCLRColor(CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
 
     UISlider *slider = [[UISlider alloc] init];
     slider.minimumValue = 1.0;
-    slider.maximumValue = 8.0;
+    slider.maximumValue = 64.0;
     slider.minimumTrackTintColor = NCLRColor(0.55, 1.0, 0.78, 1.0);
     slider.maximumTrackTintColor = [UIColor colorWithWhite:1.0 alpha:0.18];
     slider.value = (float)savedConcurrency;
@@ -496,7 +496,7 @@ static UIColor *NCLRColor(CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
         activeSlider.accessibilityValue = [NSString stringWithFormat:@"%ld", (long)value];
     }] forControlEvents:UIControlEventValueChanged];
 
-    UILabel *rangeHint = [self label:@"1–8 个下载任务，默认 4。数值越高越容易占满带宽。" size:11.0 weight:UIFontWeightRegular color:NCLRColor(0.48, 0.57, 0.66, 1.0)];
+    UILabel *rangeHint = [self label:@"1–64 个下载任务，默认 4。数值越高越容易占满带宽。" size:11.0 weight:UIFontWeightRegular color:NCLRColor(0.48, 0.57, 0.66, 1.0)];
     rangeHint.numberOfLines = 0;
     [stack addArrangedSubview:concurrencyHeader];
     [stack addArrangedSubview:slider];

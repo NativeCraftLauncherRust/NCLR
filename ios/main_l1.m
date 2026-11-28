@@ -247,7 +247,7 @@ static BOOL NCLRPageTransitionBlurEnabled(void) {
 
 static NSInteger NCLRResourceDownloadConcurrency(void) {
     NSInteger value = [[NSUserDefaults standardUserDefaults] integerForKey:kNCLRResourceConcurrencyKey];
-    return (value >= 1 && value <= 8) ? value : 4;
+    return (value >= 1 && value <= 64) ? value : 4;
 }
 
 static void NCLRThemeResolveFromTraitCollection(UITraitCollection *traitCollection) {
@@ -3919,7 +3919,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     concurrencyHeader.translatesAutoresizingMaskIntoConstraints = NO;
     UISlider *concurrencySlider = [[UISlider alloc] init];
     concurrencySlider.minimumValue = 1.0;
-    concurrencySlider.maximumValue = 8.0;
+    concurrencySlider.maximumValue = 64.0;
     concurrencySlider.value = (float)savedConcurrency;
     concurrencySlider.minimumTrackTintColor = NCLRAccent();
     concurrencySlider.translatesAutoresizingMaskIntoConstraints = NO;
@@ -3927,7 +3927,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     concurrencySlider.accessibilityValue = [NSString stringWithFormat:@"%ld", (long)savedConcurrency];
     [concurrencySlider addTarget:self action:@selector(downloadConcurrencyChanged:)
                 forControlEvents:UIControlEventValueChanged];
-    UILabel *concurrencyHint = [self label:@"同时下载 1–8 个资源文件，默认 4 路。修改后于下一次资源下载生效。"
+    UILabel *concurrencyHint = [self label:@"同时下载 1–64 个资源文件，默认 4 路。修改后于下一次资源下载生效。"
                                       size:11.0 weight:UIFontWeightRegular
                                      color:NCLRColor(0.58, 0.58, 0.58, 1.0)];
     UIStackView *downloadsStack = [[UIStackView alloc] initWithArrangedSubviews:
@@ -5640,6 +5640,9 @@ static NSString *NCLRSHA1Hex(NSData *data) {
     configuration.URLCache = nil;
     configuration.timeoutIntervalForRequest = 20;
     configuration.timeoutIntervalForResource = 180;
+    // One asset host (resources.download.minecraft.net) serves every object, so
+    // the per-host connection limit has to follow the concurrency setting.
+    configuration.HTTPMaximumConnectionsPerHost = NCLRResourceDownloadConcurrency();
     self.downloadSession = [NSURLSession sessionWithConfiguration:configuration];
 
     dispatch_async(_queue, ^{

@@ -413,7 +413,7 @@ fn fetch_into(version: &str, jar_dir: &str, store_dir: &str) -> Result<(), Strin
     let concurrency = std::env::var("NCLR_RESOURCE_DOWNLOAD_CONCURRENCY")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
-        .map(|value| value.clamp(1, 8))
+        .map(|value| value.clamp(1, 64))
         .unwrap_or(4);
     // The download itself is public. A release build sets HORIZON_ACCESS_TOKEN
     // once the player signs in, and then a first run has to prove ownership

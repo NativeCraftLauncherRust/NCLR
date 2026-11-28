@@ -51,7 +51,11 @@ impl HttpTransport {
                 // finish. The read timeout only fires when no bytes arrive.
                 .timeout_read(Duration::from_secs(45))
                 .timeout_write(Duration::from_secs(45))
-                .max_idle_connections_per_host(8)
+                // Keep enough idle sockets to reuse them across a wide asset
+                // download. Every object comes from one CDN host, so the
+                // per-host pool has to reach the concurrency ceiling (64).
+                .max_idle_connections(128)
+                .max_idle_connections_per_host(64)
                 .build(),
         }
     }
