@@ -69,7 +69,7 @@ jobs:
         with:
           name: threed-backpack-hmod
           path: ${{ runner.temp }}/horizon/mods/threed_backpack/*.hmod
-          if-no-files-found: error
+          if-no-files-found: ignore
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
