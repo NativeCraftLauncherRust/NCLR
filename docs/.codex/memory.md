@@ -18,3 +18,9 @@ Last reviewed 2026-11-28
 - `scripts/check-launcher-source.sh --compile` 可编译检查混合 UI，`scripts/verify-launcher-ipa.sh` 检查侧边栏定义、SwiftUI 依赖、运行库和最低系统版本。
 - `ios/main.m` 的并发下载实现不会进入 `ios/main_l1.m` 的产物；功能需要同时检查入口源码和最终 IPA 符号。
 - `scripts/build-launcher.sh` 会在 `dist/` 生成同名 manifest，记录提交、工作区状态、入口和 SHA-256。
+
+- WASM 标准库资源由 `ios/wasm-std/manifest.json` 定义，完整构建入口默认强制校验并打包整个兼容集合。`WASM_STD` 继续支持附加旧单文件。
+- `scripts/verify-wasm-ipa.py` 校验最终 IPA 的完整清单、成员哈希与构建身份，再通过生产加载器的 Pulley64 后端检查 TouchController 的链接、API 和初始化。通过后才发布正式 IPA 文件名，CI 同时上传身份 manifest。
+- `patches/ios-all.patch` 保留加载器发现、去重、多候选诊断及发布 verifier。准备脚本在检查基础补丁前暂时移除触控叠加补丁，检查失败也会恢复它。设置 Git 发现边界，避免仓库内解压的 vendor 树因上层 Git 跳过补丁并误报成功。回归实际核对新增文件、连续准备后的字节一致性和两个补丁的反向检查。已有准备树的额外源码修改需保留。
+- `scripts/test-wasm-std.py --ipa /path/to/app.ipa` 覆盖候选损坏、不兼容回退、旧单文件、哈希不符、API 布局拒绝、构建前失败保护，以及最终 IPA 删改资源。宿主机检查与真机游戏验收分别记录。
+- 历史 `horizon-wasm-std.wasm` 的完整编译器与 SDK 来源未核实，清单以 null 如实记录。1.99.1 成员已用固定 SDK 重建并核对完整字节。

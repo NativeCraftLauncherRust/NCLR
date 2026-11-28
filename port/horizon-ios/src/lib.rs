@@ -212,6 +212,7 @@ pub extern "C" fn horizon_ios_run(resources: *const c_char, game_dir: *const c_c
             );
             // The launcher's Mods page reads this after the run; a refused
             // behaviour also disables that mod's content (`startup_refused`).
+            let _ = WASM_REFUSAL_REPORT.set(launch.context.game_dir.join("nclr-wasm-refusals.txt"));
             let report: String = wasm
                 .refused
                 .iter()
@@ -227,7 +228,17 @@ pub extern "C" fn horizon_ios_run(resources: *const c_char, game_dir: *const c_c
             (ids, wasm)
         },
         horizon_client::entry::CodeRuntime {
-            initialize: horizon_mod_wasm::initialize,
+            initialize: |inventory| {
+                horizon_mod_wasm::initialize(inventory);
+                if let Some(path) = WASM_REFUSAL_REPORT.get() {
+                    let report: String = horizon_mod_wasm::refused().iter()
+                        .map(|(id, why)| format!("{id}\t{why}\n"))
+                        .collect();
+                    if let Err(error) = std::fs::write(path, report) {
+                        eprintln!("write wasm initialization refusals: {error}");
+                    }
+                }
+            },
             refusal: |id| horizon_mod_wasm::refusal(id).map(|reason| reason.to_string()),
             startup_refused: |id| {
                 horizon_mod_wasm::refused()
@@ -239,6 +250,8 @@ pub extern "C" fn horizon_ios_run(resources: *const c_char, game_dir: *const c_c
     );
     0
 }
+static WASM_REFUSAL_REPORT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
 /// The resource tables a prepared folder cannot boot without (`route3/AUDIT.md`).
 ///
 /// Only the ones the device cannot derive: `assets/`, `data/` and most of

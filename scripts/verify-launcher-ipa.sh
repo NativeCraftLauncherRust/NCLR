@@ -8,6 +8,7 @@ SOURCE="${2:-$ROOT/ios/main_l1.m}"
 
 test -f "$IPA"
 test -f "$SOURCE"
+python3 "$ROOT/scripts/verify-wasm-ipa.py" "$IPA"
 bash "$ROOT/scripts/check-launcher-source.sh" "$SOURCE"
 source "$ROOT/scripts/ios-swift-support.sh"
 nclr_configure_ios_toolchain

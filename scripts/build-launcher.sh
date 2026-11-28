@@ -42,7 +42,6 @@ DIST_DIR="$DIST_DIR" \
 bash ios/build.sh
 
 IPA="$DIST_DIR/$IPA_NAME"
-bash scripts/verify-launcher-ipa.sh "$IPA" "$MAIN_SOURCE"
 
 MANIFEST="$DIST_DIR/${IPA_NAME%.ipa}.manifest.json"
 python3 - "$ROOT" "$MAIN_SOURCE" "$IPA" "$MANIFEST" "$BUILD_NUMBER" "$PROFILE" "$IOS_TARGET" <<'PY'
@@ -50,6 +49,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -66,7 +66,14 @@ def git(*args):
 
 digest = hashlib.sha256(ipa.read_bytes()).hexdigest()
 sources = [source, root / "ios/NCLRSidebar.swift", root / "ios/NCLRSidebar.h"]
+with zipfile.ZipFile(ipa) as archive:
+    names = [name for name in archive.namelist() if name.startswith("Payload/") and name.endswith(".app/nclr-build.json")]
+    if len(names) != 1:
+        raise SystemExit("expected one engine build identity in IPA")
+    engine_build = json.loads(archive.read(names[0]))
 manifest = {
+    "wasm_runtime_check": json.loads(output.read_text())["wasm_runtime_check"],
+    "engine": engine_build,
     "ipa": ipa.name,
     "sha256": digest,
     "source": str(source.relative_to(root)),
