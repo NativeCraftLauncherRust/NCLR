@@ -688,6 +688,11 @@ static void NCLRRestoreVisibleKeyWindow(void) {
     }
 }
 
+// The system pointer's position in drawable pixels, or (-1, -1) before the
+// first report. The game's menu cursor follows it so clicks land under the
+// visible pointer instead of a virtual cursor drifting from it.
+static CGPoint NCLRPointerPixel = {-1.0, -1.0};
+
 // The game draws its own crosshair, and a captured pointer means the player is
 // turning the camera. Hide the system arrow then, and restore it whenever the
 // game releases the pointer so menus keep a usable cursor.
@@ -698,8 +703,13 @@ static void NCLRRestoreVisibleKeyWindow(void) {
 - (UIPointerRegion *)pointerInteraction:(UIPointerInteraction *)interaction
                         regionForRequest:(UIPointerRegionRequest *)request
                            defaultRegion:(UIPointerRegion *)defaultRegion {
-    (void)interaction;
-    (void)request;
+    UIView *view = interaction.view;
+    CGFloat scale = view.window.screen.scale > 0.0 ? view.window.screen.scale : 1.0;
+    CGPoint point = request.location;
+    NCLRPointerPixel = CGPointMake(point.x * scale, point.y * scale);
+    // Re-send the absolute position so the game's GUI cursor sits exactly
+    // where the system pointer is drawn.
+    horizon_ios_hardware_mouse_motion(0.0, 0.0, NCLRPointerPixel.x, NCLRPointerPixel.y);
     return defaultRegion;
 }
 
@@ -707,7 +717,10 @@ static void NCLRRestoreVisibleKeyWindow(void) {
                          styleForRegion:(UIPointerRegion *)region {
     (void)interaction;
     (void)region;
-    return [UIPointerStyle hiddenPointerStyle];
+    if (horizon_ios_pointer_hidden() != 0) {
+        return [UIPointerStyle hiddenPointerStyle];
+    }
+    return nil;
 }
 @end
 
@@ -725,6 +738,7 @@ static void NCLRRestoreVisibleKeyWindow(void) {
 @property (nonatomic, assign) NSInteger mouseMissTicks;
 @property (nonatomic, strong) UIPointerInteraction *pointerHiding;
 @property (nonatomic, weak) UIView *pointerHidingView;
+@property (nonatomic, assign) BOOL pointerHidden;
 + (instancetype)shared;
 - (void)start;
 - (void)stop;
@@ -837,29 +851,25 @@ static void NCLRRestoreVisibleKeyWindow(void) {
 }
 
 - (void)syncSystemPointerHidden {
-    BOOL hide = horizon_ios_pointer_hidden() != 0 && self.mouse != nil;
-    if (!hide) {
-        if (self.pointerHiding) {
-            [self.pointerHidingView removeInteraction:self.pointerHiding];
-        }
-        self.pointerHiding = nil;
-        self.pointerHidingView = nil;
-        return;
-    }
+    BOOL hide = horizon_ios_pointer_hidden() != 0;
     UIWindow *window = nil;
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
-            if (candidate.isKeyWindow && !candidate.hidden) {
-                window = candidate;
-                break;
-            }
+            if (candidate.hidden || candidate.alpha < 0.01) continue;
+            if (candidate.isKeyWindow) { window = candidate; break; }
+            if (!window) window = candidate;
         }
-        if (window) break;
+        if (window != nil && window.isKeyWindow) break;
     }
-    UIView *view = window.rootViewController.view;
-    if (!view) return;
-    if (self.pointerHiding && self.pointerHidingView == view) return;
+    if (!window) return;
+    if (self.pointerHiding && self.pointerHidingView == window) {
+        if (hide != self.pointerHidden) {
+            self.pointerHidden = hide;
+            [self.pointerHiding invalidate];
+        }
+        return;
+    }
     if (self.pointerHiding) {
         [self.pointerHidingView removeInteraction:self.pointerHiding];
         self.pointerHiding = nil;
@@ -868,8 +878,9 @@ static void NCLRRestoreVisibleKeyWindow(void) {
     static NCLRHiddenPointerDelegate *hiddenPointer;
     if (!hiddenPointer) hiddenPointer = [NCLRHiddenPointerDelegate new];
     self.pointerHiding = [[UIPointerInteraction alloc] initWithDelegate:hiddenPointer];
-    self.pointerHidingView = view;
-    [view addInteraction:self.pointerHiding];
+    self.pointerHidingView = window;
+    self.pointerHidden = hide;
+    [window addInteraction:self.pointerHiding];
 }
 
 - (uint8_t)modifiersForInput:(GCKeyboardInput *)input {
@@ -1048,8 +1059,13 @@ static void NCLRRestoreVisibleKeyWindow(void) {
     // GameController reports pointer deltas in screen points, where y grows
     // downward. The camera takes winit deltas, where a positive y looks up.
     // Relative motion stays in points so the turn matches the cursor on every
-    // display scale; the pointer position is a drawable pixel.
-    horizon_ios_hardware_mouse_motion(dx, -dy, x * scale, y * scale);
+    // display scale; the pointer position is a drawable pixel. When the system
+    // pointer has reported a position, use it: the menu clicks then land under
+    // the pointer the player actually sees.
+    CGPoint cursorPixels = NCLRPointerPixel.x >= 0.0
+        ? NCLRPointerPixel
+        : CGPointMake(x * scale, y * scale);
+    horizon_ios_hardware_mouse_motion(dx, -dy, cursorPixels.x, cursorPixels.y);
 }
 @end
 
