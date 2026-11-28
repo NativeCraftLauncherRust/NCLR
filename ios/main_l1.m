@@ -2096,6 +2096,159 @@ static NSDictionary *NCLRActiveTexture(NSDictionary *profile, NSString *key) {
     return nil;
 }
 
+#pragma mark - Skin library
+
+// Skins the player imported, beside the game in `Documents/skins`, with the
+// chosen one in `index.json`. A premium account uploads the file to Microsoft
+// when it is applied; an offline account only records it in its own JSON, so
+// the engine reads it through HORIZON_OFFLINE_SKIN at launch.
+static NSString *NCLRSkinsDirectory(void) {
+    NSString *directory = [NCLRDocuments() stringByAppendingPathComponent:@"skins"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                              withIntermediateDirectories:YES attributes:nil error:nil];
+    return directory;
+}
+
+static NSString *NCLRSkinIndexPath(void) {
+    return [NCLRSkinsDirectory() stringByAppendingPathComponent:@"index.json"];
+}
+
+static NSMutableDictionary *NCLRSkinIndex(void) {
+    NSData *data = [NSData dataWithContentsOfFile:NCLRSkinIndexPath()];
+    id json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if ([json isKindOfClass:NSDictionary.class] && [json[@"skins"] isKindOfClass:NSArray.class]) {
+        return [NSMutableDictionary dictionaryWithDictionary:@{
+            @"skins": [json[@"skins"] mutableCopy] ?: [NSMutableArray array],
+            @"active": NCLRString(json[@"active"]) ?: @"",
+        }];
+    }
+    return [NSMutableDictionary dictionaryWithDictionary:
+        @{ @"skins": [NSMutableArray array], @"active": @"" }];
+}
+
+static void NCLRSaveSkinIndex(NSDictionary *index) {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:index options:0 error:nil];
+    [data writeToFile:NCLRSkinIndexPath() atomically:YES];
+}
+
+static NSArray<NSDictionary *> *NCLRSkins(void) {
+    return NCLRSkinIndex()[@"skins"] ?: @[];
+}
+
+static NSDictionary *NCLRSkinWithId(NSString *identifier) {
+    if (identifier.length == 0) return nil;
+    for (NSDictionary *skin in NCLRSkins()) {
+        if ([NCLRString(skin[@"id"]) isEqualToString:identifier]) return skin;
+    }
+    return nil;
+}
+
+static NSDictionary *NCLRActiveSkin(void) {
+    NSDictionary *skin = NCLRSkinWithId(NCLRString(NCLRSkinIndex()[@"active"]) ?: @"");
+    return skin ?: NCLRSkins().firstObject;
+}
+
+static NSString *NCLRSkinPath(NSDictionary *skin) {
+    NSString *file = NCLRString(skin[@"file"]);
+    if (file.length == 0) file = NCLRString(skin[@"id"]);
+    if (file.length == 0) return nil;
+    return [NCLRSkinsDirectory() stringByAppendingPathComponent:file];
+}
+
+static BOOL NCLRSkinIsSlim(NSDictionary *skin) {
+    return [NCLRString(skin[@"variant"]).lowercaseString isEqualToString:@"slim"];
+}
+
+static BOOL NCLRSkinPngIsValid(NSData *data) {
+    UIImage *image = data ? [UIImage imageWithData:data] : nil;
+    CGImageRef cg = image.CGImage;
+    if (!cg) return NO;
+    size_t width = CGImageGetWidth(cg);
+    size_t height = CGImageGetHeight(cg);
+    return width == 64 && (height == 64 || height == 32);
+}
+
+static UIImage *NCLRSkinHeadImage(UIImage *skin) {
+    CGImageRef cg = skin.CGImage;
+    if (!cg) return nil;
+    CGFloat unit = CGImageGetWidth(cg) / 64.0;
+    CGRect rect = CGRectMake(8.0 * unit, 8.0 * unit, 8.0 * unit, 8.0 * unit);
+    CGImageRef head = CGImageCreateWithImageInRect(cg, rect);
+    if (!head) return nil;
+    UIImage *image = [UIImage imageWithCGImage:head];
+    CGImageRelease(head);
+    return image;
+}
+
+static void NCLRSetActiveSkin(NSString *identifier) {
+    NSMutableDictionary *index = NCLRSkinIndex();
+    index[@"active"] = identifier ?: @"";
+    NCLRSaveSkinIndex(index);
+}
+
+static BOOL NCLRUpdateSkinVariant(NSString *identifier, BOOL slim) {
+    NSMutableDictionary *index = NCLRSkinIndex();
+    NSMutableArray *skins = index[@"skins"];
+    for (NSInteger position = 0; position < (NSInteger)skins.count; position++) {
+        if (![NCLRString(skins[position][@"id"]) isEqualToString:identifier]) continue;
+        NSMutableDictionary *skin = [skins[position] mutableCopy];
+        skin[@"variant"] = slim ? @"slim" : @"classic";
+        skins[position] = skin;
+        index[@"skins"] = skins;
+        NCLRSaveSkinIndex(index);
+        return YES;
+    }
+    return NO;
+}
+
+static BOOL NCLRApplySkinToOfflineProfile(NSDictionary *skin) {
+    NSDictionary *profile = NCLRActiveOfflineProfile();
+    NSString *file = NCLRString(profile[@"file"]);
+    if (file.length == 0) return NO;
+    NSString *path = [NCLROfflineDirectory() stringByAppendingPathComponent:file];
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    id json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    NSMutableDictionary *account = [json isKindOfClass:NSDictionary.class]
+        ? [json mutableCopy] : [NSMutableDictionary dictionary];
+    account[@"skin"] = NCLRSkinPath(skin) ?: @"";
+    account[@"slim"] = @(NCLRSkinIsSlim(skin));
+    NSData *out = [NSJSONSerialization dataWithJSONObject:account options:0 error:nil];
+    return out && [out writeToFile:path atomically:YES];
+}
+
+static void NCLRCacheSkinForPremium(NSString *uuid, NSDictionary *skin) {
+    if (uuid.length != 32) return;
+    NSString *source = NCLRSkinPath(skin);
+    NSString *cache = NCLRTextureCache(uuid, @"skin.png");
+    if (source.length && cache.length) {
+        [[NSFileManager defaultManager] removeItemAtPath:cache error:nil];
+        [[NSFileManager defaultManager] copyItemAtPath:source toPath:cache error:nil];
+    }
+    NSMutableDictionary *appearance = [NCLRReadAppearance(uuid) mutableCopy]
+        ?: [NSMutableDictionary dictionaryWithDictionary:
+            @{ @"id": uuid, @"skins": @[], @"capes": @[] }];
+    appearance[@"skins"] = @[@{
+        @"state": @"ACTIVE",
+        @"variant": NCLRSkinIsSlim(skin) ? @"slim" : @"classic",
+        @"url": @"",
+    }];
+    NCLRSaveAppearance(appearance);
+}
+
+static NSData *NCLRSkinMultipartBody(NSString *boundary, NSString *variant, NSData *png) {
+    NSMutableData *body = [NSMutableData data];
+    [body appendData:[[NSString stringWithFormat:
+        @"--%@\r\nContent-Disposition: form-data; name=\"variant\"\r\n\r\n%@\r\n",
+        boundary, variant] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:
+        @"--%@\r\nContent-Disposition: form-data; name=\"file\"; filename=\"skin.png\"\r\nContent-Type: image/png\r\n\r\n",
+        boundary] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:png];
+    [body appendData:[[NSString stringWithFormat:@"\r\n--%@--\r\n", boundary]
+        dataUsingEncoding:NSUTF8StringEncoding]];
+    return body;
+}
+
 static void NCLRFetchTexture(NSDictionary *entry, void (^completion)(UIImage *)) {
     NSString *source = NCLRString(entry[@"url"]);
     NSURLComponents *parts = source ? [NSURLComponents componentsWithString:source] : nil;
@@ -2128,6 +2281,9 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
 - (void)logout;
 - (void)fetchProfileWithToken:(NSString *)token completion:(NCLRAuthCompletion)completion;
 - (void)refreshAppearance:(void (^)(NSDictionary *profile))completion;
+- (void)uploadSkinData:(NSData *)png
+               variant:(NSString *)variant
+            completion:(void (^)(NSString *error))completion;
 @property (nonatomic, copy) NSString *token;
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, assign) BOOL developerPremium;
@@ -2530,6 +2686,48 @@ typedef void (^NCLRAuthCompletion)(NSString *token, NSString *name, NSString *er
             if (![profile isKindOfClass:NSDictionary.class] || ![profile[@"id"] isEqualToString:uuid]) return;
             NCLRSaveAppearance(profile);
             completion(profile);
+        });
+    }] resume];
+}
+
+- (void)uploadSkinData:(NSData *)png
+               variant:(NSString *)variant
+            completion:(void (^)(NSString *))completion {
+    if (png.length == 0) {
+        completion(@"皮肤文件为空");
+        return;
+    }
+    if (self.token.length == 0) {
+        completion(@"请先登录 Microsoft 正版账号");
+        return;
+    }
+    NSString *boundary = [NSString stringWithFormat:@"NCLR-%@", NSUUID.UUID.UUIDString];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:
+        [NSURL URLWithString:@"https://api.minecraftservices.com/minecraft/profile/skins"]];
+    request.HTTPMethod = @"POST";
+    request.timeoutInterval = 25.0;
+    [request setValue:[@"Bearer " stringByAppendingString:self.token] forHTTPHeaderField:@"Authorization"];
+    [request setValue:[@"multipart/form-data; boundary=" stringByAppendingString:boundary]
+   forHTTPHeaderField:@"Content-Type"];
+    request.HTTPBody = NCLRSkinMultipartBody(boundary, variant ?: @"classic", png);
+    [[NSURLSession.sharedSession dataTaskWithRequest:request
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSInteger status = [(NSHTTPURLResponse *)response statusCode];
+        NSDictionary *json = data.length
+            ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (error) {
+                completion(error.localizedDescription ?: @"无法连接 Minecraft 皮肤服务");
+                return;
+            }
+            if (status == 200 || status == 204) {
+                completion(nil);
+                return;
+            }
+            NSString *message = [json isKindOfClass:NSDictionary.class]
+                ? (NCLRString(json[@"errorMessage"]) ?: NCLRString(json[@"path"])) : nil;
+            completion(message.length ? message
+                : [NSString stringWithFormat:@"同步失败（HTTP %ld）", (long)status]);
         });
     }] resume];
 }
@@ -3718,7 +3916,7 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
 }
 @end
 
-@interface NCLRAccountController : NCLRPageController
+@interface NCLRAccountController : NCLRPageController <UIDocumentPickerDelegate>
 @end
 
 @implementation NCLRAccountController
@@ -3786,7 +3984,220 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
         [login.bottomAnchor constraintEqualToAnchor:account.bottomAnchor constant:-16.0],
     ]];
     [self.stack addArrangedSubview:account];
+    [self.stack addArrangedSubview:[self skinCard]];
+}
 
+- (UIView *)skinCard {
+    NCLRAuth *auth = NCLRAuth.shared;
+    BOOL premium = auth.token.length > 0;
+    NSDictionary *offline = auth.offlineProfile ?: NCLRActiveOfflineProfile();
+    BOOL available = premium || offline != nil;
+    NSDictionary *skin = NCLRActiveSkin();
+    UIView *card = [self card];
+
+    UILabel *title = [self eyebrow:@"皮肤"];
+    NSString *detailText = premium
+        ? @"导入或选择皮肤后同步到 Microsoft 账号，其他玩家看到的就是它。"
+        : (available ? @"离线账号：皮肤只保存在本机，其他玩家看不到。"
+                     : @"登录正版账号或添加离线账号后才能设置皮肤。");
+    UILabel *detail = [self label:detailText size:11.0 weight:UIFontWeightRegular
+                            color:NCLRColor(0.62, 0.62, 0.64, 1.0)];
+    detail.numberOfLines = 0;
+
+    UIImageView *preview = [[UIImageView alloc] init];
+    preview.translatesAutoresizingMaskIntoConstraints = NO;
+    preview.backgroundColor = NCLRColor(0.12, 0.12, 0.13, 1.0);
+    preview.layer.cornerRadius = 10.0;
+    preview.clipsToBounds = YES;
+    preview.contentMode = UIViewContentModeScaleAspectFit;
+    UIImage *activeImage = skin ? [UIImage imageWithContentsOfFile:NCLRSkinPath(skin)] : nil;
+    preview.image = activeImage ? NCLRSkinHeadImage(activeImage) : nil;
+
+    UILabel *name = [self label:(skin ? (NCLRString(skin[@"name"]) ?: @"已导入皮肤")
+                                     : @"还没有导入皮肤")
+                            size:15.0 weight:UIFontWeightSemibold
+                           color:NCLRColor(0.95, 0.95, 0.95, 1.0)];
+    name.lineBreakMode = NSLineBreakByTruncatingTail;
+    UILabel *model = [self label:(skin ? (NCLRSkinIsSlim(skin) ? @"细手臂（slim）" : @"经典（classic）")
+                                     : @"经典（classic）")
+                           size:11.0 weight:UIFontWeightRegular
+                          color:NCLRColor(0.62, 0.62, 0.64, 1.0)];
+    UIStackView *texts = [[UIStackView alloc] initWithArrangedSubviews:@[name, model]];
+    texts.axis = UILayoutConstraintAxisVertical;
+    texts.spacing = 4.0;
+    UIStackView *top = [[UIStackView alloc] initWithArrangedSubviews:@[preview, texts]];
+    top.axis = UILayoutConstraintAxisHorizontal;
+    top.spacing = 12.0;
+    top.alignment = UIStackViewAlignmentCenter;
+
+    UISegmentedControl *variant = [[UISegmentedControl alloc] initWithItems:@[@"经典", @"细手臂"]];
+    variant.selectedSegmentIndex = NCLRSkinIsSlim(skin) ? 1 : 0;
+    variant.enabled = skin != nil;
+    [variant addTarget:self action:@selector(skinVariantChanged:)
+      forControlEvents:UIControlEventValueChanged];
+
+    UIButton *import = [self button:@"导入皮肤（64×64 或 64×32 PNG）"
+                             action:@selector(importSkinTapped) primary:YES];
+    import.enabled = available;
+    UIButton *apply = [self button:premium ? @"同步到 Microsoft 账号" : @"保存到本机账号"
+                            action:@selector(applySkinTapped) primary:NO];
+    apply.enabled = available && skin != nil;
+
+    UIStackView *thumbs = [[UIStackView alloc] init];
+    thumbs.axis = UILayoutConstraintAxisHorizontal;
+    thumbs.spacing = 8.0;
+    thumbs.alignment = UIStackViewAlignmentCenter;
+    for (NSDictionary *entry in NCLRSkins()) {
+        UIImage *image = [UIImage imageWithContentsOfFile:NCLRSkinPath(entry) ?: @""];
+        UIButton *thumb = [UIButton buttonWithType:UIButtonTypeCustom];
+        thumb.translatesAutoresizingMaskIntoConstraints = NO;
+        thumb.backgroundColor = NCLRColor(0.12, 0.12, 0.13, 1.0);
+        thumb.layer.cornerRadius = 8.0;
+        thumb.clipsToBounds = YES;
+        [thumb setImage:NCLRSkinHeadImage(image) forState:UIControlStateNormal];
+        thumb.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        thumb.accessibilityIdentifier = NCLRString(entry[@"id"]);
+        if ([entry[@"id"] isEqual:skin[@"id"]]) {
+            UIColor *accent = NCLRAccent();
+            thumb.layer.borderWidth = 2.0;
+            thumb.layer.borderColor = accent.CGColor;
+        }
+        [thumb addTarget:self action:@selector(skinThumbTapped:)
+        forControlEvents:UIControlEventTouchUpInside];
+        [thumb.widthAnchor constraintEqualToConstant:46.0].active = YES;
+        [thumb.heightAnchor constraintEqualToConstant:46.0].active = YES;
+        [thumbs addArrangedSubview:thumb];
+    }
+    UIScrollView *scroller = [[UIScrollView alloc] init];
+    scroller.translatesAutoresizingMaskIntoConstraints = NO;
+    scroller.showsHorizontalScrollIndicator = NO;
+    [scroller addSubview:thumbs];
+    thumbs.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [thumbs.leadingAnchor constraintEqualToAnchor:scroller.contentLayoutGuide.leadingAnchor],
+        [thumbs.trailingAnchor constraintEqualToAnchor:scroller.contentLayoutGuide.trailingAnchor],
+        [thumbs.topAnchor constraintEqualToAnchor:scroller.contentLayoutGuide.topAnchor],
+        [thumbs.bottomAnchor constraintEqualToAnchor:scroller.contentLayoutGuide.bottomAnchor],
+        [thumbs.heightAnchor constraintEqualToAnchor:scroller.frameLayoutGuide.heightAnchor],
+        [scroller.heightAnchor constraintEqualToConstant:48.0],
+    ]];
+    scroller.hidden = NCLRSkins().count == 0;
+
+    UIStackView *content = [[UIStackView alloc] initWithArrangedSubviews:
+        @[title, detail, top, variant, import, apply, scroller]];
+    content.axis = UILayoutConstraintAxisVertical;
+    content.spacing = 10.0;
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:content];
+    [NSLayoutConstraint activateConstraints:@[
+        [preview.widthAnchor constraintEqualToConstant:56.0],
+        [preview.heightAnchor constraintEqualToConstant:56.0],
+        [content.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+        [content.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+        [content.topAnchor constraintEqualToAnchor:card.topAnchor constant:14.0],
+        [content.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-14.0],
+    ]];
+    return card;
+}
+
+- (void)skinThumbTapped:(UIButton *)sender {
+    NSString *identifier = sender.accessibilityIdentifier;
+    if (identifier.length == 0) return;
+    NCLRSetActiveSkin(identifier);
+    [self applyActiveSkin];
+}
+
+- (void)skinVariantChanged:(UISegmentedControl *)sender {
+    NSDictionary *skin = NCLRActiveSkin();
+    NSString *identifier = NCLRString(skin[@"id"]);
+    if (identifier.length == 0) return;
+    NCLRUpdateSkinVariant(identifier, sender.selectedSegmentIndex == 1);
+    [self applyActiveSkin];
+}
+
+- (void)importSkinTapped {
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
+        initWithDocumentTypes:@[@"public.png"] inMode:UIDocumentPickerModeImport];
+    picker.delegate = self;
+    picker.allowsMultipleSelection = NO;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)applySkinTapped {
+    [self applyActiveSkin];
+}
+
+- (void)applyActiveSkin {
+    NCLRAuth *auth = NCLRAuth.shared;
+    NSDictionary *skin = NCLRActiveSkin();
+    NSString *path = NCLRSkinPath(skin);
+    NSData *png = path ? [NSData dataWithContentsOfFile:path] : nil;
+    if (png.length == 0) {
+        [self showSkinMessage:@"先导入一个皮肤再应用。"];
+        return;
+    }
+    if (auth.token.length > 0) {
+        [auth uploadSkinData:png variant:(NCLRSkinIsSlim(skin) ? @"slim" : @"classic")
+                  completion:^(NSString *error) {
+            if (error.length > 0) {
+                [self showSkinMessage:error];
+                return;
+            }
+            NCLRCacheSkinForPremium(auth.uuid, skin);
+            [self showSkinMessage:@"已同步到 Microsoft 账号。"];
+        }];
+        return;
+    }
+    if (NCLRApplySkinToOfflineProfile(skin)) {
+        [self showSkinMessage:@"已保存到本机账号。"];
+    } else {
+        [self showSkinMessage:@"没有可用的离线账号，无法保存皮肤。"];
+    }
+}
+
+- (void)showSkinMessage:(NSString *)message {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"皮肤"
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault
+        handler:^(UIAlertAction *action) {
+        if (self.onDataChanged) self.onDataChanged();
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    (void)controller;
+    NSURL *url = urls.firstObject;
+    if (url == nil) return;
+    BOOL scoped = [url startAccessingSecurityScopedResource];
+    NSData *data = [NSData dataWithContentsOfURL:url];
+    if (scoped) [url stopAccessingSecurityScopedResource];
+    if (!NCLRSkinPngIsValid(data)) {
+        [self showSkinMessage:@"皮肤必须是 64×64 或 64×32 的 PNG。"];
+        return;
+    }
+    NSString *file = [NSString stringWithFormat:@"skin-%@.png",
+                      NSUUID.UUID.UUIDString.lowercaseString];
+    NSString *path = [NCLRSkinsDirectory() stringByAppendingPathComponent:file];
+    if (![data writeToFile:path atomically:YES]) {
+        [self showSkinMessage:@"无法保存皮肤文件。"];
+        return;
+    }
+    NSMutableDictionary *index = NCLRSkinIndex();
+    NSMutableArray *skins = index[@"skins"];
+    NSDictionary *current = NCLRActiveSkin();
+    [skins insertObject:@{
+        @"id": file,
+        @"file": file,
+        @"name": [url.lastPathComponent stringByDeletingPathExtension] ?: @"皮肤",
+        @"variant": NCLRSkinIsSlim(current) ? @"slim" : @"classic",
+    } atIndex:0];
+    index[@"skins"] = skins;
+    index[@"active"] = file;
+    NCLRSaveSkinIndex(index);
+    [self applyActiveSkin];
 }
 
 - (void)configClientId {
