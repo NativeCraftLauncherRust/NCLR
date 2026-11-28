@@ -831,6 +831,18 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     (void)region;
     return NCLRSystemPointerHidden ? [UIPointerStyle hiddenPointerStyle] : nil;
 }
+
+/// `UIPointerInteraction` only asks for a region when UIKit needs one, so motion
+/// inside a single region can go unreported and the menu cursor then sits still.
+/// The hover recognizer reports every move; that is what the game's cursor follows
+/// in menus.
+- (void)hovered:(UIHoverGestureRecognizer *)recognizer {
+    UIView *view = recognizer.view;
+    if (!view) return;
+    CGPoint point = [recognizer locationInView:view];
+    CGFloat scale = view.contentScaleFactor > 0.0 ? view.contentScaleFactor : 1.0;
+    NCLRNotePointerAtPixel(CGPointMake(point.x * scale, point.y * scale));
+}
 @end
 
 @interface NCLRHardwareInput : NSObject
@@ -847,6 +859,7 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
 @property (nonatomic, assign) NSInteger mouseMissTicks;
 @property (nonatomic, strong) UIPointerInteraction *pointerHiding;
 @property (nonatomic, weak) UIView *pointerHidingView;
+@property (nonatomic, strong) UIHoverGestureRecognizer *pointerHover;
 @property (nonatomic, assign) BOOL pointerHidden;
 @property (nonatomic, assign) BOOL lockDesired;
 @property (nonatomic, assign) BOOL lockHeld;
@@ -872,6 +885,7 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
 - (void)requestPointerLock;
 - (void)updateLockState;
 - (void)syncSystemPointerHidden;
+- (void)ensureHoverForView:(UIView *)view;
 @end
 
 @implementation NCLRHardwareInput
@@ -954,6 +968,10 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     }
     self.pointerHiding = nil;
     self.pointerHidingView = nil;
+    if (self.pointerHover) {
+        [self.pointerHover.view removeGestureRecognizer:self.pointerHover];
+        self.pointerHover = nil;
+    }
     horizon_ios_set_hardware_input(0, 0);
     self.cursorReady = NO;
 }
@@ -1163,6 +1181,7 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
 - (void)syncSystemPointerHidden {
     UIView *view = [self pointerTargetView];
     NCLRSystemPointerHidden = self.lockDesired && self.lockHeld;
+    [self ensureHoverForView:view];
     if (self.pointerHiding && self.pointerHidingView == view) {
         if (NCLRSystemPointerHidden != self.pointerHidden) {
             self.pointerHidden = NCLRSystemPointerHidden;
@@ -1182,6 +1201,24 @@ static void NCLRNotePointerAtPixel(CGPoint pixel);
     self.pointerHidingView = view;
     self.pointerHidden = NCLRSystemPointerHidden;
     [view addInteraction:self.pointerHiding];
+}
+
+/// The hover recognizer is attached once per view and survives the pointer
+/// interaction being re-created for a lock change.
+- (void)ensureHoverForView:(UIView *)view {
+    if (!view) return;
+    if (self.pointerHover && self.pointerHover.view == view) return;
+    if (self.pointerHover) {
+        [self.pointerHover.view removeGestureRecognizer:self.pointerHover];
+        self.pointerHover = nil;
+    }
+    static NCLRHiddenPointerDelegate *hoverTarget;
+    if (!hoverTarget) hoverTarget = [NCLRHiddenPointerDelegate new];
+    UIHoverGestureRecognizer *hover =
+        [[UIHoverGestureRecognizer alloc] initWithTarget:hoverTarget action:@selector(hovered:)];
+    hover.cancelsTouchesInView = NO;
+    [view addGestureRecognizer:hover];
+    self.pointerHover = hover;
 }
 
 - (uint8_t)modifiersForInput:(GCKeyboardInput *)input {
@@ -3614,8 +3651,8 @@ static NSArray<SCNMaterial *> *NCLRPlayerMaterials(UIImage *atlas, NSInteger u, 
     } else {
         setenv("HORIZON_HDR_OUTPUT", "off", 1);
     }
-    NCLRLog(@"engine start: resources=%@ display_hdr=%d", resources.lastPathComponent,
-            displayHDR);
+    NCLRLog(@"engine start: resources=%@ display_hdr=%d refresh=%ld",
+            resources.lastPathComponent, displayHDR, (long)screenLimit);
     int result = horizon_ios_run(resources.UTF8String, game.UTF8String);
     NCLRLog(@"engine returned %d", result);
     [[NCLRHardwareInput shared] stop];
